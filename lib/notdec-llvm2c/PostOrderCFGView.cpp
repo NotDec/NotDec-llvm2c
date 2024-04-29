@@ -1,8 +1,8 @@
 
-#include "backend/PostOrderCFGView.h"
-#include "clang/Analysis/AnalysisDeclContext.h"
+#include "notdec-llvm2c/PostOrderCFGView.h"
+#include <clang/Analysis/AnalysisDeclContext.h>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 void PostOrderCFGView::anchor() {}
 
@@ -37,4 +37,4 @@ bool PostOrderCFGView::BlockOrderCompare::operator()(const CFGBlock *b1,
   return b1V > b2V;
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

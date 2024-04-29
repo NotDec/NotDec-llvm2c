@@ -14,12 +14,12 @@
 #include <utility>
 #include <vector>
 
-#include "backend/CFG.h"
-#include "backend/PostOrderCFGView.h"
-#include "backend/phoenix.h"
-#include "backend/structural-analysis.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/PostOrderCFGView.h"
+#include "notdec-llvm2c/phoenix.h"
+#include "notdec-llvm2c/structural-analysis.h"
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 void Phoenix::execute() {
   int iterations = 0;
@@ -828,4 +828,4 @@ bool Phoenix::ReduceAcyclic(CFGBlock *Block) {
   assert(false && "unreachable");
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

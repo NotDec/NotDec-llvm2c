@@ -1,5 +1,5 @@
 
-#include "backend/utils.h"
+#include "notdec-llvm2c/utils.h"
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
@@ -20,7 +20,7 @@
 
 #define DEBUG_TYPE "notdec-backend-utils"
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 /// Run the RegToMemPass to demote SSA to memory, i.e., eliminate Phi nodes.
 void demoteSSA(llvm::Module &M) {
@@ -312,4 +312,4 @@ bool needParen(PrecedenceLevel PParent, PrecedenceLevel PChild, bool isLeft) {
   return false;
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

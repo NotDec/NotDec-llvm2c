@@ -1,9 +1,8 @@
 #ifndef _NOTDEC_BACKEND_STRUCTURAL_H_
 #define _NOTDEC_BACKEND_STRUCTURAL_H_
 
-#include "backend/CFG.h"
-#include "optimizers/retdec-stack/retdec-utils.h"
-#include "utils.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/utils.h"
 #include <cassert>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -34,12 +33,10 @@
 #include <memory>
 #include <vector>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 // main interface
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &os);
-std::string printBasicBlock(const llvm::BasicBlock *b);
-std::string printFunction(const llvm::Function *F);
 
 // utility functions
 bool onlyUsedInBlock(llvm::Instruction &inst);
@@ -611,6 +608,6 @@ clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,
 clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                           clang::Expr *E);
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 #endif

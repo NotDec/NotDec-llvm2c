@@ -1,6 +1,6 @@
-#include "backend/goto.h"
-#include "backend/CFG.h"
-#include "backend/utils.h"
+#include "notdec-llvm2c/goto.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/utils.h"
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <clang/Analysis/CFG.h>
@@ -10,7 +10,7 @@
 #include <llvm/Support/Debug.h>
 #include <type_traits>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 #define DEBUG_TYPE "SA-goto"
 
@@ -192,4 +192,4 @@ void Goto::simplifyBlock(CFGBlock &Block) {
   }
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

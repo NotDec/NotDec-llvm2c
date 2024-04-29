@@ -1,11 +1,11 @@
-#include "backend/CompoundConditionBuilder.h"
-#include "backend/CFG.h"
-#include "backend/PostOrderCFGView.h"
-#include "backend/utils.h"
+#include "notdec-llvm2c/CompoundConditionBuilder.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/PostOrderCFGView.h"
+#include "notdec-llvm2c/utils.h"
 #include <clang/AST/OperationKinds.h>
 #include <clang/Basic/Specifiers.h>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 void CompoundConditionBuilder::execute() {
   bool changed = false;
@@ -90,4 +90,4 @@ bool CompoundConditionBuilder::maybeCoalesce(CFGBlock *block) {
   return changed;
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

@@ -21,7 +21,7 @@
 #include <llvm/ADT/GraphTraits.h>
 #include <llvm/Support/raw_ostream.h>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 class CFGElement;
 class CFGTerminator;
@@ -471,7 +471,7 @@ private:
   unsigned NumBlockIDs = 0;
   CFGBlockListTy Blocks;
 };
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 //===----------------------------------------------------------------------===//
 // GraphTraits specializations for CFG basic block graphs (source-level CFGs)
@@ -481,41 +481,41 @@ namespace llvm {
 
 /// Implement simplify_type for CFGTerminator, so that we can dyn_cast from
 /// CFGTerminator to a specific Stmt class.
-template <> struct simplify_type<::notdec::backend::CFGTerminator> {
+template <> struct simplify_type<::notdec::llvm2c::CFGTerminator> {
   using SimpleType = ::clang::Stmt *;
 
-  static SimpleType getSimplifiedValue(::notdec::backend::CFGTerminator Val) {
+  static SimpleType getSimplifiedValue(::notdec::llvm2c::CFGTerminator Val) {
     return Val.getStmt();
   }
 };
 
 // Traits for: CFGBlock
 
-template <> struct ::llvm::GraphTraits<::notdec::backend::CFGBlock *> {
-  using NodeRef = ::notdec::backend::CFGBlock *;
-  using ChildIteratorType = ::notdec::backend::CFGBlock::succ_iterator;
+template <> struct ::llvm::GraphTraits<::notdec::llvm2c::CFGBlock *> {
+  using NodeRef = ::notdec::llvm2c::CFGBlock *;
+  using ChildIteratorType = ::notdec::llvm2c::CFGBlock::succ_iterator;
 
-  static NodeRef getEntryNode(::notdec::backend::CFGBlock *BB) { return BB; }
+  static NodeRef getEntryNode(::notdec::llvm2c::CFGBlock *BB) { return BB; }
   static ChildIteratorType child_begin(NodeRef N) { return N->succ_begin(); }
   static ChildIteratorType child_end(NodeRef N) { return N->succ_end(); }
 };
 
-template <> struct ::llvm::GraphTraits<const ::notdec::backend::CFGBlock *> {
-  using NodeRef = const ::notdec::backend::CFGBlock *;
-  using ChildIteratorType = ::notdec::backend::CFGBlock::const_succ_iterator;
+template <> struct ::llvm::GraphTraits<const ::notdec::llvm2c::CFGBlock *> {
+  using NodeRef = const ::notdec::llvm2c::CFGBlock *;
+  using ChildIteratorType = ::notdec::llvm2c::CFGBlock::const_succ_iterator;
 
-  static NodeRef getEntryNode(const ::notdec::backend::CFGBlock *BB) {
+  static NodeRef getEntryNode(const ::notdec::llvm2c::CFGBlock *BB) {
     return BB;
   }
   static ChildIteratorType child_begin(NodeRef N) { return N->succ_begin(); }
   static ChildIteratorType child_end(NodeRef N) { return N->succ_end(); }
 };
 
-template <> struct GraphTraits<Inverse<::notdec::backend::CFGBlock *>> {
-  using NodeRef = ::notdec::backend::CFGBlock *;
-  using ChildIteratorType = ::notdec::backend::CFGBlock::const_pred_iterator;
+template <> struct GraphTraits<Inverse<::notdec::llvm2c::CFGBlock *>> {
+  using NodeRef = ::notdec::llvm2c::CFGBlock *;
+  using ChildIteratorType = ::notdec::llvm2c::CFGBlock::const_pred_iterator;
 
-  static NodeRef getEntryNode(Inverse<::notdec::backend::CFGBlock *> G) {
+  static NodeRef getEntryNode(Inverse<::notdec::llvm2c::CFGBlock *> G) {
     return G.Graph;
   }
 
@@ -523,11 +523,11 @@ template <> struct GraphTraits<Inverse<::notdec::backend::CFGBlock *>> {
   static ChildIteratorType child_end(NodeRef N) { return N->pred_end(); }
 };
 
-template <> struct GraphTraits<Inverse<const ::notdec::backend::CFGBlock *>> {
-  using NodeRef = const ::notdec::backend::CFGBlock *;
-  using ChildIteratorType = ::notdec::backend::CFGBlock::const_pred_iterator;
+template <> struct GraphTraits<Inverse<const ::notdec::llvm2c::CFGBlock *>> {
+  using NodeRef = const ::notdec::llvm2c::CFGBlock *;
+  using ChildIteratorType = ::notdec::llvm2c::CFGBlock::const_pred_iterator;
 
-  static NodeRef getEntryNode(Inverse<const ::notdec::backend::CFGBlock *> G) {
+  static NodeRef getEntryNode(Inverse<const ::notdec::llvm2c::CFGBlock *> G) {
     return G.Graph;
   }
 
@@ -538,73 +538,73 @@ template <> struct GraphTraits<Inverse<const ::notdec::backend::CFGBlock *>> {
 // Traits for: CFG
 
 template <>
-struct GraphTraits<::notdec::backend::CFG *>
-    : public GraphTraits<::notdec::backend::CFGBlock *> {
-  using nodes_iterator = ::notdec::backend::CFGBlock **;
+struct GraphTraits<::notdec::llvm2c::CFG *>
+    : public GraphTraits<::notdec::llvm2c::CFGBlock *> {
+  using nodes_iterator = ::notdec::llvm2c::CFGBlock **;
 
-  static NodeRef getEntryNode(::notdec::backend::CFG *F) {
+  static NodeRef getEntryNode(::notdec::llvm2c::CFG *F) {
     return &F->getEntry();
   }
-  static nodes_iterator nodes_begin(::notdec::backend::CFG *F) {
+  static nodes_iterator nodes_begin(::notdec::llvm2c::CFG *F) {
     return F->data();
   }
-  static nodes_iterator nodes_end(::notdec::backend::CFG *F) {
+  static nodes_iterator nodes_end(::notdec::llvm2c::CFG *F) {
     return F->data() + F->size();
   }
-  static unsigned size(::notdec::backend::CFG *F) { return F->size(); }
+  static unsigned size(::notdec::llvm2c::CFG *F) { return F->size(); }
 };
 
 template <>
-struct GraphTraits<const ::notdec::backend::CFG *>
-    : public GraphTraits<const ::notdec::backend::CFGBlock *> {
-  using nodes_iterator = ::notdec::backend::CFGBlock *const *;
+struct GraphTraits<const ::notdec::llvm2c::CFG *>
+    : public GraphTraits<const ::notdec::llvm2c::CFGBlock *> {
+  using nodes_iterator = ::notdec::llvm2c::CFGBlock *const *;
 
-  static NodeRef getEntryNode(const ::notdec::backend::CFG *F) {
+  static NodeRef getEntryNode(const ::notdec::llvm2c::CFG *F) {
     return &F->getEntry();
   }
 
-  static nodes_iterator nodes_begin(const ::notdec::backend::CFG *F) {
-    return const_cast<::notdec::backend::CFG *>(F)->data();
+  static nodes_iterator nodes_begin(const ::notdec::llvm2c::CFG *F) {
+    return const_cast<::notdec::llvm2c::CFG *>(F)->data();
   }
 
-  static nodes_iterator nodes_end(const ::notdec::backend::CFG *F) {
-    return const_cast<::notdec::backend::CFG *>(F)->data() + F->size();
+  static nodes_iterator nodes_end(const ::notdec::llvm2c::CFG *F) {
+    return const_cast<::notdec::llvm2c::CFG *>(F)->data() + F->size();
   }
 
-  static unsigned size(const ::notdec::backend::CFG *F) { return F->size(); }
+  static unsigned size(const ::notdec::llvm2c::CFG *F) { return F->size(); }
 };
 
 template <>
-struct GraphTraits<Inverse<::notdec::backend::CFG *>>
-    : public GraphTraits<Inverse<::notdec::backend::CFGBlock *>> {
-  using nodes_iterator = ::notdec::backend::CFGBlock **;
+struct GraphTraits<Inverse<::notdec::llvm2c::CFG *>>
+    : public GraphTraits<Inverse<::notdec::llvm2c::CFGBlock *>> {
+  using nodes_iterator = ::notdec::llvm2c::CFGBlock **;
 
-  static NodeRef getEntryNode(::notdec::backend::CFG *F) {
+  static NodeRef getEntryNode(::notdec::llvm2c::CFG *F) {
     return &F->getExit();
   }
-  static nodes_iterator nodes_begin(::notdec::backend::CFG *F) {
+  static nodes_iterator nodes_begin(::notdec::llvm2c::CFG *F) {
     return F->data();
   }
-  static nodes_iterator nodes_end(::notdec::backend::CFG *F) {
+  static nodes_iterator nodes_end(::notdec::llvm2c::CFG *F) {
     return F->data() + F->size();
   }
 };
 
 template <>
-struct GraphTraits<Inverse<const ::notdec::backend::CFG *>>
-    : public GraphTraits<Inverse<const ::notdec::backend::CFGBlock *>> {
-  using nodes_iterator = ::notdec::backend::CFGBlock *const *;
+struct GraphTraits<Inverse<const ::notdec::llvm2c::CFG *>>
+    : public GraphTraits<Inverse<const ::notdec::llvm2c::CFGBlock *>> {
+  using nodes_iterator = ::notdec::llvm2c::CFGBlock *const *;
 
-  static NodeRef getEntryNode(const ::notdec::backend::CFG *F) {
+  static NodeRef getEntryNode(const ::notdec::llvm2c::CFG *F) {
     return &F->getExit();
   }
 
-  static nodes_iterator nodes_begin(const ::notdec::backend::CFG *F) {
-    return const_cast<::notdec::backend::CFG *>(F)->data();
+  static nodes_iterator nodes_begin(const ::notdec::llvm2c::CFG *F) {
+    return const_cast<::notdec::llvm2c::CFG *>(F)->data();
   }
 
-  static nodes_iterator nodes_end(const ::notdec::backend::CFG *F) {
-    return const_cast<::notdec::backend::CFG *>(F)->data() + F->size();
+  static nodes_iterator nodes_end(const ::notdec::llvm2c::CFG *F) {
+    return const_cast<::notdec::llvm2c::CFG *>(F)->data() + F->size();
   }
 };
 } // namespace llvm

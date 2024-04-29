@@ -1,12 +1,12 @@
 #ifndef _NOTDEC_BACKEND_GOTO_H_
 #define _NOTDEC_BACKEND_GOTO_H_
 
-#include "backend/structural-analysis.h"
+#include "notdec-llvm2c/structural-analysis.h"
 #include <clang/AST/Stmt.h>
 #include <map>
 #include <vector>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 class Goto : IStructuralAnalysis {
   /// Map from label to all GotoStmts that use it.
@@ -38,6 +38,6 @@ public:
   void simplifyBlock(CFGBlock &Block);
 };
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 #endif

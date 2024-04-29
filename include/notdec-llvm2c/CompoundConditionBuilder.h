@@ -1,10 +1,10 @@
 #ifndef _NOTDEC_BACKEND_COMPOUNDCONDITIONBUILDER_H_
 #define _NOTDEC_BACKEND_COMPOUNDCONDITIONBUILDER_H_
 
-#include "backend/CFG.h"
-#include "backend/structural-analysis.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/structural-analysis.h"
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 /// find and build logical and/or expressions
 class CompoundConditionBuilder : IStructuralAnalysis {
@@ -17,6 +17,6 @@ public:
   void execute() override;
 };
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 #endif

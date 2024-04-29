@@ -2,7 +2,7 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/GraphWriter.h>
 
-#include "backend/CFG.h"
+#include "notdec-llvm2c/CFG.h"
 
 #include <clang/AST/ExprCXX.h>
 #include <clang/AST/PrettyPrinter.h>
@@ -11,7 +11,7 @@
 #include <clang/AST/StmtObjC.h>
 #include <clang/AST/StmtVisitor.h>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 using llvm::cast;
 using llvm::dyn_cast;
@@ -746,4 +746,4 @@ CFG::iterator CFG::createBlock() {
   return it;
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

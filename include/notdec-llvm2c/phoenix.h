@@ -1,13 +1,13 @@
 #ifndef _NOTDEC_BACKEND_PHOENIX_H_
 #define _NOTDEC_BACKEND_PHOENIX_H_
 
-#include "backend/CFG.h"
-#include "backend/Dominators.h"
-#include "backend/structural-analysis.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/Dominators.h"
+#include "notdec-llvm2c/structural-analysis.h"
 #include <utility>
 #include <vector>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 class Phoenix : IStructuralAnalysis {
 public:
@@ -64,6 +64,6 @@ public:
   void execute() override;
 };
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 #endif

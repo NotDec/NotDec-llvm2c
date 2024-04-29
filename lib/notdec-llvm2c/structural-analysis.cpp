@@ -1,11 +1,10 @@
 
 
-#include "backend/structural-analysis.h"
-#include "../utils.h"
-#include "backend/CompoundConditionBuilder.h"
-#include "backend/goto.h"
-#include "backend/phoenix.h"
-#include "backend/utils.h"
+#include "notdec-llvm2c/structural-analysis.h"
+#include "notdec-llvm2c/CompoundConditionBuilder.h"
+#include "notdec-llvm2c/goto.h"
+#include "notdec-llvm2c/phoenix.h"
+#include "notdec-llvm2c/utils.h"
 #include <cassert>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Comment.h>
@@ -49,7 +48,7 @@
 
 #define DEBUG_TYPE "structural-analysis"
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 /// Check if the block is the entry block of the function, or a must via block
 /// that follows the entry.
@@ -755,14 +754,8 @@ clang::ASTContext &SAFuncContext::getASTContext() {
   return ctx.getASTContext();
 }
 
-std::string printBasicBlock(const llvm::BasicBlock *b) {
-  return llvmObjToString(b);
-}
-
 /// Decompile the module to c and print to a file.
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS) {
-  // demote SSA using reg2mem
-  demoteSSA(M);
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
   LLVM_DEBUG(llvm::dbgs() << M);
@@ -777,32 +770,10 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS) {
     SAFuncContext &FuncCtx =
         Ctx.getFuncContext(const_cast<llvm::Function &>(F));
     FuncCtx.run();
-    if (logLevel >= level_debug) {
-      llvm::errs() << "Function: " << F.getName() << "\n";
-      FuncCtx.getFunctionDecl()->dump();
-    }
+    LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
+    LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
   Ctx.getASTContext().getTranslationUnitDecl()->print(OS);
-}
-
-std::string printFunction(const llvm::Function *F) {
-  std::string str;
-  llvm::raw_string_ostream Out(str);
-  if (F->isDeclaration()) {
-    Out << "declare ";
-    Out << ' ';
-  } else {
-    Out << "define ";
-  }
-
-  Out << F->getName();
-  Out << " {";
-  // Output all of the function's basic blocks.
-  for (const llvm::BasicBlock &BB : *F)
-    Out << printBasicBlock(&BB);
-
-  Out << "}\n\n";
-  return Out.str();
 }
 
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb) {
@@ -962,23 +933,19 @@ void SAFuncContext::run() {
   CompoundConditionBuilder CCB(*this);
   CCB.execute();
 
-  if (logLevel >= level_debug) {
-    llvm::errs() << "========" << Func.getName() << ": "
-                 << "Before Structural Analysis ========"
-                 << "\n";
-    Cfg->dump(getASTContext().getLangOpts(), true);
-  }
+  LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
+                          << "Before Structural Analysis ========"
+                          << "\n");
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), true));
 
   // TODO: create structural analysis according to cmdline
   Phoenix SA(*this);
   SA.execute();
 
-  if (logLevel >= level_debug) {
-    llvm::errs() << "========" << Func.getName() << ": "
-                 << "After Structural Analysis ========"
-                 << "\n";
-    Cfg->dump(getASTContext().getLangOpts(), true);
-  }
+  LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
+                          << "After Structural Analysis ========"
+                          << "\n");
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), true));
 
   // Finalize steps
   // After structural analysis, the CFG is expected to have only one linear
@@ -1142,9 +1109,7 @@ clang::QualType TypeBuilder::visitType(llvm::Type &Ty) {
     // TODO get signed or unsigned
     auto ret = Ctx.getIntTypeForBitwidth(Ty.getIntegerBitWidth(), false);
     if (ret.isNull()) {
-      if (logLevel >= level_warning) {
-        llvm::errs() << "Warning: cannot find exact type for: " << Ty << "\n";
-      }
+      llvm::errs() << "Warning: cannot find exact type for: " << Ty << "\n";
       ret = Ctx.getBitIntType(true, Ty.getIntegerBitWidth());
     }
     return ret;
@@ -1346,4 +1311,4 @@ llvm::StringRef ValueNamer::getTypeName(llvm::StructType &Ty,
   return OS.str();
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c

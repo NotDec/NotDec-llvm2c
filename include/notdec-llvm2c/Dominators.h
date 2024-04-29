@@ -1,15 +1,15 @@
 #ifndef _NOTDEC_BACKEND_DOMINATORS_H_
 #define _NOTDEC_BACKEND_DOMINATORS_H_
 
-#include "clang/Analysis/AnalysisDeclContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Support/GenericDomTree.h"
-#include "llvm/Support/GenericDomTreeConstruction.h"
-#include "llvm/Support/GenericIteratedDominanceFrontier.h"
+#include <clang/Analysis/AnalysisDeclContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/Support/GenericDomTree.h>
+#include <llvm/Support/GenericDomTreeConstruction.h>
+#include <llvm/Support/GenericIteratedDominanceFrontier.h>
 
-#include "backend/CFG.h"
+#include "notdec-llvm2c/CFG.h"
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 using DomTreeNode = llvm::DomTreeNodeBase<CFGBlock>;
 
@@ -153,7 +153,7 @@ using CFGPostDomTree = CFGDominatorTreeImpl</*IsPostDom*/ true>;
 template <> void CFGDominatorTreeImpl<true>::anchor();
 template <> void CFGDominatorTreeImpl<false>::anchor();
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 namespace llvm {
 namespace IDFCalculatorDetail {
@@ -177,7 +177,7 @@ template <bool IsPostDom> struct ChildrenGetterTy<clang::CFGBlock, IsPostDom> {
 } // end of namespace IDFCalculatorDetail
 } // end of namespace llvm
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 class ControlDependencyCalculator : public clang::ManagedAnalysis {
   using IDFCalculator = llvm::IDFCalculatorBase<CFGBlock, /*IsPostDom=*/true>;
@@ -234,7 +234,7 @@ public:
   }
 };
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 namespace llvm {
 
@@ -242,38 +242,38 @@ namespace llvm {
 /// DominatorTree GraphTraits specialization so the DominatorTree can be
 /// iterable by generic graph iterators.
 ///
-template <> struct GraphTraits<notdec::backend::DomTreeNode *> {
-  using NodeRef = notdec::backend::DomTreeNode *;
-  using ChildIteratorType = notdec::backend::DomTreeNode::const_iterator;
+template <> struct GraphTraits<notdec::llvm2c::DomTreeNode *> {
+  using NodeRef = notdec::llvm2c::DomTreeNode *;
+  using ChildIteratorType = notdec::llvm2c::DomTreeNode::const_iterator;
 
   static NodeRef getEntryNode(NodeRef N) { return N; }
   static ChildIteratorType child_begin(NodeRef N) { return N->begin(); }
   static ChildIteratorType child_end(NodeRef N) { return N->end(); }
 
   using nodes_iterator =
-      llvm::pointer_iterator<df_iterator<notdec::backend::DomTreeNode *>>;
+      llvm::pointer_iterator<df_iterator<notdec::llvm2c::DomTreeNode *>>;
 
-  static nodes_iterator nodes_begin(notdec::backend::DomTreeNode *N) {
+  static nodes_iterator nodes_begin(notdec::llvm2c::DomTreeNode *N) {
     return nodes_iterator(df_begin(getEntryNode(N)));
   }
 
-  static nodes_iterator nodes_end(notdec::backend::DomTreeNode *N) {
+  static nodes_iterator nodes_end(notdec::llvm2c::DomTreeNode *N) {
     return nodes_iterator(df_end(getEntryNode(N)));
   }
 };
 
 template <>
-struct GraphTraits<notdec::backend::CFGDomTree *>
-    : public GraphTraits<notdec::backend::DomTreeNode *> {
-  static NodeRef getEntryNode(notdec::backend::CFGDomTree *DT) {
+struct GraphTraits<notdec::llvm2c::CFGDomTree *>
+    : public GraphTraits<notdec::llvm2c::DomTreeNode *> {
+  static NodeRef getEntryNode(notdec::llvm2c::CFGDomTree *DT) {
     return DT->getRootNode();
   }
 
-  static nodes_iterator nodes_begin(notdec::backend::CFGDomTree *N) {
+  static nodes_iterator nodes_begin(notdec::llvm2c::CFGDomTree *N) {
     return nodes_iterator(df_begin(getEntryNode(N)));
   }
 
-  static nodes_iterator nodes_end(notdec::backend::CFGDomTree *N) {
+  static nodes_iterator nodes_end(notdec::llvm2c::CFGDomTree *N) {
     return nodes_iterator(df_end(getEntryNode(N)));
   }
 };

@@ -9,7 +9,7 @@
 #include <llvm/Support/Debug.h>
 #include <type_traits>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 void demoteSSA(llvm::Module &M);
 
@@ -262,5 +262,5 @@ inline clang::CStyleCastExpr *createCStyleCastExpr(clang::ASTContext &Ctx,
       clang::SourceLocation(), clang::SourceLocation());
 }
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 #endif

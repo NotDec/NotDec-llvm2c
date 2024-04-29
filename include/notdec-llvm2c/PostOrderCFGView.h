@@ -1,13 +1,13 @@
 #ifndef _NOTDEC_BACKEND_POSTORDERCFGVIEW_H_
 #define _NOTDEC_BACKEND_POSTORDERCFGVIEW_H_
 
-#include "backend/CFG.h"
-#include "clang/Analysis/AnalysisDeclContext.h"
-#include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/None.h"
-#include "llvm/ADT/PostOrderIterator.h"
+#include "notdec-llvm2c/CFG.h"
+#include <clang/Analysis/AnalysisDeclContext.h>
+#include <llvm/ADT/BitVector.h>
+#include <llvm/ADT/None.h>
+#include <llvm/ADT/PostOrderIterator.h>
 
-namespace notdec::backend {
+namespace notdec::llvm2c {
 
 class PostOrderCFGView : public clang::ManagedAnalysis {
   virtual void anchor();
@@ -96,6 +96,6 @@ public:
   static std::unique_ptr<PostOrderCFGView> create(CFG *cfg);
 };
 
-} // namespace notdec::backend
+} // namespace notdec::llvm2c
 
 #endif
