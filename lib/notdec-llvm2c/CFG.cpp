@@ -651,8 +651,9 @@ void CFGBlock::print(raw_ostream &OS, const CFG *cfg, const LangOptions &LO,
 
 void CFGBlock::printTerminator(raw_ostream &OS, const LangOptions &LO) const {}
 
-/// Add a edge to the current block. Also adds the pred of succ.
+/// Add a Successor. Also adds the pred of succ.
 void CFGBlock::addSuccessor(AdjacentBlock Succ) {
+  assert(std::find(Succs.begin(), Succs.end(), Succ) == Succs.end());
   if (CFGBlock *B = Succ.getBlock()) {
     B->Preds.insert(AdjacentBlock(this));
   }
@@ -733,7 +734,9 @@ void CFG::print(raw_ostream &OS, const LangOptions &LO, bool ShowColors) const {
   }
 
   // Print the exit block.
-  print_block(OS, this, getExit(), Helper, true, ShowColors);
+  if (hasExit()) {
+    print_block(OS, this, getExit(), Helper, true, ShowColors);
+  }
   OS << '\n';
   OS.flush();
 }
@@ -746,9 +749,9 @@ CFG::iterator CFG::createBlock() {
 
   Blocks.emplace_back(new CFGBlock(this, NumBlockIDs++));
 
-  // If this is the first block, set it as the Entry and Exit.
+  // If this is the first block, set it as the Entry.
   if (first_block) {
-    Entry = Exit = &back();
+    Entry = &back();
   }
 
   auto it = end();

@@ -10,6 +10,7 @@
 #ifndef _NOTDEC_BACKEND_CFG_H_
 #define _NOTDEC_BACKEND_CFG_H_
 
+#include <algorithm>
 #include <cassert>
 #include <deque>
 #include <list>
@@ -267,6 +268,7 @@ public:
     return Succs[1] == To;
   }
   void replaceSucc(CFGBlock *From, CFGBlock *To) {
+    assert(std::find(Succs.begin(), Succs.end(), To) == Succs.end());
     for (auto &succ : Succs) {
       if (succ == From) {
         succ.setBlock(To);
@@ -455,7 +457,9 @@ public:
   const_reverse_iterator rend() const { return Blocks.rend(); }
 
   void remove(CFGBlock *I) {
-    Blocks.erase(std::remove(Blocks.begin(), Blocks.end(), I), Blocks.end());
+    auto loc = std::remove(Blocks.begin(), Blocks.end(), I);
+    assert(loc != Blocks.end());
+    Blocks.erase(loc, Blocks.end());
     delete I;
   }
 
@@ -463,6 +467,7 @@ public:
   const CFGBlock &getEntry() const { return *Entry; }
   CFGBlock &getExit() { return *Exit; }
   const CFGBlock &getExit() const { return *Exit; }
+  const bool hasExit() const { return Exit != nullptr; }
 
   //===--------------------------------------------------------------------===//
   // CFG Introspection.

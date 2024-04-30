@@ -903,13 +903,6 @@ void SAFuncContext::run() {
   // 1. build the CFGBlocks
   CFGBuilder Builder(*this);
 
-  // // Create the stub exit block.
-  // // The first block will be implicitly registered as the exit block.
-  // // TODO the exit block is currently not used. Edges to exit block are not
-  // // maintained.
-  // CFG::iterator Exit = Cfg->createBlock();
-  // assert(&*Exit == &Cfg->getExit());
-
   // create function decl again, and set the previous declaration.
   clang::IdentifierInfo *II =
       ctx.getIdentifierInfo(getSAContext().getValueNamer().getFuncName(Func));
@@ -940,18 +933,29 @@ void SAFuncContext::run() {
     }
   }
 
+  // // Create the stub exit block.
+  // // TODO the exit block is currently not used. Edges to exit block are not
+  // // maintained.
+  // CFG::iterator Exit = Cfg->createBlock();
+  // Cfg->setExit(*Exit);
+
+  LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
+                          << "Before CFGCleaner ========"
+                          << "\n");
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
+
   // clean up empty blocks
   CFGCleaner CC(*this);
   CC.execute();
-
-  // create logical and/or
-  CompoundConditionBuilder CCB(*this);
-  CCB.execute();
 
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "Before Structural Analysis ========"
                           << "\n");
   LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
+
+  // create logical and/or
+  CompoundConditionBuilder CCB(*this);
+  CCB.execute();
 
   // TODO: create structural analysis according to cmdline
   Phoenix SA(*this);

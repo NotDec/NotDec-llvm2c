@@ -86,23 +86,24 @@ bool Phoenix::isCyclic(CFGBlock *Block) {
   return false;
 }
 
-void backwardVisit(std::set<CFGBlock *> &visited, CFGBlock *Entry,
+void backwardVisit(std::set<CFGBlock *> &visited, CFGBlock *Head,
                    CFGBlock *Current) {
+  // can include loop head
   assert(visited.insert(Current).second);
-  if (Current == Entry) {
+  if (Current == Head) {
     return;
   }
   for (auto &pred : Current->preds()) {
     auto P = pred.getBlock();
     if (visited.find(P) == visited.end()) {
-      backwardVisit(visited, Entry, P);
+      backwardVisit(visited, Head, P);
     }
   }
 }
 
 /// Visits given node and recursively visits all its GRAY successors.
 /// All the visited nodes are painted Black.
-void forwardVisit(std::set<CFGBlock *> &visited, std::set<CFGBlock *> gray,
+void forwardVisit(std::set<CFGBlock *> &visited, std::set<CFGBlock *> &gray,
                   CFGBlock *Current) {
   assert(gray.count(Current) == 1);
   assert(visited.insert(Current).second);
@@ -114,12 +115,17 @@ void forwardVisit(std::set<CFGBlock *> &visited, std::set<CFGBlock *> gray,
   }
 }
 
+/// This class finds all nodes on the paths from a given node to itself
+/// ending with a back edge to the given node. All the discovered nodes
+/// are expected to belong to the loop with the given node being its entry.
 std::unique_ptr<std::set<CFGBlock *>> getLoopNodes(CFGBlock *Block,
                                                    CFGDomTree &Dom) {
   std::set<CFGBlock *> Gray;
   std::set<CFGBlock *> Black;
   std::unique_ptr<std::set<CFGBlock *>> ret =
       std::make_unique<std::set<CFGBlock *>>();
+  // Find all nodes that can reach the back-edge predecessors without passing
+  // loop head and paint them gray.
   for (auto &pred : Block->preds()) {
     auto P = pred.getBlock();
     if (Dom.properlyDominates(Block, P)) {
@@ -134,6 +140,8 @@ std::unique_ptr<std::set<CFGBlock *>> getLoopNodes(CFGBlock *Block,
     }
   }
 
+  // Find all gray nodes that can be visited from the loop entry and color them
+  // black. Black nodes belong to the loop.
   if (Gray.find(Block) != Gray.end()) {
     forwardVisit(Black, Gray, Block);
   }
@@ -284,7 +292,7 @@ CFGBlock *ensureSingleEntry(CFGBlock *head, std::set<CFGBlock *> &loopNodes) {
 /// get blocks reachable from n, not via head.
 /// blocks contains the visited result.
 void findReachableBlocks(CFGBlock *n, CFGBlock *head,
-                         std::set<CFGBlock *> blocks) {
+                         std::set<CFGBlock *> &blocks) {
   blocks.insert(n);
   for (auto &succ : n->succs()) {
     if (blocks.count(succ.getBlock()) == 0 && succ.getBlock() != head) {
@@ -488,6 +496,7 @@ bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
   Phoenix::LoopType loopType = determineLoopType(head, latch, follow);
   std::vector<Phoenix::VirtualEdge> vEdges;
   for (auto n : lexicalNodes) {
+    vEdges.clear();
     for (auto &s : n->succs()) {
       if (s == head) {
         if (n != latch) {
@@ -499,9 +508,9 @@ bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
               (loopType == Phoenix::While && n != head)) {
             vEdges.emplace_back(n, s, Phoenix::VirtualEdgeType::Break);
           }
+        } else {
+          vEdges.emplace_back(n, s, Phoenix::VirtualEdgeType::Goto);
         }
-      } else {
-        vEdges.emplace_back(n, s, Phoenix::VirtualEdgeType::Goto);
       }
     }
     for (auto &edge : vEdges) {
@@ -821,7 +830,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
   auto tmp = Block->getTwoSuccs();
   CFGBlock *th = tmp.first;
   CFGBlock *el = tmp.second;
-  assert(th != nullptr && el != nullptr);
+  assert(th != nullptr && el != nullptr && el != th);
   CFGBlock *elS = linearSuccessor(el);
   CFGBlock *thS = linearSuccessor(th);
 

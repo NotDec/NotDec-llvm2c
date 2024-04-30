@@ -10,7 +10,8 @@
         "${file}",
         "-o",
         "${file}.c",
-        "-debug"
+        "-debug",
+        "--notdec-color"
       ],
       "cwd": "${workspaceFolder}"
     },
@@ -23,7 +24,8 @@
         "${file}",
         "-o",
         "${file}.c",
-        "-debug"
+        "-debug",
+        "--notdec-color"
       ],
       "cwd": "${workspaceFolder}"
     }

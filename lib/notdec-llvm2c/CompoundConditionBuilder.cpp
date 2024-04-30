@@ -37,54 +37,62 @@ void CompoundConditionBuilder::rebuildGraph(CFGBlock *head, CFGBlock *redundant,
   CFG.remove(redundant);
 }
 
-bool CompoundConditionBuilder::maybeCoalesce(CFGBlock *block) {
+bool CompoundConditionBuilder::maybeCoalesce(CFGBlock *Head) {
   bool changed = false;
-  auto ss = block->getTwoSuccs();
+  auto ss = Head->getTwoSuccs();
   auto BThen = ss.first;
   auto BElse = ss.second;
   if (isSubordinate(BThen)) {
     auto ss2 = BThen->getTwoSuccs();
     if (ss2.second == BElse) {
       // fold to X && Y
+      //  ┌─── Head───┐
+      //  ▼ F       T │
+      // Else         │
+      //  │     T     ▼
+      //  ├───────► Then
+      // F│          │
+      //  ▼          │
+      // Follow ◄────┘
       changed = true;
-      auto condX = takeBinaryCond(*block);
+      auto condX = takeBinaryCond(*Head);
       auto condY = takeBinaryCond(*BThen);
       auto result = createBinaryOperator(Ctx, condX, condY, clang::BO_LAnd,
                                          condX->getType(), clang::VK_PRValue);
-      block->setTerminator(result);
-      rebuildGraph(block, BThen, ss2.first, ss2.second);
+      Head->setTerminator(result);
+      rebuildGraph(Head, BThen, ss2.first, ss2.second);
     } else if (ss2.first == BElse) {
       // fold to X && !Y
       changed = true;
-      auto condX = takeBinaryCond(*block);
+      auto condX = takeBinaryCond(*Head);
       auto condY = takeBinaryCond(*BThen);
       condY = invertCond(condY);
       auto result = createBinaryOperator(Ctx, condX, condY, clang::BO_LAnd,
                                          condX->getType(), clang::VK_PRValue);
-      block->setTerminator(result);
-      rebuildGraph(block, BThen, ss2.second, ss2.first);
+      Head->setTerminator(result);
+      rebuildGraph(Head, BThen, ss2.second, ss2.first);
     }
   } else if (isSubordinate(BElse)) {
     auto ss2 = BElse->getTwoSuccs();
     if (ss2.first == BThen) {
       // fold to X || Y
       changed = true;
-      auto condX = takeBinaryCond(*block);
+      auto condX = takeBinaryCond(*Head);
       auto condY = takeBinaryCond(*BElse);
       auto result = createBinaryOperator(Ctx, condX, condY, clang::BO_LOr,
                                          condX->getType(), clang::VK_PRValue);
-      block->setTerminator(result);
-      rebuildGraph(block, BElse, ss2.second, ss2.first);
+      Head->setTerminator(result);
+      rebuildGraph(Head, BElse, ss2.second, ss2.first);
     } else if (ss2.second == BThen) {
       // fold to X || !Y
       changed = true;
-      auto condX = takeBinaryCond(*block);
+      auto condX = takeBinaryCond(*Head);
       auto condY = takeBinaryCond(*BElse);
       condY = invertCond(condY);
       auto result = createBinaryOperator(Ctx, condX, condY, clang::BO_LOr,
                                          condX->getType(), clang::VK_PRValue);
-      block->setTerminator(result);
-      rebuildGraph(block, BElse, ss2.first, ss2.second);
+      Head->setTerminator(result);
+      rebuildGraph(Head, BElse, ss2.first, ss2.second);
     }
   }
   return changed;

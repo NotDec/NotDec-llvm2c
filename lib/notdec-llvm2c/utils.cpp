@@ -40,8 +40,10 @@ void demoteSSA(llvm::Module &M) {
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  SimplifyCFGOptions Opts;
-  MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass(Opts)));
+  // SimplifyCFGOptions Opts;
+  // MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass(Opts)));
+
+  MPM.addPass(createModuleToFunctionPassAdaptor(AdjustCFGPass()));
   MPM.addPass(createModuleToFunctionPassAdaptor(RetDupPass()));
   MPM.addPass(createModuleToFunctionPassAdaptor(DemotePhiPass()));
   MPM.addPass(createModuleToFunctionPassAdaptor(AdjustCFGPass()));
@@ -57,8 +59,11 @@ llvm::PreservedAnalyses DemotePhiPass::run(llvm::Function &F,
   using namespace llvm;
   // Insert all new allocas into entry block.
   BasicBlock *BBEntry = &F.getEntryBlock();
-  assert(pred_empty(BBEntry) &&
-         "Entry block to function must not have predecessors!");
+  if (!pred_empty(BBEntry)) {
+    auto NewEntry = BasicBlock::Create(F.getContext(), "entry", &F, BBEntry);
+    BranchInst::Create(BBEntry, NewEntry);
+    BBEntry = NewEntry;
+  }
 
   // Find first non-alloca instruction and create insertion point. This is
   // safe if block is well-formed: it always have terminator, otherwise
@@ -159,6 +164,21 @@ static bool mergeIntoSinglePredecessor_v1(llvm::Function &F) {
   return Changed;
 }
 
+static bool simplifyCondBrSameLabel(llvm::Function &F) {
+  using namespace llvm;
+  bool Changed = false;
+  for (BasicBlock &BB : make_early_inc_range(F)) {
+    if (auto br = dyn_cast<BranchInst>(BB.getTerminator())) {
+      if (br->isConditional() && br->getSuccessor(0) == br->getSuccessor(1)) {
+        auto *nb = BranchInst::Create(br->getSuccessor(0), br);
+        br->eraseFromParent();
+        Changed = true;
+      }
+    }
+  }
+  return Changed;
+}
+
 static bool eliminateEmptyBr(llvm::Function &F) {
   using namespace llvm;
   bool Changed = false;
@@ -184,10 +204,14 @@ static bool eliminateEmptyBr(llvm::Function &F) {
 
 llvm::PreservedAnalyses AdjustCFGPass::run(llvm::Function &F,
                                            llvm::FunctionAnalysisManager &) {
-  bool Changed = false;
-  Changed |= removeDeadBlocks_v1(F);
-  Changed |= mergeIntoSinglePredecessor_v1(F);
-  Changed |= eliminateEmptyBr(F);
+  bool Changed;
+  do {
+    Changed = false;
+    Changed |= removeDeadBlocks_v1(F);
+    Changed |= mergeIntoSinglePredecessor_v1(F);
+    Changed |= eliminateEmptyBr(F);
+    Changed |= simplifyCondBrSameLabel(F);
+  } while (Changed);
   return llvm::PreservedAnalyses::none();
 }
 

@@ -341,6 +341,64 @@ C的指针相关运算内部细节：
 GetElementPtr先获取内部指针值的类型，然后依次处理每个下标：
 - 如果是结构体成员或者数组，则先解引用，然后增加运算，然后再取地址。
 
+**Return**
+
+为了简化算法，在结构分析前需要将return边都找到并消除，转而使用return语句。
+
+**为什么会存在return边**：Clang在前端处理Return指令的时候（即使开了任何优化也会这样）不是直接创建return指令而是增加跳转，从而构建一个unified return block。LLVM中端优化Pass SimplifyCFG也会将IR处理为只有单一的返回块的形式。
+
+**返回块代码复制**：我们可以将返回语句，甚至带有返回语句的整个基本块，将语句复制插入所有的前驱中。就像我们编程时，如果发现有很多重复的代码，我们会为它单独创建一个函数，从而减小总的代码量。我们这里是相反的过程，通过增加代码量，简化CFG中边的数量。总之，这是调用边的减少和和代码大小之间的权衡。如果在返回值所在的基本块有太多其他指令，那么我们可能并不期望把这些指令都复制一边，这也会导致后续生成的C代码过大。
+
+**返回块代码特化**：SSA形式的LLVM IR允许基本块开头存在Phi指令，根据跳转到当前基本块的边的不同而取不同的值。
+
+```
+A:
+  int a = 1;
+  goto R;
+B:
+  int b = 2;
+  goto R;
+R:
+  // p equals to a if it takes the edge A -> R
+  int p = phi int [a, A], [b, B]
+  return %p;
+```
+
+在SSA解构时，我们可能会为这个Phi指令创建一个局部变量，然后在跳转前增加赋值语句，如下面的例子所示：
+
+```
+int reg2mem_p;
+A:
+  int a = 1;
+  reg2mem_p = a;
+  goto R;
+B:
+  int b = 2;
+  reg2mem_p = b;
+  goto R;
+R:
+  return reg2mem_p;
+```
+
+当我们复制返回块之后，可能出现如下面所示的代码冗余的情况，在return语句前增加了不必要的赋值语句。
+
+```
+int reg2mem_p;
+A:
+  int a = 1;
+  reg2mem_p = a;
+  return reg2mem_p;
+B:
+  int b = 2;
+  reg2mem_p = b;
+  return reg2mem_p;
+```
+
+因此，我们需要在复制时识别并消除这种变量。或许可以将返回边消除和SSA解构算法结合起来。
+
+**在IR层消除返回边？**也许你会想，可以用一个IR Pass将return语句复制到predecessor：最好在SSA destruction前？之后无法使用simplifyCFG优化相关基本块。
+
+
 **添加注释**
 
 添加注释不是简单地插入AST，因为Clang没有把注释这样管理，而是直接插入到ASTContext里面，而且要创建RawComment，而不是对应的语法树结构。没有找到将对应的Comment类插入进去的函数，应该需要自己实现。可能需要把字符串直接插入SourceManager里面，然后把sourceRange拿出来创建Comments。
