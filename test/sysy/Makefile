@@ -21,7 +21,7 @@ out_$(FUNCTIONALDIR)/%.ll: $(FUNCTIONALDIR)/%.c
 	$(CLANG) -Xclang -disable-O0-optnone -I. -c -emit-llvm -S -o ./$@ ./$<
 
 %.dec.c: %.ll
-	$(LLVM2C) -i ./$< -o ./$@
+	$(LLVM2C) ./$< -o ./$@
 
 clean:
 	rm -rf out_functional && mkdir out_functional
