@@ -10,6 +10,7 @@
 #include <clang/AST/StmtCXX.h>
 #include <clang/AST/StmtObjC.h>
 #include <clang/AST/StmtVisitor.h>
+#include <variant>
 
 namespace notdec::llvm2c {
 
@@ -267,9 +268,18 @@ public:
 
 public:
   void print(CFGTerminator T) {
+    if (BranchTerminator *v = std::get_if<BranchTerminator>(&T)) {
+      Visit(v->getStmt());
+    } else if (SwitchTerminator *v = std::get_if<SwitchTerminator>(&T)) {
+      OS << "switch ";
+      Visit(v->getStmt());
+      for (auto &cas : v->cases()) {
+        Visit(cas);
+      }
+    }
     // switch (T.getKind()) {
     // case CFGTerminator::StmtBranch:
-    Visit(T.getStmt());
+    // Visit(T.getStmt());
     //   break;
     // case CFGTerminator::TemporaryDtorsBranch:
     //   OS << "(Temp Dtor) ";
@@ -529,7 +539,7 @@ static void print_block(raw_ostream &OS, const CFG *cfg, const CFGBlock &B,
   }
 
   // Print the terminator of this block.
-  if (B.getTerminator().isValid()) {
+  if (B.hasValidTerminator()) {
     if (ShowColors)
       OS.changeColor(raw_ostream::GREEN);
 

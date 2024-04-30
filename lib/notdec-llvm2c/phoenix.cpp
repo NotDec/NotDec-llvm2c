@@ -18,6 +18,7 @@
 #include "notdec-llvm2c/PostOrderCFGView.h"
 #include "notdec-llvm2c/phoenix.h"
 #include "notdec-llvm2c/structural-analysis.h"
+#include "utils.h"
 
 namespace notdec::llvm2c {
 
@@ -30,7 +31,7 @@ void Phoenix::execute() {
     ++iterations;
     if (iterations > 1000) {
       llvm::errs() << "Structure analysis stopped making progress, quitting."
-                   << " Func: " << FCtx.getFunction().getName();
+                   << " Func: " << FCtx.getFunction().getName() << "\n";
       break;
     }
 
@@ -425,7 +426,7 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     From->appendStmt(stm);
     break;
   default:
-    CFG.dump(Ctx.getLangOpts(), true);
+    CFG.dump(Ctx.getLangOpts(), debug_print_color);
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                  << "Error: Can't collapse edge! function: "
                  << FCtx.getFunction().getName()
@@ -470,7 +471,7 @@ void Phoenix::virtualizeEdge(Phoenix::VirtualEdge &edge) {
     if (isPureReturn(edge.To)) {
       CFG.remove(edge.To);
     } else {
-      CFG.dump(Ctx.getLangOpts(), true);
+      CFG.dump(Ctx.getLangOpts(), debug_print_color);
       std::cerr << __FILE__ << ":" << __LINE__ << ": "
                 << "Error: Removing edge (" << edge.From->getBlockID() << ", "
                 << edge.To->getBlockID() << ") caused loss of some code blocks"
@@ -813,6 +814,7 @@ bool Phoenix::reduceSwitchRegion(CFGBlock *n) {
   if (unresolvedCycles.size() == 0) {
     unresolvedSwitches.push_back(n);
   }
+  // TODO
 }
 
 bool Phoenix::reduceIfRegion(CFGBlock *Block) {

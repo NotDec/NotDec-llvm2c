@@ -19,7 +19,7 @@ static cl::opt<std::string>
                   cl::value_desc("input LLVM IR file, either .ll or .bc path."),
                   cl::Required);
 
-static cl::OptionCategory mainOpt("1NotDec Options");
+static cl::OptionCategory mainOpt("! NotDec Options");
 static cl::opt<std::string> outputFilename("o", cl::desc("Specify output path"),
                                            cl::value_desc("output.c"),
                                            cl::Optional, cl::cat(mainOpt));
@@ -27,6 +27,10 @@ static cl::opt<bool>
     disablePass("disable-pass",
                 cl::desc("Disable IR passes. Eliminate phi node by yourself "
                          "before enabling this."),
+                cl::init(false), cl::cat(mainOpt));
+static cl::opt<bool>
+    enableColor("notdec-color",
+                cl::desc("Enable color output for things like CFG dump."),
                 cl::init(false), cl::cat(mainOpt));
 
 std::string getSuffix(std::string fname) {
@@ -50,6 +54,10 @@ int main(int argc, char *argv[]) {
                               "NotDec llvm to C decompiler backend: Translates "
                               "LLVM IR or bytecode file into C file.\n");
   // initDebugOptions();
+
+  if (enableColor) {
+    notdec::llvm2c::debug_print_color = true;
+  }
 
   std::string inSuffix = getSuffix(inputFilename);
   llvm::LLVMContext Ctx;

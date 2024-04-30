@@ -29,6 +29,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/Support/raw_ostream.h>
 #include <map>
 #include <memory>
 #include <vector>
@@ -392,20 +393,24 @@ public:
     B.setTerminator(nullptr);
     return ret;
   }
-  clang::CompoundStmt *makeCompoundStmt(CFGBlock *el, bool remove = false) {
+  clang::Stmt *makeCompoundStmt(CFGBlock *B, bool remove = false) {
     // convert to vector
     std::vector<clang::Stmt *> stmts;
-    for (auto elem = el->begin(); elem != el->end(); ++elem) {
+    for (auto elem = B->begin(); elem != B->end(); ++elem) {
       if (auto stmt = elem->getAs<CFGStmt>()) {
         stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
       }
     }
     if (remove) {
-      el->clear();
+      B->clear();
     }
-    return clang::CompoundStmt::Create(FCtx.getASTContext(), stmts,
-                                       clang::SourceLocation(),
-                                       clang::SourceLocation());
+    if (stmts.size() == 1) {
+      return stmts[0];
+    } else {
+      return clang::CompoundStmt::Create(FCtx.getASTContext(), stmts,
+                                         clang::SourceLocation(),
+                                         clang::SourceLocation());
+    }
   }
   clang::Stmt *createWhileTrue(clang::Stmt *body) {
     auto &Ctx = FCtx.getASTContext();
@@ -541,13 +546,15 @@ public:
         /* FPFeatures */ clang::FPOptionsOverride());
   }
 
+  void visitInstruction(llvm::Instruction &I);
   void visitReturnInst(llvm::ReturnInst &I);
   void visitUnreachableInst(llvm::UnreachableInst &I) {
     // TODO create call statement to something like abort.
   }
+  // edges are added separately
   void visitBranchInst(llvm::BranchInst &I) {
     if (I.isConditional()) {
-      Blk->setTerminator(CFGTerminator(EB.visitValue(I.getCondition())));
+      Blk->setTerminator(EB.visitValue(I.getCondition()));
     }
   }
   void visitBinaryOperator(llvm::BinaryOperator &I);

@@ -13,8 +13,10 @@
 #include <cassert>
 #include <deque>
 #include <list>
+#include <memory>
 #include <set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <clang/AST/Stmt.h>
@@ -24,7 +26,6 @@
 namespace notdec::llvm2c {
 
 class CFGElement;
-class CFGTerminator;
 class CFG;
 
 class CFGElement {
@@ -123,18 +124,36 @@ protected:
   CFGStmt() = default;
 };
 
-class CFGTerminator {
+class BranchTerminator {
 private:
   using Stmt = clang::Stmt;
-  Stmt *Data = nullptr;
+  Stmt *Cond = nullptr;
 
 public:
-  CFGTerminator() {}
-  CFGTerminator(Stmt *S) : Data(S) {}
-  bool isValid() const { return Data != nullptr; }
-  Stmt *getStmt() { return Data; }
-  const Stmt *getStmt() const { return Data; }
+  BranchTerminator() {}
+  BranchTerminator(Stmt *S) : Cond(S) {}
+  bool isValid() const { return Cond != nullptr; }
+  Stmt *getStmt() { return Cond; }
+  const Stmt *getStmt() const { return Cond; }
 };
+
+class SwitchTerminator {
+private:
+  using Stmt = clang::Stmt;
+  Stmt *Cond = nullptr;
+  std::vector<Stmt *> Cases;
+
+public:
+  SwitchTerminator() {}
+  SwitchTerminator(Stmt *S) : Cond(S) {}
+  bool isValid() const { return Cond != nullptr; }
+  Stmt *getStmt() { return Cond; }
+  const Stmt *getStmt() const { return Cond; }
+  std::vector<Stmt *> &cases() { return Cases; }
+  const std::vector<Stmt *> &cases() const { return Cases; }
+};
+
+using CFGTerminator = std::variant<BranchTerminator, SwitchTerminator>;
 
 /// Represents a single basic block in a source-level CFG.
 ///  It consists of:
@@ -228,6 +247,13 @@ private:
   CFG *Parent;
 
 public:
+  bool hasValidTerminator() const {
+    if (const BranchTerminator *v =
+            std::get_if<BranchTerminator>(&Terminator)) {
+      return v->isValid();
+    }
+    return true;
+  }
   std::pair<CFGBlock *, CFGBlock *> getTwoSuccs() {
     assert(succ_size() == 2);
     return std::make_pair(Succs[0], Succs[1]);
@@ -332,6 +358,7 @@ public:
   bool pred_empty() const { return Preds.empty(); }
 
   // Manipulation of block contents
+  void setTerminator(clang::Stmt *Term) { Terminator = BranchTerminator(Term); }
   void setTerminator(CFGTerminator Term) { Terminator = Term; }
   void setLabel(Stmt *Statement) { Label = Statement; }
   void setHasNoReturnElement() { HasNoReturnElement = true; }
@@ -345,8 +372,12 @@ public:
   void removePred(CFGBlock *B) { Preds.erase(AdjacentBlock(B)); }
   void addPred(CFGBlock *B) { Preds.insert(AdjacentBlock(B)); }
 
-  Stmt *getTerminatorStmt() { return Terminator.getStmt(); }
-  const Stmt *getTerminatorStmt() const { return Terminator.getStmt(); }
+  Stmt *getTerminatorStmt() {
+    return std::get<BranchTerminator>(Terminator).getStmt();
+  }
+  const Stmt *getTerminatorStmt() const {
+    return std::get<BranchTerminator>(Terminator).getStmt();
+  }
 
   Stmt *getLabel() { return Label; }
   const Stmt *getLabel() const { return Label; }
@@ -485,7 +516,7 @@ template <> struct simplify_type<::notdec::llvm2c::CFGTerminator> {
   using SimpleType = ::clang::Stmt *;
 
   static SimpleType getSimplifiedValue(::notdec::llvm2c::CFGTerminator Val) {
-    return Val.getStmt();
+    return std::get<::notdec::llvm2c::BranchTerminator>(Val).getStmt();
   }
 };
 

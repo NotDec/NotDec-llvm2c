@@ -1,6 +1,7 @@
 
 
 #include "notdec-llvm2c/structural-analysis.h"
+#include "CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/goto.h"
 #include "notdec-llvm2c/phoenix.h"
@@ -49,6 +50,11 @@
 #define DEBUG_TYPE "structural-analysis"
 
 namespace notdec::llvm2c {
+
+void CFGBuilder::visitInstruction(llvm::Instruction &I) {
+  llvm::errs() << "Warning: CFGBuilder: Cannot handle: " << I << "\n";
+  LLVM_DEBUG(std::abort());
+}
 
 /// Check if the block is the entry block of the function, or a must via block
 /// that follows the entry.
@@ -125,10 +131,13 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     if (auto PointerTy = Ty->getAs<clang::PointerType>()) {
       // 1. pointer arithmetic + deref
       Ty = PointerTy->getPointeeType().getTypePtr();
+      clang::Expr *Index;
       if (llvm::isa<llvm::ConstantInt>(LIndex) &&
-          llvm::cast<llvm::ConstantInt>(LIndex)->getZExtValue() != 0) {
+          llvm::cast<llvm::ConstantInt>(LIndex)->getZExtValue() == 0) {
+        // skip the add
+      } else {
+        Index = EB.visitValue(LIndex);
         // Create pointer arithmetic
-        clang::Expr *Index = EB.visitValue(LIndex);
         Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add,
                                    Val->getType(), clang::VK_LValue);
       }
@@ -715,7 +724,9 @@ void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
   addExprOrStmt(I, *exp);
 }
 
-void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {}
+void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {
+  Blk->setTerminator(SwitchTerminator(EB.visitValue(I.getCondition())));
+}
 
 const llvm::StringSet<> SAContext::Keywords = {
 #define KEYWORD(NAME, FLAGS) #NAME,
@@ -918,6 +929,8 @@ void SAFuncContext::run() {
   }
 
   // connect the edges
+  // for if block, the true edge comes first in the successor list.
+  // for switch block, the edge sequences matches the switch expr list.
   for (llvm::BasicBlock &bb : Func) {
     auto term = bb.getTerminator();
     for (auto succ : llvm::successors(term)) {
@@ -938,7 +951,7 @@ void SAFuncContext::run() {
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "Before Structural Analysis ========"
                           << "\n");
-  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), true));
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
 
   // TODO: create structural analysis according to cmdline
   Phoenix SA(*this);
@@ -947,7 +960,7 @@ void SAFuncContext::run() {
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "After Structural Analysis ========"
                           << "\n");
-  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), true));
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
 
   // Finalize steps
   // After structural analysis, the CFG is expected to have only one linear
@@ -965,11 +978,9 @@ void SAFuncContext::run() {
       Stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
     }
   }
-  auto term = entry.getTerminator();
-  if (term.getStmt() != nullptr) {
-    if (auto t = term.getStmt()) {
-      Stmts.push_back(t);
-    }
+
+  if (auto t = entry.getTerminatorStmt()) {
+    Stmts.push_back(t);
   }
   // create a compound stmt as function body
   auto CS = clang::CompoundStmt::Create(

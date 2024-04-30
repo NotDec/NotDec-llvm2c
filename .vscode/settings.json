@@ -4,5 +4,6 @@
     "Decompilation",
     "decompile",
     "notdec"
-  ]
+  ],
+  "search.useIgnoreFiles": false
 }
