@@ -38,6 +38,7 @@ protected:
   bool ReduceCyclic(CFGBlock *Block);
   bool reduceSequence(CFGBlock *Block);
   bool reduceIfRegion(CFGBlock *Block);
+  bool reduceSwitchRegion(CFGBlock *Block);
   bool ProcessUnresolvedRegions();
   bool refineLoop(CFGBlock *head, std::set<CFGBlock *> &loopNodes);
   void refineIncSwitch(CFGBlock *switchHead);
@@ -57,6 +58,8 @@ protected:
                                 std::set<CFGBlock *> &lexicalNodes);
   llvm::Optional<Phoenix::VirtualEdge>
   findLastResortEdge(std::set<CFGBlock *> &blocks);
+  CFGBlock *getSwitchFollow(CFGBlock *n);
+  bool reduceIncSwitch(CFGBlock *n, CFGBlock *follow);
 
 public:
   Phoenix(SAFuncContext &Ctx) : IStructuralAnalysis(Ctx) {}

@@ -1,8 +1,8 @@
 {
-    "editor.formatOnSave": true,
-    "cSpell.words": [
-        "Decompilation",
-        "decompile",
-        "notdec"
-    ]
+  "editor.formatOnSave": true,
+  "cSpell.words": [
+    "Decompilation",
+    "decompile",
+    "notdec"
+  ]
 }

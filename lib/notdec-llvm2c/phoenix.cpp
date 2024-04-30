@@ -738,6 +738,83 @@ bool Phoenix::reduceSequence(CFGBlock *Block) {
   }
 }
 
+static bool allCasesAreTails(CFGBlock *n) {
+  for (auto succ : n->succs()) {
+    if (succ->succ_size() > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+//   ┌──────Head─────────┐
+//   │       │           │
+//   ▼       ▼           ▼
+// Case1     Case2     Case...
+//   │        │          │
+//   │        ▼          │
+//   └───► Follow ◄──────┘
+/// Matching the pattern (figure above) to find the follow block
+/// case block can be a tail block (without any successor);
+CFGBlock *Phoenix::getSwitchFollow(CFGBlock *n) {
+  CFGBlock *follow = nullptr;
+  for (auto s : n->succs()) {
+    // for each case block
+    if (s == follow) {
+      continue;
+    }
+    if (s->succ_size() != 0) {
+      auto ss = linearSuccessor(s);
+      if (ss == nullptr) {
+        // multiple successor for case block: not a good switch
+        return nullptr;
+      }
+      // this is the follow block
+      if (follow == nullptr) {
+        follow = ss;
+      } else if (ss != follow) {
+        // multiple possible follow: not a good switch
+        return nullptr;
+      }
+    }
+  }
+  return follow;
+}
+
+/// Checks if any case block has any predecessor that is not switch head
+bool hasIrregularEntries(CFGBlock *n, CFGBlock *follow) {
+  for (auto s : n->succs()) {
+    if (s == follow)
+      continue;
+    for (auto p : s->preds()) {
+      if (p != n) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
+  // TODO
+}
+
+bool Phoenix::reduceSwitchRegion(CFGBlock *n) {
+  CFGBlock *follow = getSwitchFollow(n);
+  bool hasIrregular = hasIrregularEntries(n, follow);
+  if (!hasIrregular && (follow != nullptr || allCasesAreTails(n))) {
+    return reduceIncSwitch(n, follow);
+  }
+
+  // It's a switch region, but we are unable to collapse it.
+  // Schedule it for refinement after the whole graph has been
+  // traversed.
+  // Do not refine switch region if there are unresolved cycles
+  if (unresolvedCycles.size() == 0) {
+    unresolvedSwitches.push_back(n);
+  }
+}
+
 bool Phoenix::reduceIfRegion(CFGBlock *Block) {
   auto tmp = Block->getTwoSuccs();
   CFGBlock *th = tmp.first;
@@ -820,8 +897,8 @@ bool Phoenix::ReduceAcyclic(CFGBlock *Block) {
     return reduceIfRegion(Block);
     break;
   default:
-    // TODO support switch
-    assert(false && "Not implemented");
+    assert(Block->succ_size() > 0);
+    return reduceSwitchRegion(Block);
     break;
   }
   // unreachable

@@ -15,16 +15,19 @@
 using namespace llvm;
 
 static cl::opt<std::string>
-    inputFilename("i", cl::desc("input LLVM IR file, either .ll or .bc path."),
-                  cl::value_desc("input.ll"), cl::Required);
+    inputFilename(cl::Positional, cl::desc("<input file>"),
+                  cl::value_desc("input LLVM IR file, either .ll or .bc path."),
+                  cl::Required);
+
+static cl::OptionCategory mainOpt("1NotDec Options");
 static cl::opt<std::string> outputFilename("o", cl::desc("Specify output path"),
                                            cl::value_desc("output.c"),
-                                           cl::Optional);
+                                           cl::Optional, cl::cat(mainOpt));
 static cl::opt<bool>
     disablePass("disable-pass",
                 cl::desc("Disable IR passes. Eliminate phi node by yourself "
                          "before enabling this."),
-                cl::init(false));
+                cl::init(false), cl::cat(mainOpt));
 
 std::string getSuffix(std::string fname) {
   std::size_t ind = fname.find_last_of('.');
@@ -43,7 +46,9 @@ void initDebugOptions();
 
 int main(int argc, char *argv[]) {
   // parse cmdline
-  cl::ParseCommandLineOptions(argc, argv);
+  cl::ParseCommandLineOptions(argc, argv,
+                              "NotDec llvm to C decompiler backend: Translates "
+                              "LLVM IR or bytecode file into C file.\n");
   // initDebugOptions();
 
   std::string inSuffix = getSuffix(inputFilename);

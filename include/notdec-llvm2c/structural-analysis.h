@@ -566,6 +566,7 @@ public:
     std::abort();
   }
   void visitSelectInst(llvm::SelectInst &I);
+  void visitSwitchInst(llvm::SwitchInst &I);
 
   CFGBuilder(SAFuncContext &FCtx)
       : Ctx(FCtx.getASTContext()), FCtx(FCtx), EB(FCtx) {}

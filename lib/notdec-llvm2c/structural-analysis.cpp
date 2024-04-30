@@ -715,6 +715,8 @@ void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
   addExprOrStmt(I, *exp);
 }
 
+void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {}
+
 const llvm::StringSet<> SAContext::Keywords = {
 #define KEYWORD(NAME, FLAGS) #NAME,
 #include "clang/Basic/TokenKinds.def"
