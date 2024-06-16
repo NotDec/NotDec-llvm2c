@@ -726,6 +726,13 @@ void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
 
 void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {
   Blk->setTerminator(SwitchTerminator(EB.visitValue(I.getCondition())));
+  // Add case expressions
+  auto cases = std::get_if<SwitchTerminator>(&Blk->getTerminator());
+  for (auto &expr : I.cases()) {
+    cases->cases().push_back(EB.visitValue(expr.getCaseValue()));
+  }
+  // there is not default value for switch.
+  // cases->cases().push_back(EB.visitValue(I.case_default()->getCaseValue()));
 }
 
 const llvm::StringSet<> SAContext::Keywords = {
@@ -923,7 +930,8 @@ void SAFuncContext::run() {
 
   // connect the edges
   // for if block, the true edge comes first in the successor list.
-  // for switch block, the edge sequences matches the switch expr list.
+  // for switch block, first successor is the default branch, then the edge
+  // sequences matches the switch expr list.
   for (llvm::BasicBlock &bb : Func) {
     auto term = bb.getTerminator();
     for (auto succ : llvm::successors(term)) {

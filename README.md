@@ -1,22 +1,25 @@
 # NotDec LLVM IR to C
 
-[**Click to Read the Book**](TODO)
+<!-- [**Click to Read the Book (TODO)**](TODO) -->
 
 <!-- [**Online Demo**](TODO) -->
 
-NotDec-LLVM2C is a book and an example project that demonstrates the structuring algorithm in the decompiler.
+NotDec-LLVM2C is a book (TODO) and an example project that demonstrates the structuring algorithm in the decompiler.
 - **Tutorial Book**: A series of tutorial articles is provided to better demonstrate the internals of the decompiler.
 - **Clang Data Structure**: Use [Clang CFG](https://clang.llvm.org/doxygen/classclang_1_1CFG.html) as the main data structure and Translate to Clang AST.
 - **Multiple Implementation**: Implements the [Phoenix](https://www.usenix.org/conference/usenixsecurity13/technical-sessions/presentation/schwartz) and [Dream](https://www.ndss-symposium.org/ndss2015/ndss-2015-programme/no-more-gotos-decompilation-using-pattern-independent-control-flow-structuring-and-semantics/) (WIP) algorithm.
 
 Keywords: C LLVM Decompiler Reverse-engineering
 
-Similar projects: [lifting-bits/Rellic](https://github.com/lifting-bits/rellic)
+Similar projects: 
+
+- [lifting-bits/Rellic](https://github.com/lifting-bits/rellic)
+- [llvm-cbe](https://github.com/JuliaHubOSS/llvm-cbe)
 
 ### We need your feedback!
 
 - **Suggestions for the book**: It is hard to write without feedback!
-  - If you still cannot understand after reading the book, just create a thread in the GitHub discussion! TODO: attach link.
+  - If you cannot understand any part after reading the book, just [create a thread](https://github.com/NotDec/DecompilerWiki/discussions/new?category=write-a-decompiler-backend-from-scratch) in the GitHub discussion!
   - If you have suggestions for the book, feel free to create an issue! TODO: issue template and attach link.
 - **Tool crash**: If the tool crashes on any LLVM IR, Please raise an issue with the IR.
 

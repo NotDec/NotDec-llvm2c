@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <clang/Basic/SourceLocation.h>
 #include <iostream>
@@ -12,6 +13,7 @@
 #include <queue>
 #include <set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "notdec-llvm2c/CFG.h"
@@ -806,7 +808,12 @@ bool hasIrregularEntries(CFGBlock *n, CFGBlock *follow) {
 }
 
 bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
-  // TODO
+  auto &term = std::get<SwitchTerminator>(n->getTerminator());
+  auto cond = llvm::cast<clang::Expr>(term.getStmt());
+  auto switc = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
+                                         clang::SourceLocation(),
+                                         clang::SourceLocation());
+  // for each case, insert case label, and insert block stmts
 }
 
 bool Phoenix::reduceSwitchRegion(CFGBlock *n) {
@@ -823,7 +830,7 @@ bool Phoenix::reduceSwitchRegion(CFGBlock *n) {
   if (unresolvedCycles.size() == 0) {
     unresolvedSwitches.push_back(n);
   }
-  // TODO
+  return false;
 }
 
 bool Phoenix::reduceIfRegion(CFGBlock *Block) {

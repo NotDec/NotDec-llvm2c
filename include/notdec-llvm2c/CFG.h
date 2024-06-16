@@ -364,7 +364,8 @@ public:
   void setTerminator(CFGTerminator Term) { Terminator = Term; }
   void setLabel(Stmt *Statement) { Label = Statement; }
   void setHasNoReturnElement() { HasNoReturnElement = true; }
-  CFGTerminator getTerminator() const { return Terminator; }
+  const CFGTerminator &getTerminator() const { return Terminator; }
+  CFGTerminator &getTerminator() { return Terminator; }
   void removeSucc(CFGBlock *B) {
     Succs.erase(
         std::remove_if(Succs.begin(), Succs.end(),
