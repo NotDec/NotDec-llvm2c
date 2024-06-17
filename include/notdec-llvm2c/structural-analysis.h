@@ -1,9 +1,11 @@
 #ifndef _NOTDEC_BACKEND_STRUCTURAL_H_
 #define _NOTDEC_BACKEND_STRUCTURAL_H_
 
-#include "notdec-llvm2c/CFG.h"
-#include "notdec-llvm2c/utils.h"
 #include <cassert>
+#include <map>
+#include <memory>
+#include <vector>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
@@ -30,9 +32,9 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
-#include <map>
-#include <memory>
-#include <vector>
+
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/utils.h"
 
 namespace notdec::llvm2c {
 

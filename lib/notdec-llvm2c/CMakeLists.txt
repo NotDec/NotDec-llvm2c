@@ -16,6 +16,11 @@ target_link_libraries(notdec-llvm2c
     clangAST clangTooling
 )
 
+target_include_directories(notdec-llvm2c
+    PUBLIC
+    ../../include
+)
+
 set_target_properties(notdec-llvm2c
     PROPERTIES
         OUTPUT_NAME "notdec-llvm2c"
