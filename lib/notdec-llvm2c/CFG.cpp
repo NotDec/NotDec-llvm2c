@@ -271,10 +271,12 @@ public:
     if (BranchTerminator *v = std::get_if<BranchTerminator>(&T)) {
       Visit(v->getStmt());
     } else if (SwitchTerminator *v = std::get_if<SwitchTerminator>(&T)) {
-      OS << "switch ";
+      OS << "switch(";
       Visit(v->getStmt());
+      OS << ") ";
       for (auto &cas : v->cases()) {
         Visit(cas);
+        OS << ", ";
       }
     }
     // switch (T.getKind()) {
@@ -654,10 +656,6 @@ void CFGBlock::printTerminator(raw_ostream &OS, const LangOptions &LO) const {}
 /// Add a Successor. Also adds the pred of succ.
 void CFGBlock::addSuccessor(AdjacentBlock Succ) {
   assert(std::find(Succs.begin(), Succs.end(), Succ) == Succs.end());
-  if (CFGBlock *B = Succ.getBlock()) {
-    B->Preds.insert(AdjacentBlock(this));
-  }
-
   Succs.push_back(Succ);
 }
 
@@ -757,6 +755,16 @@ CFG::iterator CFG::createBlock() {
   auto it = end();
   --it;
   return it;
+}
+
+void addEdge(CFGBlock *From, CFGBlock *To) {
+  From->addSuccessor(CFGBlock::AdjacentBlock(To));
+  To->addPredecessor(CFGBlock::AdjacentBlock(From));
+}
+
+void removeEdge(CFGBlock *From, CFGBlock *To) {
+  From->removeSucc(To);
+  To->removePred(From);
 }
 
 } // namespace notdec::llvm2c

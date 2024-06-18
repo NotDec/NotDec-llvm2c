@@ -407,13 +407,20 @@ public:
 
   /// Adds a (potentially unreachable) successor block to the current block.
   void addSuccessor(AdjacentBlock Succ);
-  void addOnlyPredecessor(AdjacentBlock Pred) { Preds.insert(Pred); }
+  void addPredecessor(AdjacentBlock Pred) { Preds.insert(Pred); }
+  CFGBlock *getSingleSuccessor() {
+    assert(succ_size() == 1);
+    return Succs[0];
+  }
 
   void prependStmt(Stmt *statement) {
     Elements.insert(Elements.begin(), CFGStmt(statement));
   }
   void appendStmt(Stmt *statement) { Elements.push_back(CFGStmt(statement)); }
   void appendElement(CFGElement statement) { Elements.push_back(statement); }
+  bool has_switch() const {
+    return std::holds_alternative<SwitchTerminator>(Terminator);
+  }
 };
 
 class CFG {
@@ -508,6 +515,10 @@ private:
   unsigned NumBlockIDs = 0;
   CFGBlockListTy Blocks;
 };
+
+void addEdge(CFGBlock *From, CFGBlock *To);
+void removeEdge(CFGBlock *From, CFGBlock *To);
+
 } // namespace notdec::llvm2c
 
 //===----------------------------------------------------------------------===//

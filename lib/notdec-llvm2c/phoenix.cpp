@@ -8,6 +8,7 @@
 #include <clang/Basic/SourceLocation.h>
 #include <iostream>
 #include <llvm/ADT/Optional.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/raw_ostream.h>
 #include <memory>
 #include <queue>
@@ -810,14 +811,74 @@ bool hasIrregularEntries(CFGBlock *n, CFGBlock *follow) {
 bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
   auto &term = std::get<SwitchTerminator>(n->getTerminator());
   auto cond = llvm::cast<clang::Expr>(term.getStmt());
-  auto switc = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
-                                         clang::SourceLocation(),
-                                         clang::SourceLocation());
+  auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
+                                      clang::SourceLocation(),
+                                      clang::SourceLocation());
+  std::vector<clang::Stmt *> stmts;
+  stmts.reserve(n->succ_size());
+  auto succIt = n->succ_begin();
+
+  // handle default stmt, the first successor.
+  clang::DefaultStmt *DS = new (Ctx)
+      clang::DefaultStmt(clang::SourceLocation(), clang::SourceLocation(),
+                         makeCompoundStmt(*succIt));
+  succIt++;
+
   // for each case, insert case label, and insert block stmts
+  for (auto caseVal : term.cases()) {
+    assert(succIt != n->succ_end());
+    auto succBlock = *succIt;
+    auto caseExpr = llvm::cast<clang::Expr>(caseVal);
+    // CaseStmt can have RHS, but we are not using it:
+    // https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html
+    auto *CS = clang::CaseStmt::Create(
+        Ctx, caseExpr, nullptr, clang::SourceLocation(),
+        clang::SourceLocation(), clang::SourceLocation());
+    clang::Stmt *break_;
+    if (succBlock->succ_size() == 0) {
+      break_ = nullptr;
+    } else {
+      assert(succBlock->getSingleSuccessor() == follow);
+      // case block is a tail block
+      break_ = new (Ctx) clang::BreakStmt(clang::SourceLocation());
+    }
+    CS->setSubStmt(makeCompoundStmt(succBlock, false, break_));
+    sw->addSwitchCase(CS);
+    stmts.push_back(CS);
+    succIt++;
+  }
+  // add default as the lase case
+  sw->addSwitchCase(DS);
+  stmts.push_back(DS);
+
+  auto body = clang::CompoundStmt::Create(Ctx, stmts, clang::SourceLocation(),
+                                          clang::SourceLocation());
+  sw->setBody(body);
+  n->appendStmt(sw);
+
+  // handle all edges
+  // remoge all switch edges, and edges from case blocks to follow block.
+  for (auto caseBlock :
+       std::vector<CFGBlock *>(n->succ_begin(), n->succ_end())) {
+    removeEdge(n, caseBlock);
+    if (caseBlock->succ_size() == 0) {
+      // do nothing
+    } else {
+      assert(caseBlock->getSingleSuccessor() == follow);
+      removeEdge(caseBlock, follow);
+    }
+    CFG.remove(caseBlock);
+  }
+  // add a single linear edge from switch to follow
+  addEdge(n, follow);
+  assert(n->succ_size() == 1);
+
+  return true;
 }
 
 bool Phoenix::reduceSwitchRegion(CFGBlock *n) {
   CFGBlock *follow = getSwitchFollow(n);
+  // check for predecessor that is not switch head.
   bool hasIrregular = hasIrregularEntries(n, follow);
   if (!hasIrregular && (follow != nullptr || allCasesAreTails(n))) {
     return reduceIncSwitch(n, follow);
@@ -894,7 +955,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
     removeEdge(el, elS);
     CFG.remove(th);
     CFG.remove(el);
-    Block->addSuccessor(elS);
+    addEdge(Block, elS);
     assert(Block->succ_size() == 1);
     return true;
   }

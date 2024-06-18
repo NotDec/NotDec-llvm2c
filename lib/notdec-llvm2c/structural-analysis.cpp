@@ -725,6 +725,8 @@ void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
 }
 
 void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {
+  assert(I.getNumSuccessors() > 2 &&
+         "CFGBuilder.visitSwitchInst: SwitchInst with less than 2 successors?");
   Blk->setTerminator(SwitchTerminator(EB.visitValue(I.getCondition())));
   // Add case expressions
   auto cases = std::get_if<SwitchTerminator>(&Blk->getTerminator());
@@ -937,7 +939,7 @@ void SAFuncContext::run() {
     for (auto succ : llvm::successors(term)) {
       auto src = getBlock(bb);
       auto dst = getBlock(*succ);
-      src->addSuccessor(CFGBlock::AdjacentBlock(dst));
+      addEdge(src, dst);
     }
   }
 

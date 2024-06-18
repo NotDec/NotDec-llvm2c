@@ -395,13 +395,17 @@ public:
     B.setTerminator(nullptr);
     return ret;
   }
-  clang::Stmt *makeCompoundStmt(CFGBlock *B, bool remove = false) {
+  clang::Stmt *makeCompoundStmt(CFGBlock *B, bool remove = false,
+                                clang::Stmt *trail = nullptr) {
     // convert to vector
     std::vector<clang::Stmt *> stmts;
     for (auto elem = B->begin(); elem != B->end(); ++elem) {
       if (auto stmt = elem->getAs<CFGStmt>()) {
         stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
       }
+    }
+    if (trail != nullptr) {
+      stmts.push_back(trail);
     }
     if (remove) {
       B->clear();
@@ -422,14 +426,10 @@ public:
         Ctx, nullptr, tru, body, clang::SourceLocation(),
         clang::SourceLocation(), clang::SourceLocation());
   }
-  void removeEdge(CFGBlock *From, CFGBlock *To) {
-    From->removeSucc(To);
-    To->removePred(From);
-  }
-  /// Move all outgoing edges of From to To.
+  /// Move all successors of From to To.
   void replaceSuccessors(CFGBlock *From, CFGBlock *Target) {
     for (auto &Succ : From->succs()) {
-      Target->addSuccessor(Succ);
+      addEdge(Target, Succ);
       // replace pred of succ
       Succ->replacePred(From, Target);
     }
@@ -477,7 +477,7 @@ public:
         succ->removePred(Block);
         for (auto pred : Block->preds()) {
           pred->replaceSucc(Block, succ);
-          succ->addOnlyPredecessor(pred);
+          succ->addPredecessor(pred);
         }
         CFG.remove(Block);
       }

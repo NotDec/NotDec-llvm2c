@@ -5,5 +5,9 @@
     "decompile",
     "notdec"
   ],
-  "search.useIgnoreFiles": false
+  "search.useIgnoreFiles": false,
+  "cmake.configureArgs": [
+    "-DNOTDEC_LLVM_INSTALL_DIR=/sn640/NotDec/llvm-14.0.6.obj",
+    "-DCMAKE_EXE_LINKER_FLAGS=\"-fuse-ld=lld\""
+  ]
 }
