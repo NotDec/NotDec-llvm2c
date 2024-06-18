@@ -376,7 +376,10 @@ public:
   void addPred(CFGBlock *B) { Preds.insert(AdjacentBlock(B)); }
 
   Stmt *getTerminatorStmt() {
-    return std::get<BranchTerminator>(Terminator).getStmt();
+    if (std::holds_alternative<BranchTerminator>(Terminator)) {
+      return std::get<BranchTerminator>(Terminator).getStmt();
+    }
+    return nullptr;
   }
   const Stmt *getTerminatorStmt() const {
     return std::get<BranchTerminator>(Terminator).getStmt();

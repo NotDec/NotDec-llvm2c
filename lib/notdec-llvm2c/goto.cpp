@@ -67,8 +67,42 @@ void Goto::execute() {
       auto GotoB2 = createGotoStmt(getBlockLabel(b2));
       Current->appendStmt(GotoB2);
     } else if (succ_size > 2) {
-      // TODO handle switch.
-      std::abort();
+      auto &term = std::get<SwitchTerminator>(Current->getTerminator());
+      auto cond = llvm::cast<clang::Expr>(term.getStmt());
+      auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
+                                          clang::SourceLocation(),
+                                          clang::SourceLocation());
+      std::vector<clang::Stmt *> stmts;
+      stmts.reserve(succ_size);
+      auto succIt = Current->succ_begin();
+
+      // handle default case
+      auto caseBlock = *succIt;
+      auto goto_ = createGotoStmt(getBlockLabel(caseBlock));
+      clang::DefaultStmt *DS = new (Ctx) clang::DefaultStmt(
+          clang::SourceLocation(), clang::SourceLocation(), goto_);
+      succIt++;
+
+      // handle each case
+      for (auto caseVal : term.cases()) {
+        assert(succIt != Current->succ_end());
+        auto succBlock = *succIt;
+        auto CS = clang::CaseStmt::Create(Ctx, llvm::cast<clang::Expr>(caseVal),
+                                          nullptr, clang::SourceLocation(),
+                                          clang::SourceLocation(),
+                                          clang::SourceLocation());
+        CS->setSubStmt(createGotoStmt(getBlockLabel(succBlock)));
+        sw->addSwitchCase(CS);
+        stmts.push_back(CS);
+        succIt++;
+      }
+      // add default as the lase case
+      sw->addSwitchCase(DS);
+      stmts.push_back(DS);
+      auto body = clang::CompoundStmt::Create(
+          Ctx, stmts, clang::SourceLocation(), clang::SourceLocation());
+      sw->setBody(body);
+      Current->appendStmt(sw);
     }
   }
   // merge all blocks into one. Remove all other blocks and edges.
