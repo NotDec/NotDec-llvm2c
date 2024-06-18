@@ -9,29 +9,29 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include "notdec-llvm2c/interface.h"
 #include "notdec-llvm2c/structural-analysis.h"
 #include "notdec-llvm2c/utils.h"
 
 using namespace llvm;
+using namespace notdec::llvm2c;
 
+#include "Commandlines.def"
+
+static cl::opt<bool> disablePass(
+    "disable-pass",
+    cl::desc(
+        "Disable IR passes. Eliminate all phi nodes before enabling this."),
+    cl::init(false), cl::cat(NotdecLLVM2CCat));
 static cl::opt<std::string>
     inputFilename(cl::Positional, cl::desc("<input file>"),
                   cl::value_desc("input LLVM IR file, either .ll or .bc path."),
-                  cl::Required);
+                  cl::Required, cl::cat(NotdecLLVM2CCat));
 
-static cl::OptionCategory mainOpt("! NotDec Options");
 static cl::opt<std::string> outputFilename("o", cl::desc("Specify output path"),
                                            cl::value_desc("output.c"),
-                                           cl::Optional, cl::cat(mainOpt));
-static cl::opt<bool>
-    disablePass("disable-pass",
-                cl::desc("Disable IR passes. Eliminate phi node by yourself "
-                         "before enabling this."),
-                cl::init(false), cl::cat(mainOpt));
-static cl::opt<bool>
-    enableColor("notdec-color",
-                cl::desc("Enable color output for things like CFG dump."),
-                cl::init(false), cl::cat(mainOpt));
+                                           cl::Optional,
+                                           cl::cat(NotdecLLVM2CCat));
 
 std::string getSuffix(std::string fname) {
   std::size_t ind = fname.find_last_of('.');
@@ -54,10 +54,6 @@ int main(int argc, char *argv[]) {
                               "NotDec llvm to C decompiler backend: Translates "
                               "LLVM IR or bytecode file into C file.\n");
   // initDebugOptions();
-
-  if (enableColor) {
-    notdec::llvm2c::debug_print_color = true;
-  }
 
   std::string inSuffix = getSuffix(inputFilename);
   llvm::LLVMContext Ctx;
@@ -104,7 +100,11 @@ int main(int argc, char *argv[]) {
       std::cerr << EC.message() << std::endl;
       std::abort();
     }
-    notdec::llvm2c::decompileModule(*module, os);
+    notdec::llvm2c::decompileModule(*module, os,
+                                    Options{
+                                        .enableColor = enableColor,
+                                        .algo = Algo,
+                                    });
     std::cout << "Decompilation result: " << outputFilename << std::endl;
   }
 

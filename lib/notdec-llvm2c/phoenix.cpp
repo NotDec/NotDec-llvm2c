@@ -437,7 +437,7 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     From->appendStmt(stm);
     break;
   default:
-    CFG.dump(Ctx.getLangOpts(), debug_print_color);
+    CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                  << "Error: Can't collapse edge! function: "
                  << FCtx.getFunction().getName()
@@ -482,7 +482,7 @@ void Phoenix::virtualizeEdge(Phoenix::VirtualEdge &edge) {
     if (isPureReturn(edge.To)) {
       CFG.remove(edge.To);
     } else {
-      CFG.dump(Ctx.getLangOpts(), debug_print_color);
+      CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
       std::cerr << __FILE__ << ":" << __LINE__ << ": "
                 << "Error: Removing edge (" << edge.From->getBlockID() << ", "
                 << edge.To->getBlockID() << ") caused loss of some code blocks"
@@ -819,6 +819,7 @@ bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
   auto succIt = n->succ_begin();
 
   // handle default stmt, the first successor.
+  // Put the default case at the end, so we do not need a break.
   clang::DefaultStmt *DS = new (Ctx)
       clang::DefaultStmt(clang::SourceLocation(), clang::SourceLocation(),
                          makeCompoundStmt(*succIt));

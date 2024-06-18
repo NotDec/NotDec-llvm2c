@@ -1,0 +1,12 @@
+
+static cl::OptionCategory NotdecLLVM2CCat("NotDec-llvm2c Options");
+
+static cl::opt<bool>
+    enableColor("debug-color",
+                cl::desc("Enable color output for things like CFG dump."),
+                cl::init(false), cl::cat(NotdecLLVM2CCat));
+static cl::opt<StructuralAlgorithms>
+    Algo("algo", cl::desc("Structural algorithm:"),
+         cl::values(clEnumValN(SA_Goto, "goto", "emergent"),
+                    clEnumValN(SA_Phoenix, "phoenix", "phoenix algorithm")),
+         cl::init(SA_Phoenix), cl::cat(NotdecLLVM2CCat));

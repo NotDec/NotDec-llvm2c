@@ -11,8 +11,6 @@
 
 namespace notdec::llvm2c {
 
-extern bool debug_print_color;
-
 void demoteSSA(llvm::Module &M);
 
 // ===============

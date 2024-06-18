@@ -1,31 +1,6 @@
-
-
-#include "notdec-llvm2c/structural-analysis.h"
-#include "CFG.h"
-#include "notdec-llvm2c/CompoundConditionBuilder.h"
-#include "notdec-llvm2c/goto.h"
-#include "notdec-llvm2c/phoenix.h"
-#include "notdec-llvm2c/utils.h"
 #include <cassert>
-#include <clang/AST/ASTContext.h>
-#include <clang/AST/Comment.h>
-#include <clang/AST/Decl.h>
-#include <clang/AST/Expr.h>
-#include <clang/AST/ExprCXX.h>
-#include <clang/AST/OperationKinds.h>
-#include <clang/AST/PrettyPrinter.h>
-#include <clang/AST/RawCommentList.h>
-#include <clang/AST/Stmt.h>
-#include <clang/AST/Type.h>
-#include <clang/ASTMatchers/ASTMatchFinder.h>
-#include <clang/ASTMatchers/ASTMatchers.h>
-#include <clang/Analysis/CFG.h>
-#include <clang/Basic/LLVM.h>
-#include <clang/Basic/LangOptions.h>
-#include <clang/Basic/SourceLocation.h>
-#include <clang/Basic/Specifiers.h>
-#include <clang/Basic/TokenKinds.h>
-#include <clang/Tooling/Transformer/RewriteRule.h>
+#include <utility>
+
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
@@ -45,7 +20,34 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
-#include <utility>
+
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/Comment.h>
+#include <clang/AST/Decl.h>
+#include <clang/AST/Expr.h>
+#include <clang/AST/ExprCXX.h>
+#include <clang/AST/OperationKinds.h>
+#include <clang/AST/PrettyPrinter.h>
+#include <clang/AST/RawCommentList.h>
+#include <clang/AST/Stmt.h>
+#include <clang/AST/Type.h>
+#include <clang/ASTMatchers/ASTMatchFinder.h>
+#include <clang/ASTMatchers/ASTMatchers.h>
+#include <clang/Analysis/CFG.h>
+#include <clang/Basic/LLVM.h>
+#include <clang/Basic/LangOptions.h>
+#include <clang/Basic/SourceLocation.h>
+#include <clang/Basic/Specifiers.h>
+#include <clang/Basic/TokenKinds.h>
+#include <clang/Tooling/Transformer/RewriteRule.h>
+
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/CompoundConditionBuilder.h"
+#include "notdec-llvm2c/goto.h"
+#include "notdec-llvm2c/interface.h"
+#include "notdec-llvm2c/phoenix.h"
+#include "notdec-llvm2c/structural-analysis.h"
+#include "notdec-llvm2c/utils.h"
 
 #define DEBUG_TYPE "structural-analysis"
 
@@ -777,13 +779,13 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 }
 
 /// Decompile the module to c and print to a file.
-void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS) {
+void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts) {
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
   LLVM_DEBUG(llvm::dbgs() << M);
   LLVM_DEBUG(llvm::dbgs()
              << "\n========= End IR before structural analysis =========\n");
-  SAContext Ctx(const_cast<llvm::Module &>(M));
+  SAContext Ctx(const_cast<llvm::Module &>(M), opts);
   Ctx.createDecls();
   for (const llvm::Function &F : M) {
     if (F.isDeclaration()) {
@@ -952,7 +954,7 @@ void SAFuncContext::run() {
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "Before CFGCleaner ========"
                           << "\n");
-  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), getOpts().enableColor));
 
   // clean up empty blocks
   CFGCleaner CC(*this);
@@ -961,20 +963,29 @@ void SAFuncContext::run() {
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "Before Structural Analysis ========"
                           << "\n");
-  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), getOpts().enableColor));
 
   // create logical and/or
   CompoundConditionBuilder CCB(*this);
   CCB.execute();
 
   // TODO: create structural analysis according to cmdline
-  Phoenix SA(*this);
-  SA.execute();
+  if (getOpts().algo == SA_Goto) {
+    Goto SA(*this);
+    SA.execute();
+  } else if (getOpts().algo == SA_Phoenix) {
+    Phoenix SA(*this);
+    SA.execute();
+  } else {
+    llvm::errs() << "SAFuncContext::run: unknown algorithm: " << getOpts().algo
+                 << "\n";
+    std::abort();
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "After Structural Analysis ========"
                           << "\n");
-  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), debug_print_color));
+  LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), getOpts().enableColor));
 
   // Finalize steps
   // After structural analysis, the CFG is expected to have only one linear
@@ -1337,5 +1348,7 @@ llvm::StringRef ValueNamer::getTypeName(llvm::StructType &Ty,
   }
   return OS.str();
 }
+
+const Options &SAFuncContext::getOpts() const { return ctx.getOpts(); }
 
 } // namespace notdec::llvm2c

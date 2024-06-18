@@ -22,8 +22,6 @@
 
 namespace notdec::llvm2c {
 
-bool debug_print_color = false;
-
 /// Run the RegToMemPass to demote SSA to memory, i.e., eliminate Phi nodes.
 void demoteSSA(llvm::Module &M) {
   using namespace llvm;

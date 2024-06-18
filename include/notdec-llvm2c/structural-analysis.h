@@ -34,12 +34,10 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/interface.h"
 #include "notdec-llvm2c/utils.h"
 
 namespace notdec::llvm2c {
-
-// main interface
-void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &os);
 
 // utility functions
 bool onlyUsedInBlock(llvm::Instruction &inst);
@@ -272,12 +270,14 @@ public:
     return *b;
   }
   llvm::BasicBlock *getBlock(CFGBlock &bb) { return cfg2ll.at(&bb); }
+  const Options &getOpts() const;
   void run();
 };
 
 /// Main data structures for structural analysis
 class SAContext {
 protected:
+  Options opts;
   std::unique_ptr<llvm::StringSet<>> Names;
   llvm::Module &M;
   std::map<llvm::Function *, SAFuncContext> funcContexts;
@@ -295,8 +295,8 @@ protected:
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
-  SAContext(llvm::Module &mod)
-      : Names(std::make_unique<llvm::StringSet<>>()), M(mod),
+  SAContext(llvm::Module &mod, Options opts)
+      : opts(opts), Names(std::make_unique<llvm::StringSet<>>()), M(mod),
         ASTunit(clang::tooling::buildASTFromCode("", "decompiled.c")),
         TB(getASTContext(), VN, *Names), EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
@@ -332,6 +332,7 @@ public:
   clang::ValueDecl *getGlobalDecl(llvm::GlobalObject &GO) {
     return globalDecls.at(&GO);
   }
+  const Options &getOpts() const { return opts; }
 
   static const llvm::StringSet<> Keywords;
   static bool isKeyword(llvm::StringRef Name);
