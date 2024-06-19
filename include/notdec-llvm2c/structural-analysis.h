@@ -428,14 +428,24 @@ public:
         clang::SourceLocation(), clang::SourceLocation());
   }
   /// Move all successors of From to To.
-  void replaceSuccessors(CFGBlock *From, CFGBlock *Target) {
+  void replaceSuccessors(CFGBlock *From, CFGBlock *To) {
+    assert(To->succ_size() == 0);
     for (auto &Succ : From->succs()) {
-      addEdge(Target, Succ);
+      Succ->removePred(From);
+      addEdge(To, Succ);
       // replace pred of succ
-      Succ->replacePred(From, Target);
     }
     From->succ_clear();
   }
+  // void replaceAllSuccessorsWith(CFGBlock *From, CFGBlock *To,
+  //                               CFGBlock *Target) {
+  //   for (auto &Succ : From->succs()) {
+  //     if (Succ == To) {
+  //       From->replaceSucc(To, Target);
+  //       To->re(From, Target);
+  //     }
+  //   }
+  // }
   // get the only successor or nullptr.
   CFGBlock *linearSuccessor(CFGBlock *Block) {
     if (Block->succ_size() != 1) {

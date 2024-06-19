@@ -267,6 +267,16 @@ public:
     assert(succ_size() == 2);
     return Succs[1] == To;
   }
+  unsigned int replaceAllSucc(CFGBlock *Old, CFGBlock *New) {
+    unsigned int count = 0;
+    for (auto &succ : Succs) {
+      if (succ == Old) {
+        succ.setBlock(New);
+        count += 1;
+      }
+    }
+    return count;
+  }
   void replaceSucc(CFGBlock *From, CFGBlock *To) {
     assert(std::find(Succs.begin(), Succs.end(), To) == Succs.end());
     for (auto &succ : Succs) {

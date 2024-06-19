@@ -1183,10 +1183,16 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, clang::QualType Ty) {
                                          clang::SourceLocation());
   } else if (llvm::ConstantDataSequential *CS =
                  llvm::dyn_cast<llvm::ConstantDataSequential>(&C)) {
+    if (CS->isCString()) {
+      return clang::StringLiteral::Create(
+          Ctx, CS->getAsCString(), clang::StringLiteral::Ascii, false,
+          Ctx.getStringLiteralArrayType(Ctx.CharTy, CS->getNumElements()),
+          clang::SourceLocation());
+    }
     // struct and array
-    llvm::SmallVector<clang::Expr *> vec(CS->getNumOperands());
-    for (unsigned i = 0; i < CS->getNumOperands(); i++) {
-      vec[i] = visitValue(CS->getOperand(i), Ty);
+    llvm::SmallVector<clang::Expr *> vec(CS->getNumElements());
+    for (unsigned i = 0; i < CS->getNumElements(); i++) {
+      vec[i] = visitValue(CS->getElementAsConstant(i), Ty);
     }
     return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), vec,
                                          clang::SourceLocation());

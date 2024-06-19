@@ -440,7 +440,7 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
   case 1:
     From->appendStmt(stm);
     break;
-  default:
+  case 0:
     llvm::errs() << "======== dumping CFG due to an error =============\n";
     CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
@@ -449,6 +449,15 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
                  << ", edge: " << From->getBlockID() << " -> "
                  << To->getBlockID() << "\n";
     std::abort();
+  default:
+    assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
+    // To fold a switch branch, we need to create a new block
+    auto newBlock = CFG.createBlock();
+    (*newBlock)->setTerminator(stm);
+    From->replaceAllSucc(To, *newBlock);
+    (*newBlock)->addPred(From);
+    To->removePred(From);
+    break;
   }
   removeEdge(From, To);
 }
@@ -765,6 +774,13 @@ CFGBlock *Phoenix::findIrregularSwitchFollowRegion(CFGBlock *n) {
 bool Phoenix::virtualizeIrregularSwitchEntries(CFGBlock *n) {
   std::vector<VirtualEdge> VEdges;
   for (auto &S : n->succs()) {
+    // find all entries that are not the switch head.
+
+    // some block that dominates the switch cannot be within the switch.
+    if (Dom.dominates(S, n)) {
+      VEdges.emplace_back(n, S, VirtualEdgeType::Goto);
+      continue;
+    }
     for (auto &SP : S->preds()) {
       if (SP != n) {
         VEdges.emplace_back(SP, S, VirtualEdgeType::Goto);
@@ -942,6 +958,10 @@ bool hasIrregularEntries(CFGBlock *n, CFGBlock *follow) {
 }
 
 bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
+  // 1. follow is nullptr, and all cases are tails.
+  // 2. some cases are tail region.
+  // 3. other cases have a common follow, and has no other pred other than
+  // switch head.
   auto &term = std::get<SwitchTerminator>(n->getTerminator());
   auto cond = llvm::cast<clang::Expr>(term.getStmt());
   auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
@@ -970,6 +990,7 @@ bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
         clang::SourceLocation(), clang::SourceLocation());
     clang::Stmt *break_;
     if (succBlock->succ_size() == 0) {
+      // tail block
       break_ = nullptr;
     } else {
       assert(succBlock->getSingleSuccessor() == follow);
@@ -991,21 +1012,24 @@ bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
   n->appendStmt(sw);
 
   // handle all edges
-  // remoge all switch edges, and edges from case blocks to follow block.
-  for (auto caseBlock :
-       std::vector<CFGBlock *>(n->succ_begin(), n->succ_end())) {
+  // remove all switch edges, and edges from case blocks to follow block.
+  // we use set because case block can be shared.
+  for (auto caseBlock : std::set<CFGBlock *>(n->succ_begin(), n->succ_end())) {
     removeEdge(n, caseBlock);
     if (caseBlock->succ_size() == 0) {
-      // do nothing
+      // tail block: do nothing
     } else {
       assert(caseBlock->getSingleSuccessor() == follow);
       removeEdge(caseBlock, follow);
     }
     CFG.remove(caseBlock);
   }
-  // add a single linear edge from switch to follow
-  addEdge(n, follow);
-  assert(n->succ_size() == 1);
+  // TODO ensure that reachability is not broken.
+  if (follow != nullptr) {
+    // add a single linear edge from switch to follow
+    addEdge(n, follow);
+    assert(n->succ_size() == 1);
+  }
 
   return true;
 }
@@ -1110,7 +1134,6 @@ bool Phoenix::ReduceAcyclic(CFGBlock *Block) {
     return reduceIfRegion(Block);
     break;
   default:
-    assert(Block->succ_size() > 0);
     return reduceSwitchRegion(Block);
     break;
   }
