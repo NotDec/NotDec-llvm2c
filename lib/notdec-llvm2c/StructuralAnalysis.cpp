@@ -53,6 +53,13 @@
 
 namespace notdec::llvm2c {
 
+clang::Stmt *getStmt(CFGElement e) {
+  if (auto stmt = e.getAs<CFGStmt>()) {
+    return const_cast<clang::Stmt *>(stmt->getStmt());
+  }
+  return nullptr;
+}
+
 void CFGBuilder::visitInstruction(llvm::Instruction &I) {
   llvm::errs() << "Warning: CFGBuilder: Cannot handle: " << I << "\n";
   LLVM_DEBUG(std::abort());

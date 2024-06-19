@@ -190,12 +190,30 @@ static bool eliminateEmptyBr(llvm::Function &F) {
     assert(isa<BranchInst>(BB.front()));
     assert(cast<BranchInst>(BB.front()).isUnconditional());
 
-    for (BasicBlock *Pred : make_early_inc_range(predecessors(&BB))) {
+    // If there is phi nodes.
+    if (!Succ->phis().empty()) {
+      // cannot eliminate entry block if there is a phi. Because entry block
+      // cannot have phi nodes.
+      if (BB.isEntryBlock()) {
+        continue;
+      }
+      // Cannot handle multiple phi nodes.
+      if (pred_size(&BB) > 1) {
+        continue;
+      }
+      auto Pred = *pred_begin(&BB);
       Pred->getTerminator()->replaceSuccessorWith(&BB, Succ);
-    }
+      Succ->replacePhiUsesWith(&BB, Pred);
+      BB.eraseFromParent();
+      Changed = true;
+    } else {
+      for (BasicBlock *Pred : make_early_inc_range(predecessors(&BB))) {
+        Pred->getTerminator()->replaceSuccessorWith(&BB, Succ);
+      }
 
-    BB.eraseFromParent();
-    Changed = true;
+      BB.eraseFromParent();
+      Changed = true;
+    }
   }
 
   return Changed;

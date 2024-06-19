@@ -26,7 +26,36 @@
 #include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/Utils.h"
 
+#define DEBUG_TYPE "SAPhoenix"
+
 namespace notdec::llvm2c {
+
+void foldLabelsWithNullStmt(CFGBlock &Block) {
+  for (auto it = Block.begin(); it != Block.end();) {
+    if (auto stmt = getStmt(*it)) {
+      if (auto label = llvm::dyn_cast<clang::LabelStmt>(stmt)) {
+        if (llvm::isa<clang::NullStmt>(label->getSubStmt()) &&
+            std::next(it) != Block.end()) {
+          if (auto next = getStmt(*std::next(it))) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "Folding LabelStmt " << label->getName() << "\n");
+            label->setSubStmt(next);
+            Block.erase(std::next(it));
+          }
+        }
+      }
+
+      // remove NullStmt
+      if (auto term = llvm::dyn_cast<clang::NullStmt>(stmt)) {
+        LLVM_DEBUG(llvm::dbgs() << "Removing NullStmt\n");
+        it = Block.erase(it);
+        continue;
+      }
+    }
+    // increment the iterator if not continue
+    ++it;
+  }
+}
 
 void Phoenix::execute() {
   int iterations = 0;
@@ -72,6 +101,8 @@ void Phoenix::execute() {
       ProcessUnresolvedRegions();
     }
   } while (CFG.size() > 1);
+  // fold label with NullStmt and remove NullStmt
+  foldLabelsWithNullStmt(CFG.front());
 }
 
 bool Phoenix::isBackEdge(CFGBlock *A, CFGBlock *B) {
@@ -964,6 +995,9 @@ bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
   // 2. some cases are tail region.
   // 3. other cases have a common follow, and has no other pred other than
   // switch head.
+  LLVM_DEBUG(
+      llvm::dbgs() << " ====== CFG before Reducing Switch Region ======\n";
+      CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor););
   auto &term = std::get<SwitchTerminator>(n->getTerminator());
   auto cond = llvm::cast<clang::Expr>(term.getStmt());
   auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,

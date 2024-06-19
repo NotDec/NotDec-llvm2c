@@ -15,7 +15,7 @@
 
 namespace notdec::llvm2c {
 
-#define DEBUG_TYPE "SA-goto"
+#define DEBUG_TYPE "SAGoto"
 
 template <typename ForwardIt>
 ForwardIt
@@ -137,13 +137,6 @@ void Goto::execute() {
   simplifyBlock(Entry);
   // The exit block is set to the first stub block created. We currently do not
   // care about it.
-}
-
-clang::Stmt *getStmt(CFGElement e) {
-  if (auto stmt = e.getAs<CFGStmt>()) {
-    return const_cast<clang::Stmt *>(stmt->getStmt());
-  }
-  return nullptr;
 }
 
 // remote all NullStmt and merge GotoStmt with LabelStmt

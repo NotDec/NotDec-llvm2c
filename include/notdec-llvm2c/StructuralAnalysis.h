@@ -405,6 +405,9 @@ public:
         stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
       }
     }
+    if (auto term = B->getTerminatorStmt()) {
+      stmts.push_back(term);
+    }
     if (trail != nullptr) {
       stmts.push_back(trail);
     }
@@ -628,6 +631,7 @@ clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,
 /// Ensure the expression is unsigned, or insert a cast.
 clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                           clang::Expr *E);
+clang::Stmt *getStmt(CFGElement e);
 
 } // namespace notdec::llvm2c
 
