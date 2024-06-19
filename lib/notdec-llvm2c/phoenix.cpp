@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "Dominators.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/PostOrderCFGView.h"
 #include "notdec-llvm2c/phoenix.h"
@@ -160,6 +161,9 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
       break;
     }
     changed = true;
+  }
+  if (Block->succ_size() > 2) {
+    return changed;
   }
   // handle any self loop edges, and convert to while loop
   for (auto &succ : Block->succs()) {
@@ -437,6 +441,7 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     From->appendStmt(stm);
     break;
   default:
+    llvm::errs() << "======== dumping CFG due to an error =============\n";
     CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                  << "Error: Can't collapse edge! function: "
@@ -573,7 +578,7 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
       CFG.remove(th);
       return true;
     }
-    // TODO
+    // TODO?
   }
   return false;
 }
@@ -642,9 +647,137 @@ bool Phoenix::lastResort(std::set<CFGBlock *> &blocks) {
   }
 }
 
-void Phoenix::refineIncSwitch(CFGBlock *switchHead) {
-  std::cerr << "unimplemented";
-  std::abort();
+void Phoenix::refineIncSwitch(CFGBlock *n) {
+  // virtualize all entries that makes a case having multiple preds.
+  if (virtualizeIrregularSwitchEntries(n)) {
+    return;
+  }
+
+  auto follow = findIrregularSwitchFollowRegion(n);
+  std::map<CFGBlock *, std::set<CFGBlock *>> switchBody =
+      findSwitchBody(n, follow);
+  if (virtualizeIrregularSwitchExits(switchBody, follow)) {
+    return;
+  }
+
+  std::set<CFGBlock *> switchNodes;
+  for (auto ent : switchBody) {
+    for (auto n : ent.second) {
+      switchNodes.insert(n);
+    }
+  }
+
+  for (auto node : switchNodes) {
+    if (coalesceTailRegion(node, switchNodes)) {
+      return;
+    }
+  }
+  lastResort(switchNodes);
+}
+
+bool Phoenix::virtualizeIrregularSwitchExits(
+    std::map<CFGBlock *, std::set<CFGBlock *>> switchBody, CFGBlock *follow) {
+  for (auto &caseBody : switchBody) {
+    if (virtualizeIrregularCaseExits(follow, caseBody.second)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool Phoenix::virtualizeIrregularCaseExits(
+    CFGBlock *follow, const std::set<CFGBlock *> &caseBody) {
+  bool virtualized = false;
+  std::vector<VirtualEdge> VEdges;
+  for (auto n : caseBody) {
+    for (auto &s : n->succs()) {
+      // find leaving nodes.
+      if (caseBody.count(s) == 0 && s != follow) {
+        VEdges.emplace_back(n, s, VirtualEdgeType::Goto);
+      }
+    }
+  }
+  for (auto &vEdge : VEdges) {
+    virtualizeEdge(vEdge);
+    virtualized = true;
+  }
+  return virtualized;
+}
+
+std::map<CFGBlock *, std::set<CFGBlock *>>
+Phoenix::findSwitchBody(CFGBlock *n, CFGBlock *follow) {
+  std::map<CFGBlock *, std::set<CFGBlock *>> caseNodesMap;
+  for (auto &C : n->succs()) {
+    auto &caseNodes = caseNodesMap[C];
+    caseNodes.insert(C);
+    getLexicalNodes(C.getBlock(), follow, caseNodes);
+  }
+  return caseNodesMap;
+}
+
+// To find the successor, we first identify the immediate post-dominator of the
+// switch head. If this node is the successor of any of the case nodes, we
+// select it as the switch successor. If not, we select the node that (1) is a
+// successor of a case node, (2) is not a case node itself, and (3) has the
+// highest number of incoming edges from case nodes.
+CFGBlock *Phoenix::findIrregularSwitchFollowRegion(CFGBlock *n) {
+  CFGPostDomTree PostDom;
+  PostDom.buildDominatorTree(&CFG);
+
+  auto immPDom = PostDom.getImmediateDominator(n);
+  for (auto succ : n->succs()) {
+    if (succ.getBlock() == immPDom) {
+      return immPDom;
+    }
+  }
+  // collect all successors of all case nodes.
+  // find the one with the most incoming edges from case nodes.
+  int max_score = 0;
+  CFGBlock *follow = nullptr;
+  std::set<CFGBlock *> caseNodes;
+
+  for (auto &S : n->succs()) {
+    caseNodes.insert(S);
+  }
+
+  for (auto C : caseNodes) {
+    for (auto &CS : C->succs()) {
+      if (caseNodes.count(CS.getBlock()) == 0) {
+        int score = 0;
+        for (auto &P : CS->preds()) {
+          if (caseNodes.count(P.getBlock()) != 0) {
+            score += 1;
+          }
+        }
+        if (score > max_score) {
+          max_score = score;
+          follow = CS.getBlock();
+        }
+      }
+    }
+  }
+  return follow;
+}
+
+/// Find all irregular switch entries and virtualize them.
+/// Returns True if one or more irregular entry was virtualized.
+/// this opens up the possibility of further refinements.
+bool Phoenix::virtualizeIrregularSwitchEntries(CFGBlock *n) {
+  std::vector<VirtualEdge> VEdges;
+  for (auto &S : n->succs()) {
+    for (auto &SP : S->preds()) {
+      if (SP != n) {
+        VEdges.emplace_back(SP, S, VirtualEdgeType::Goto);
+      }
+    }
+  }
+  if (VEdges.size() == 0) {
+    return false;
+  }
+  for (auto &vEdge : VEdges) {
+    virtualizeEdge(vEdge);
+  }
+  return true;
 }
 
 bool Phoenix::virtualizeReturn(CFGBlock *n) {

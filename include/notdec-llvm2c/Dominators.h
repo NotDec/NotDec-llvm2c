@@ -128,6 +128,10 @@ public:
     DT.changeImmediateDominator(N, NewIDom);
   }
 
+  CFGBlock *getImmediateDominator(CFGBlock *N) {
+    return DT.getNode(N)->getIDom()->getBlock();
+  }
+
   /// Tests whether \p A is reachable from the entry block.
   bool isReachableFromEntry(const CFGBlock *A) {
     return DT.isReachableFromEntry(A);

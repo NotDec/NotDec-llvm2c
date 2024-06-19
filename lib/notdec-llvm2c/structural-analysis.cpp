@@ -941,6 +941,8 @@ void SAFuncContext::run() {
     for (auto succ : llvm::successors(term)) {
       auto src = getBlock(bb);
       auto dst = getBlock(*succ);
+      LLVM_DEBUG(llvm::dbgs() << "Adding edge from " << src->getBlockID()
+                              << " to " << dst->getBlockID() << "\n");
       addEdge(src, dst);
     }
   }
@@ -1290,6 +1292,15 @@ clang::LabelDecl *IStructuralAnalysis::getBlockLabel(CFGBlock *Blk,
   if (auto label = Blk->getLabel()) {
     return llvm::cast<clang::LabelStmt>(label)->getDecl();
   } else {
+    // if prepend and already has a label, return the label
+    if (prepend) {
+      if (Blk->front().getAs<CFGStmt>().hasValue()) {
+        if (auto label = llvm::dyn_cast<clang::LabelStmt>(
+                Blk->front().getAs<CFGStmt>()->getStmt())) {
+          return label->getDecl();
+        }
+      }
+    }
     auto &astCtx = FCtx.getASTContext();
     auto bb = FCtx.getBlock(*Blk);
     clang::IdentifierInfo *II = FCtx.getIdentifierInfo(

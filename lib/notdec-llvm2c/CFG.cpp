@@ -655,7 +655,7 @@ void CFGBlock::printTerminator(raw_ostream &OS, const LangOptions &LO) const {}
 
 /// Add a Successor. Also adds the pred of succ.
 void CFGBlock::addSuccessor(AdjacentBlock Succ) {
-  assert(std::find(Succs.begin(), Succs.end(), Succ) == Succs.end());
+  // assert(std::find(Succs.begin(), Succs.end(), Succ) == Succs.end());
   Succs.push_back(Succ);
 }
 

@@ -9,6 +9,10 @@
 
 ## Changelog
 
+**2024-06-19**
+
+Supporting SwitchStmt. While debuggin `switch_loop.c`, it is trying to remove an edge that is must viable. When folding SwitchStmt, it is not a good idea to fold entry block into it, or any block that dominates the switch.
+
 **2024-04-29**
 
 Initial Commit: Split from the NotDec main repo.

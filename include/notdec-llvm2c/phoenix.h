@@ -56,6 +56,15 @@ protected:
   bool virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
                                 CFGBlock *follow,
                                 std::set<CFGBlock *> &lexicalNodes);
+  bool virtualizeIrregularSwitchEntries(CFGBlock *n);
+  CFGBlock *findIrregularSwitchFollowRegion(CFGBlock *n);
+  std::map<CFGBlock *, std::set<CFGBlock *>> findSwitchBody(CFGBlock *n,
+                                                            CFGBlock *follow);
+  bool
+  virtualizeIrregularSwitchExits(std::map<CFGBlock *, std::set<CFGBlock *>> map,
+                                 CFGBlock *follow);
+  bool virtualizeIrregularCaseExits(CFGBlock *follow,
+                                    const std::set<CFGBlock *> &caseBody);
   llvm::Optional<Phoenix::VirtualEdge>
   findLastResortEdge(std::set<CFGBlock *> &blocks);
   CFGBlock *getSwitchFollow(CFGBlock *n);
