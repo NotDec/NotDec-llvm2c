@@ -79,6 +79,15 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
       llvm::cast<clang::UnaryOperator>(E)->getOpcode() == clang::UO_Deref) {
     return llvm::cast<clang::UnaryOperator>(E)->getSubExpr();
   }
+  // eliminate addrOf + array subscript 0.
+  if (auto ArraySub = llvm::dyn_cast<clang::ArraySubscriptExpr>(E)) {
+    if (auto Index =
+            llvm::dyn_cast<clang::IntegerLiteral>(ArraySub->getIdx())) {
+      if (Index->getValue() == 0) {
+        return llvm::cast<clang::ArraySubscriptExpr>(E)->getBase();
+      }
+    }
+  }
   return createUnaryOperator(Ctx, E, clang::UO_AddrOf,
                              Ctx.getPointerType(E->getType()),
                              clang::VK_LValue);
@@ -780,6 +789,10 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 
 /// Decompile the module to c and print to a file.
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts) {
+  if (!opts.noDemoteSSA) {
+    // demote SSA using reg2mem
+    notdec::llvm2c::demoteSSA(M);
+  }
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
   LLVM_DEBUG(llvm::dbgs() << M);
