@@ -2,16 +2,15 @@
 #ifndef _NOTDEC_BACKEND_UTILS_H_
 #define _NOTDEC_BACKEND_UTILS_H_
 
+#include <type_traits>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/Debug.h>
-#include <type_traits>
 
 namespace notdec::llvm2c {
-
-void demoteSSA(llvm::Module &M);
 
 // ===============
 // Pass

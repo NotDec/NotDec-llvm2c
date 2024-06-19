@@ -9,20 +9,15 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include "notdec-llvm2c/interface.h"
-#include "notdec-llvm2c/structural-analysis.h"
-#include "notdec-llvm2c/utils.h"
+#include "notdec-llvm2c/Interface.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
+#include "notdec-llvm2c/Utils.h"
 
 using namespace llvm;
 using namespace notdec::llvm2c;
 
 #include "Commandlines.def"
 
-static cl::opt<bool> disablePass(
-    "disable-pass",
-    cl::desc(
-        "Disable IR passes. Eliminate all phi nodes before enabling this."),
-    cl::init(false), cl::cat(NotdecLLVM2CCat));
 static cl::opt<std::string>
     inputFilename(cl::Positional, cl::desc("<input file>"),
                   cl::value_desc("input LLVM IR file, either .ll or .bc path."),
@@ -76,11 +71,6 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  if (!disablePass) {
-    // demote SSA using reg2mem
-    notdec::llvm2c::demoteSSA(*module);
-  }
-
   std::string outSuffix = getSuffix(outputFilename);
   if (outSuffix == ".ll") {
     std::error_code EC;
@@ -100,11 +90,7 @@ int main(int argc, char *argv[]) {
       std::cerr << EC.message() << std::endl;
       std::abort();
     }
-    notdec::llvm2c::decompileModule(*module, os,
-                                    Options{
-                                        .enableColor = enableColor,
-                                        .algo = Algo,
-                                    });
+    notdec::llvm2c::decompileModule(*module, os, getLLVM2COptions());
     std::cout << "Decompilation result: " << outputFilename << std::endl;
   }
 

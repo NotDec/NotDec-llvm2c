@@ -43,11 +43,11 @@
 
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
-#include "notdec-llvm2c/goto.h"
-#include "notdec-llvm2c/interface.h"
-#include "notdec-llvm2c/phoenix.h"
-#include "notdec-llvm2c/structural-analysis.h"
-#include "notdec-llvm2c/utils.h"
+#include "notdec-llvm2c/Goto.h"
+#include "notdec-llvm2c/Interface.h"
+#include "notdec-llvm2c/Phoenix.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
+#include "notdec-llvm2c/Utils.h"
 
 #define DEBUG_TYPE "structural-analysis"
 

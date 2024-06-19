@@ -3,7 +3,7 @@
 
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Dominators.h"
-#include "notdec-llvm2c/structural-analysis.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
 #include <utility>
 #include <vector>
 

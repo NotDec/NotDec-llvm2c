@@ -1,10 +1,10 @@
 include(AddLLVM)
 add_library(notdec-llvm2c SHARED STATIC
-    structural-analysis.cpp
-    phoenix.cpp
+    StructuralAnalysis.cpp
+    Phoenix.cpp
     CFG.cpp
-    goto.cpp
-    utils.cpp
+    Goto.cpp
+    Utils.cpp
     PostOrderCFGView.cpp
     Dominators.cpp
     CompoundConditionBuilder.cpp

@@ -1,6 +1,7 @@
 
-#include "notdec-llvm2c/PostOrderCFGView.h"
 #include <clang/Analysis/AnalysisDeclContext.h>
+
+#include "notdec-llvm2c/PostOrderCFGView.h"
 
 namespace notdec::llvm2c {
 

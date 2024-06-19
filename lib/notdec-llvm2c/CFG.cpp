@@ -1,8 +1,8 @@
+#include <variant>
+
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/GraphWriter.h>
-
-#include "notdec-llvm2c/CFG.h"
 
 #include <clang/AST/ExprCXX.h>
 #include <clang/AST/PrettyPrinter.h>
@@ -10,7 +10,8 @@
 #include <clang/AST/StmtCXX.h>
 #include <clang/AST/StmtObjC.h>
 #include <clang/AST/StmtVisitor.h>
-#include <variant>
+
+#include "notdec-llvm2c/CFG.h"
 
 namespace notdec::llvm2c {
 

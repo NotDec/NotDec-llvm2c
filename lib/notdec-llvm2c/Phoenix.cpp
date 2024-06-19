@@ -2,14 +2,7 @@
 // Analysis and Iterative Control-Flow Structuring
 
 #include <cassert>
-#include <clang/AST/ASTContext.h>
-#include <clang/AST/Expr.h>
-#include <clang/AST/Stmt.h>
-#include <clang/Basic/SourceLocation.h>
 #include <iostream>
-#include <llvm/ADT/Optional.h>
-#include <llvm/IR/Instructions.h>
-#include <llvm/Support/raw_ostream.h>
 #include <memory>
 #include <queue>
 #include <set>
@@ -17,12 +10,21 @@
 #include <variant>
 #include <vector>
 
-#include "Dominators.h"
+#include <llvm/ADT/Optional.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/Support/raw_ostream.h>
+
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/Expr.h>
+#include <clang/AST/Stmt.h>
+#include <clang/Basic/SourceLocation.h>
+
 #include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/Dominators.h"
+#include "notdec-llvm2c/Phoenix.h"
 #include "notdec-llvm2c/PostOrderCFGView.h"
-#include "notdec-llvm2c/phoenix.h"
-#include "notdec-llvm2c/structural-analysis.h"
-#include "utils.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
+#include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
 
@@ -54,14 +56,14 @@ void Phoenix::execute() {
       }
 
       bool Changed;
-      int round = 0;
+      // int round = 0;
       do {
         Changed = false;
         Changed |= ReduceAcyclic(Block);
         if (!Changed && isCyclic(Block)) {
           Changed |= ReduceCyclic(Block);
         }
-        round += 1;
+        // round += 1;
       } while (Changed);
     }
     if (CFG.size() == oldCount && CFG.size() > 1) {

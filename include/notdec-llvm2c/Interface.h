@@ -13,12 +13,15 @@ namespace notdec::llvm2c {
 enum StructuralAlgorithms { SA_Goto, SA_Phoenix };
 
 struct Options {
+  bool noDemoteSSA = false;
   bool enableColor = false;
   StructuralAlgorithms algo;
 };
 
 // main interface
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &os, Options opts);
+
+void demoteSSA(llvm::Module &M);
 
 } // namespace notdec::llvm2c
 

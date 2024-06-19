@@ -2,7 +2,7 @@
 #define _NOTDEC_BACKEND_COMPOUNDCONDITIONBUILDER_H_
 
 #include "notdec-llvm2c/CFG.h"
-#include "notdec-llvm2c/structural-analysis.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
 
 namespace notdec::llvm2c {
 

@@ -1,14 +1,17 @@
-#include "notdec-llvm2c/goto.h"
-#include "notdec-llvm2c/CFG.h"
-#include "notdec-llvm2c/utils.h"
+#include <cstdlib>
+#include <type_traits>
+
+#include <llvm/Support/Casting.h>
+#include <llvm/Support/Debug.h>
+
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <clang/Analysis/CFG.h>
 #include <clang/Basic/Specifiers.h>
-#include <cstdlib>
-#include <llvm/Support/Casting.h>
-#include <llvm/Support/Debug.h>
-#include <type_traits>
+
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/Goto.h"
+#include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
 

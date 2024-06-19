@@ -1,9 +1,7 @@
-
-#include "notdec-llvm2c/utils.h"
-#include <clang/AST/ASTContext.h>
-#include <clang/AST/Expr.h>
-#include <clang/AST/OperationKinds.h>
 #include <iostream>
+#include <type_traits>
+#include <vector>
+
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
@@ -15,8 +13,12 @@
 #include <llvm/Transforms/Scalar/Reg2Mem.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Local.h>
-#include <type_traits>
-#include <vector>
+
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/Expr.h>
+#include <clang/AST/OperationKinds.h>
+
+#include "notdec-llvm2c/Utils.h"
 
 #define DEBUG_TYPE "notdec-backend-utils"
 
@@ -168,7 +170,6 @@ static bool simplifyCondBrSameLabel(llvm::Function &F) {
   for (BasicBlock &BB : make_early_inc_range(F)) {
     if (auto br = dyn_cast<BranchInst>(BB.getTerminator())) {
       if (br->isConditional() && br->getSuccessor(0) == br->getSuccessor(1)) {
-        auto *nb = BranchInst::Create(br->getSuccessor(0), br);
         br->eraseFromParent();
         Changed = true;
       }

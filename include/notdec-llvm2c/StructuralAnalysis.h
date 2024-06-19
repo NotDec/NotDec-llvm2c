@@ -34,8 +34,8 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include "notdec-llvm2c/CFG.h"
-#include "notdec-llvm2c/interface.h"
-#include "notdec-llvm2c/utils.h"
+#include "notdec-llvm2c/Interface.h"
+#include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
 

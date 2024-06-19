@@ -1,9 +1,10 @@
+#include <clang/AST/OperationKinds.h>
+#include <clang/Basic/Specifiers.h>
+
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/PostOrderCFGView.h"
-#include "notdec-llvm2c/utils.h"
-#include <clang/AST/OperationKinds.h>
-#include <clang/Basic/Specifiers.h>
+#include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
 
