@@ -70,6 +70,7 @@ void Goto::execute() {
       auto GotoB2 = createGotoStmt(getBlockLabel(b2));
       Current->appendStmt(GotoB2);
     } else if (succ_size > 2) {
+      // create SwitchStmt
       auto &term = std::get<SwitchTerminator>(Current->getTerminator());
       auto cond = llvm::cast<clang::Expr>(term.getStmt());
       auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
@@ -120,7 +121,10 @@ void Goto::execute() {
     if (Current == &Entry) {
       continue;
     }
+
     // add if there is a label statement
+    // we do not fold the label even if it contains a null stmt,
+    // because we may delete the label stmt according to its usages.
     if (Current->getLabel() != nullptr) {
       Entry.appendStmt(Current->getLabel());
     }

@@ -106,8 +106,19 @@ clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
       llvm::cast<clang::UnaryOperator>(E)->getOpcode() == clang::UO_AddrOf) {
     return llvm::cast<clang::UnaryOperator>(E)->getSubExpr();
   }
-  return createUnaryOperator(Ctx, E, clang::UO_Deref,
-                             E->getType()->getPointeeType(), clang::VK_LValue);
+  clang::QualType Ty = E->getType();
+  if (Ty->isPointerType()) {
+    Ty = Ty->getPointeeType();
+  } else if (Ty->isArrayType()) {
+    Ty = Ty->castAsArrayTypeUnsafe()->getElementType();
+  } else {
+    llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
+                 << "CFGBuilder.deref: unexpected type: ";
+    Ty.dump();
+    llvm::errs() << "\n";
+    std::abort();
+  }
+  return createUnaryOperator(Ctx, E, clang::UO_Deref, Ty, clang::VK_LValue);
 }
 
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
@@ -1013,23 +1024,12 @@ void SAFuncContext::run() {
   // After structural analysis, if things goes well, the CFG should have only
   // one linear block. But we still pick up other blocks if there are any.
   std::set<CFGBlock *> visited;
-  llvm::SmallVector<clang::Stmt *> Stmts;
+  std::vector<clang::Stmt *> Stmts;
 
   assert(&Cfg->front() == &Cfg->getEntry());
   for (auto BB : *Cfg) {
     // add labelStmt
-    if (auto l = BB->getLabel()) {
-      Stmts.push_back(l);
-    }
-    for (auto elem : *BB) {
-      // if is stmt, then add to FD
-      if (auto stmt = getStmt(elem)) {
-        Stmts.push_back(stmt);
-      }
-    }
-    if (auto t = BB->getTerminatorStmt()) {
-      Stmts.push_back(t);
-    }
+    IStructuralAnalysis::addAllStmtTo(BB, Stmts, true);
   }
 
   // create a compound stmt as function body
@@ -1337,7 +1337,7 @@ clang::LabelDecl *IStructuralAnalysis::getBlockLabel(CFGBlock *Blk,
     auto LabelDecl = clang::LabelDecl::Create(astCtx, FCtx.getFunctionDecl(),
                                               clang::SourceLocation(), II);
     // create LabelStmt
-    auto LabelStmt = new (astCtx)
+    clang::LabelStmt *LabelStmt = new (astCtx)
         clang::LabelStmt(clang::SourceLocation(), LabelDecl,
                          new (astCtx) clang::NullStmt(clang::SourceLocation()));
     if (prepend) {

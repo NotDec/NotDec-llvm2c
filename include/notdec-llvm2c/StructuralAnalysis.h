@@ -40,6 +40,7 @@
 namespace notdec::llvm2c {
 
 // utility functions
+clang::Stmt *getStmt(CFGElement e);
 bool onlyUsedInBlock(llvm::Instruction &inst);
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb);
 clang::DeclRefExpr *
@@ -397,24 +398,70 @@ public:
     B.setTerminator(nullptr);
     return ret;
   }
-  clang::Stmt *makeCompoundStmt(CFGBlock *B, bool remove = false,
-                                clang::Stmt *trail = nullptr) {
-    // convert to vector
-    std::vector<clang::Stmt *> stmts;
-    for (auto elem = B->begin(); elem != B->end(); ++elem) {
-      if (auto stmt = elem->getAs<CFGStmt>()) {
-        stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
+
+  static void addAllStmtTo(CFGBlock *From, CFGBlock *To) {
+    // if the block has a label, then fold it.
+    auto label = llvm::cast_or_null<clang::LabelStmt>(From->getLabel());
+    for (auto elem = From->begin(); elem != From->end(); ++elem) {
+      // TODO what if there are other kinds of CFGElement
+      if (auto stmt = getStmt(*elem)) {
+        if (label != nullptr &&
+            llvm::isa<clang::NullStmt>(label->getSubStmt())) {
+          label->setSubStmt(stmt);
+          To->appendStmt(label);
+          label = nullptr;
+        } else {
+          To->appendStmt(stmt);
+        }
       }
     }
+    if (label != nullptr) {
+      To->appendStmt(label);
+    }
+    if (auto term = From->getTerminatorStmt()) {
+      assert(false && "Terminator should be handled first!");
+    }
+    From->clear();
+  }
+
+  static void addAllStmtTo(CFGBlock *B, std::vector<clang::Stmt *> &stmts,
+                           bool noAssert = false) {
+    // if the block has a label, then fold it.
+    auto label = llvm::cast_or_null<clang::LabelStmt>(B->getLabel());
+    for (auto elem = B->begin(); elem != B->end(); ++elem) {
+      if (auto stmt = getStmt(*elem)) {
+        if (label != nullptr) {
+          assert(llvm::isa<clang::NullStmt>(label->getSubStmt()));
+          label->setSubStmt(stmt);
+          stmts.push_back(label);
+          label = nullptr;
+        } else {
+          stmts.push_back(stmt);
+        }
+      }
+    }
+    if (label != nullptr) {
+      stmts.push_back(label);
+      label = nullptr;
+    }
     if (auto term = B->getTerminatorStmt()) {
-      stmts.push_back(term);
+      if (!noAssert) {
+        assert(false && "Terminator should be handled first!");
+      }
     }
-    if (trail != nullptr) {
-      stmts.push_back(trail);
+    B->clear();
+  }
+
+  clang::Stmt *makeCompoundStmt(CFGBlock *B, clang::Stmt *tail = nullptr) {
+    // convert to vector
+    std::vector<clang::Stmt *> stmts;
+    addAllStmtTo(B, stmts);
+
+    if (tail != nullptr) {
+      stmts.push_back(tail);
     }
-    if (remove) {
-      B->clear();
-    }
+    B->clear();
+
     if (stmts.size() == 1) {
       return stmts[0];
     } else {
@@ -477,6 +524,9 @@ public:
   void deferredRemove(CFGBlock *B) {
     assert(B->succ_size() == 0);
     assert(B->pred_size() == 0);
+    assert(B->getLabel() == nullptr);
+    assert(B->size() == 0);
+    assert(B->getTerminatorStmt() == nullptr);
     toRemove.insert(B);
   }
 
@@ -653,7 +703,6 @@ clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,
 /// Ensure the expression is unsigned, or insert a cast.
 clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                           clang::Expr *E);
-clang::Stmt *getStmt(CFGElement e);
 
 } // namespace notdec::llvm2c
 

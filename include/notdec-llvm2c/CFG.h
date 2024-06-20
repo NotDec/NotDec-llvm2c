@@ -305,7 +305,11 @@ public:
   const_iterator end() const { return Elements.end(); }
   iterator insert(iterator it, CFGElement e) { return Elements.insert(it, e); }
   iterator erase(iterator it) { return Elements.erase(it); }
-  void clear() { Elements.clear(); }
+  void clear() {
+    Label = nullptr;
+    Elements.clear();
+    Terminator = BranchTerminator();
+  }
 
   reverse_iterator rbegin() { return Elements.rbegin(); }
   reverse_iterator rend() { return Elements.rend(); }

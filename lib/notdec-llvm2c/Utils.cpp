@@ -170,6 +170,7 @@ static bool simplifyCondBrSameLabel(llvm::Function &F) {
   for (BasicBlock &BB : make_early_inc_range(F)) {
     if (auto br = dyn_cast<BranchInst>(BB.getTerminator())) {
       if (br->isConditional() && br->getSuccessor(0) == br->getSuccessor(1)) {
+        BranchInst::Create(br->getSuccessor(0), br);
         br->eraseFromParent();
         Changed = true;
       }

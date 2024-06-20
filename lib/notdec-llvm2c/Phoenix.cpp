@@ -31,33 +31,6 @@
 
 namespace notdec::llvm2c {
 
-void foldLabelsWithNullStmt(CFGBlock &Block) {
-  for (auto it = Block.begin(); it != Block.end();) {
-    if (auto stmt = getStmt(*it)) {
-      if (auto label = llvm::dyn_cast<clang::LabelStmt>(stmt)) {
-        if (llvm::isa<clang::NullStmt>(label->getSubStmt()) &&
-            std::next(it) != Block.end()) {
-          if (auto next = getStmt(*std::next(it))) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "Folding LabelStmt " << label->getName() << "\n");
-            label->setSubStmt(next);
-            Block.erase(std::next(it));
-          }
-        }
-      }
-
-      // remove NullStmt
-      if (auto term = llvm::dyn_cast<clang::NullStmt>(stmt)) {
-        LLVM_DEBUG(llvm::dbgs() << "Removing NullStmt\n");
-        it = Block.erase(it);
-        continue;
-      }
-    }
-    // increment the iterator if not continue
-    ++it;
-  }
-}
-
 void Phoenix::execute() {
   int iterations = 0;
   do {
@@ -102,10 +75,11 @@ void Phoenix::execute() {
       // try refining unstructured regions
       ProcessUnresolvedRegions();
     }
+    if (!toRemove.empty()) {
+      iterations = 0;
+    }
     doRemoveBlocks();
   } while (CFG.size() > 1);
-  // fold label with NullStmt and remove NullStmt
-  foldLabelsWithNullStmt(CFG.front());
 }
 
 bool Phoenix::isBackEdge(CFGBlock *A, CFGBlock *B) {
@@ -209,13 +183,13 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
       if (Block->succ_size() == 1) {
         // infinite loop
         // create while(true){stmts}
-        auto body = makeCompoundStmt(Block, true);
+        auto body = makeCompoundStmt(Block);
         whil = createWhileTrue(body);
       } else {
         assert(Block->succ_size() == 2);
         // Do while loop
-        auto body = makeCompoundStmt(Block, true);
         auto cond = takeBinaryCond(*Block);
+        auto body = makeCompoundStmt(Block);
         // invert if loop is the false branch
         if (Block->isFalseBrSucc(S)) {
           cond = invertCond(cond);
@@ -255,12 +229,7 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
         // Wrap in a big while true, and use break to leave
         // while (true) {Block; if(cond) break; S;}
         std::vector<clang::Stmt *> stmts;
-        // add all stmts in Block and clear.
-        for (auto elem = Block->begin(); elem != Block->end(); ++elem) {
-          if (auto stmt = elem->getAs<CFGStmt>()) {
-            stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
-          }
-        }
+        addAllStmtTo(Block, stmts);
         Block->clear();
         // add a if-break stmt.
         auto if_break = clang::IfStmt::Create(
@@ -270,11 +239,7 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
             new (Ctx) clang::BreakStmt(clang::SourceLocation()));
         stmts.push_back(if_break);
         // add stmts in the S block
-        for (auto elem = S->begin(); elem != S->end(); ++elem) {
-          if (auto stmt = elem->getAs<CFGStmt>()) {
-            stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
-          }
-        }
+        addAllStmtTo(S, stmts);
         // create the while true
         auto body = clang::CompoundStmt::Create(
             Ctx, stmts, clang::SourceLocation(), clang::SourceLocation());
@@ -491,7 +456,7 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
     // To fold a switch branch, we need to create a new block
     auto newBlock = CFG.createBlock();
-    (*newBlock)->setTerminator(stm);
+    (*newBlock)->appendStmt(stm);
     From->replaceAllSucc(To, *newBlock);
     (*newBlock)->addPred(From);
     To->removePred(From);
@@ -500,26 +465,27 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
   removeEdge(From, To);
 }
 
-void Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &edge) {
-  clang::Stmt *stm;
-  if (isPureReturn(edge.To)) {
+void Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
+  clang::Stmt *Stmt;
+  auto To = Edge.To;
+  if (isPureReturn(To)) {
+    assert(To->succ_size() == 0);
     // Goto to a return statement => just a return statement.
-    auto ret =
-        (clang::ReturnStmt *)edge.To->front().castAs<CFGStmt>().getStmt();
-    stm = clang::ReturnStmt::Create(Ctx, clang::SourceLocation(),
-                                    ret->getRetValue(), nullptr);
+    auto ret = (clang::ReturnStmt *)To->front().castAs<CFGStmt>().getStmt();
+    Stmt = clang::ReturnStmt::Create(Ctx, clang::SourceLocation(),
+                                     ret->getRetValue(), nullptr);
   } else {
-    switch (edge.Ty) {
+    switch (Edge.Ty) {
     case Break:
-      stm = new (Ctx) clang::BreakStmt(clang::SourceLocation());
+      Stmt = new (Ctx) clang::BreakStmt(clang::SourceLocation());
       break;
     case Continue:
-      stm = new (Ctx) clang::ContinueStmt(clang::SourceLocation());
+      Stmt = new (Ctx) clang::ContinueStmt(clang::SourceLocation());
       break;
     case Goto: {
-      auto label = getBlockLabel(edge.To, true);
-      stm = new (Ctx) clang::GotoStmt(label, clang::SourceLocation(),
-                                      clang::SourceLocation());
+      auto Label = getBlockLabel(To);
+      Stmt = new (Ctx) clang::GotoStmt(Label, clang::SourceLocation(),
+                                       clang::SourceLocation());
       break;
     }
     default:
@@ -529,16 +495,17 @@ void Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &edge) {
       std::abort();
     }
   }
-  collapseToTailRegion(edge.From, edge.To, stm);
-  if (edge.To->pred_size() == 0 && edge.To != &CFG.getEntry()) {
-    if (isPureReturn(edge.To)) {
+  collapseToTailRegion(Edge.From, To, Stmt);
+  if (To->pred_size() == 0 && To != &CFG.getEntry()) {
+    if (isPureReturn(To) && (To->getLabel() == nullptr)) {
       // previous pure return detection has put the return to the From block.
-      deferredRemove(edge.To);
+      To->clear();
+      deferredRemove(To);
     } else {
       // CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
       std::cerr << __FILE__ << ":" << __LINE__ << ": "
-                << "Warning: Removing edge (" << edge.From->getBlockID() << ", "
-                << edge.To->getBlockID() << ") caused loss of some code blocks"
+                << "Warning: Removing edge (" << Edge.From->getBlockID() << ", "
+                << To->getBlockID() << ") caused loss of some code blocks"
                 << std::endl;
       // std::abort();
     }
@@ -925,10 +892,9 @@ bool Phoenix::reduceSequence(CFGBlock *Block) {
   if (Succ->pred_size() == 1) {
     // merge two blocks
     // 1 add all instructions in succ to current block
-    for (auto elem = Succ->begin(); elem != Succ->end(); ++elem) {
-      Block->appendElement(*elem);
-    }
     Block->setTerminator(Succ->getTerminator());
+    Succ->setTerminator(nullptr);
+    addAllStmtTo(Succ, Block);
     // remove this edge
     removeEdge(Block, Succ);
     // add all edges from succ to current block
@@ -998,99 +964,142 @@ bool hasIrregularEntries(CFGBlock *n, CFGBlock *follow) {
   return false;
 }
 
-bool Phoenix::reduceIncSwitch(CFGBlock *n, CFGBlock *follow) {
-  // 1. follow is nullptr, and all cases are tails.
-  // 2. some cases are tail region.
-  // 3. other cases have a common follow, and has no other pred other than
-  // 4. some case block is just follow block. As if there is a block with a
+bool Phoenix::reduceIncSwitch(CFGBlock *N, CFGBlock *Follow) {
+  // 1. `Follow` is nullptr, and all cases are tails.
+  // 2. Some cases are tail region.
+  // 3. Other cases have a common follow, and has no other pred other than
+  // 4. Some case block is just follow block. As if there is a block with a
   // single break. switch head.
-  LLVM_DEBUG(
-      llvm::dbgs() << " ====== CFG before Reducing Switch Region ======\n";
-      CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor););
-  auto &term = std::get<SwitchTerminator>(n->getTerminator());
+  // LLVM_DEBUG(
+  //     llvm::dbgs() << " ====== CFG before Reducing Switch Region ======\n";
+  //     CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor););
+  auto &term = std::get<SwitchTerminator>(N->getTerminator());
   auto cond = llvm::cast<clang::Expr>(term.getStmt());
-  auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
+  auto SW = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
                                       clang::SourceLocation(),
                                       clang::SourceLocation());
-  std::vector<clang::Stmt *> stmts;
-  stmts.reserve(n->succ_size());
-  auto succIt = n->succ_begin();
+  std::vector<clang::Stmt *> Stmts;
+  Stmts.reserve(N->succ_size());
+  auto SuccIt = N->succ_begin();
 
-  // handle default stmt, the first successor.
+  // Handle default stmt, the first successor.
   // Put the default case at the end, so we do not need a break.
-  clang::DefaultStmt *DS;
-  if (*succIt == follow) {
-    // the whole default case is empty.
-    DS = nullptr;
-  } else {
-    DS = new (Ctx)
-        clang::DefaultStmt(clang::SourceLocation(), clang::SourceLocation(),
-                           makeCompoundStmt(*succIt));
+  CFGBlock *DefaultTarget = *SuccIt;
+  if (*SuccIt == Follow) {
+    // Safely ignore the default case;
+    DefaultTarget = nullptr;
   }
-  succIt++;
+  SuccIt++;
+
+  // Organize cases according to the target block.
+  std::map<CFGBlock *, std::vector<clang::Expr *>> CaseMap;
+  for (auto caseVal : term.cases()) {
+    assert(SuccIt != N->succ_end());
+    auto caseExpr = llvm::cast<clang::Expr>(caseVal);
+    auto succBlock = *SuccIt;
+    CaseMap[succBlock].push_back(caseExpr);
+    SuccIt++;
+  }
+  assert(SuccIt == N->succ_end());
 
   // for each case, insert case label, and insert block stmts
-  for (auto caseVal : term.cases()) {
-    assert(succIt != n->succ_end());
-    auto succBlock = *succIt;
-    auto caseExpr = llvm::cast<clang::Expr>(caseVal);
-    // CaseStmt can have RHS, but we are not using it:
-    // https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html
-    auto *CS = clang::CaseStmt::Create(
-        Ctx, caseExpr, nullptr, clang::SourceLocation(),
-        clang::SourceLocation(), clang::SourceLocation());
-    clang::Stmt *break_;
-    if (succBlock == follow) {
-      break_ = new (Ctx) clang::BreakStmt(clang::SourceLocation());
-      CS->setSubStmt(break_);
-    } else {
-      if (succBlock->succ_size() == 0) {
-        // tail block
-        break_ = nullptr;
-      } else {
-        assert(succBlock->getSingleSuccessor() == follow);
-        // case block is a tail block
-        break_ = new (Ctx) clang::BreakStmt(clang::SourceLocation());
+  for (auto &Ent : CaseMap) {
+    auto CaseBlock = Ent.first;
+    auto &CaseExprs = Ent.second;
+
+    // a sequence of CaseStmt is actually nested.
+    clang::CaseStmt *FirstCS = nullptr;
+    clang::Stmt *LastCS = nullptr;
+
+    for (auto Case : CaseExprs) {
+      // CaseStmt can have RHS, but we are not using it:
+      // https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html
+      auto NewCS = clang::CaseStmt::Create(
+          Ctx, Case, nullptr, clang::SourceLocation(), clang::SourceLocation(),
+          clang::SourceLocation());
+      SW->addSwitchCase(NewCS);
+      if (FirstCS == nullptr) {
+        FirstCS = NewCS;
       }
-      CS->setSubStmt(makeCompoundStmt(succBlock, false, break_));
+      if (LastCS == nullptr) {
+        LastCS = NewCS;
+      } else {
+        llvm::cast<clang::CaseStmt>(LastCS)->setSubStmt(NewCS);
+        LastCS = NewCS;
+      }
     }
-    sw->addSwitchCase(CS);
-    stmts.push_back(CS);
-    succIt++;
-  }
-  // add default as the lase case
-  if (DS != nullptr) {
-    sw->addSwitchCase(DS);
-    stmts.push_back(DS);
+
+    // if default case also goes to this block
+    if (CaseBlock == DefaultTarget) {
+      auto NewCS = new (Ctx) clang::DefaultStmt(
+          clang::SourceLocation(), clang::SourceLocation(), nullptr);
+      SW->addSwitchCase(NewCS);
+      llvm::cast<clang::CaseStmt>(LastCS)->setSubStmt(NewCS);
+      LastCS = NewCS;
+      DefaultTarget = nullptr;
+    }
+
+    // Create body for the case
+    clang::Stmt *Body;
+    if (CaseBlock == Follow) {
+      Body = new (Ctx) clang::BreakStmt(clang::SourceLocation());
+    } else {
+      clang::Stmt *Break;
+      if (CaseBlock->succ_size() == 0) {
+        // tail block
+        Break = nullptr;
+      } else {
+        assert(CaseBlock->getSingleSuccessor() == Follow);
+        Break = new (Ctx) clang::BreakStmt(clang::SourceLocation());
+      }
+      Body = makeCompoundStmt(CaseBlock, Break);
+    }
+
+    // Call setSubStmt, but do not know it is CaseStmt or DefaultStmt
+    if (auto Case = llvm::dyn_cast<clang::CaseStmt>(LastCS)) {
+      Case->setSubStmt(Body);
+    } else {
+      llvm::cast<clang::DefaultStmt>(LastCS)->setSubStmt(Body);
+    }
+    Stmts.push_back(FirstCS);
   }
 
-  auto body = clang::CompoundStmt::Create(Ctx, stmts, clang::SourceLocation(),
+  // If the default case is still not handled
+  if (DefaultTarget != nullptr) {
+    auto DS = new (Ctx)
+        clang::DefaultStmt(clang::SourceLocation(), clang::SourceLocation(),
+                           makeCompoundStmt(DefaultTarget));
+    SW->addSwitchCase(DS);
+    Stmts.push_back(DS);
+  }
+
+  auto Body = clang::CompoundStmt::Create(Ctx, Stmts, clang::SourceLocation(),
                                           clang::SourceLocation());
-  sw->setBody(body);
-  n->appendStmt(sw);
+  SW->setBody(Body);
+  N->appendStmt(SW);
 
   // handle all edges
   // remove all switch edges, and edges from case blocks to follow block.
   // we use set because case block can be shared.
-  for (auto caseBlock : std::set<CFGBlock *>(n->succ_begin(), n->succ_end())) {
-    assert(caseBlock != n);
-    removeEdge(n, caseBlock);
-    if (caseBlock == follow) {
+  for (auto caseBlock : std::set<CFGBlock *>(N->succ_begin(), N->succ_end())) {
+    assert(caseBlock != N);
+    removeEdge(N, caseBlock);
+    if (caseBlock == Follow) {
       continue;
     } else if (caseBlock->succ_size() == 0) {
       // tail block: do nothing
     } else {
-      assert(caseBlock->getSingleSuccessor() == follow);
-      removeEdge(caseBlock, follow);
+      assert(caseBlock->getSingleSuccessor() == Follow);
+      removeEdge(caseBlock, Follow);
     }
-    caseBlock->removePred(n);
+    caseBlock->removePred(N);
     deferredRemove(caseBlock);
   }
   // TODO ensure that reachability is not broken.
-  if (follow != nullptr) {
+  if (Follow != nullptr) {
     // add a single linear edge from switch to follow
-    addEdge(n, follow);
-    assert(n->succ_size() == 1);
+    addEdge(N, Follow);
+    assert(N->succ_size() == 1);
   }
 
   return true;
