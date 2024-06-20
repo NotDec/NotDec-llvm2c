@@ -1010,25 +1010,28 @@ void SAFuncContext::run() {
   LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), getOpts().enableColor));
 
   // Finalize steps
-  // After structural analysis, the CFG is expected to have only one linear
-  // block.
-  CFGBlock &entry = Cfg->getEntry();
+  // After structural analysis, if things goes well, the CFG should have only
+  // one linear block. But we still pick up other blocks if there are any.
+  std::set<CFGBlock *> visited;
   llvm::SmallVector<clang::Stmt *> Stmts;
-  // add labelStmt
-  if (auto l = entry.getLabel()) {
-    Stmts.push_back(l);
-  }
-  for (auto elem : entry) {
-    // if is stmt, then add to FD
-    auto stmt = elem.getAs<CFGStmt>();
-    if (stmt.hasValue()) {
-      Stmts.push_back(const_cast<clang::Stmt *>(stmt->getStmt()));
+
+  assert(&Cfg->front() == &Cfg->getEntry());
+  for (auto BB : *Cfg) {
+    // add labelStmt
+    if (auto l = BB->getLabel()) {
+      Stmts.push_back(l);
+    }
+    for (auto elem : *BB) {
+      // if is stmt, then add to FD
+      if (auto stmt = getStmt(elem)) {
+        Stmts.push_back(stmt);
+      }
+    }
+    if (auto t = BB->getTerminatorStmt()) {
+      Stmts.push_back(t);
     }
   }
 
-  if (auto t = entry.getTerminatorStmt()) {
-    Stmts.push_back(t);
-  }
   // create a compound stmt as function body
   auto CS = clang::CompoundStmt::Create(
       getASTContext(), Stmts, clang::SourceLocation(), clang::SourceLocation());
@@ -1320,7 +1323,7 @@ clang::LabelDecl *IStructuralAnalysis::getBlockLabel(CFGBlock *Blk,
   } else {
     // if prepend and already has a label, return the label
     if (prepend) {
-      if (Blk->front().getAs<CFGStmt>().hasValue()) {
+      if (Blk->size() > 0 && Blk->front().getAs<CFGStmt>().hasValue()) {
         if (auto label = llvm::dyn_cast<clang::LabelStmt>(
                 Blk->front().getAs<CFGStmt>()->getStmt())) {
           return label->getDecl();

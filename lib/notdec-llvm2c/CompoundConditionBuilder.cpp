@@ -1,8 +1,8 @@
 #include <clang/AST/OperationKinds.h>
 #include <clang/Basic/Specifiers.h>
 
-#include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/PostOrderCFGView.h"
 #include "notdec-llvm2c/Utils.h"
 
@@ -15,10 +15,14 @@ void CompoundConditionBuilder::execute() {
     auto postView = PostOrderCFGView::create(&CFG);
 
     for (auto block : *postView) {
+      if (toRemove.count(const_cast<CFGBlock *>(block))) {
+        continue;
+      }
       if (block->succ_size() == 2) {
         changed |= maybeCoalesce(const_cast<CFGBlock *>(block));
       }
     }
+    doRemoveBlocks();
   } while (changed);
 }
 
@@ -35,7 +39,8 @@ void CompoundConditionBuilder::rebuildGraph(CFGBlock *head, CFGBlock *redundant,
   removeEdge(redundant, common);
   head->replaceSucc(redundant, replacement);
   replacement->addPred(head);
-  CFG.remove(redundant);
+  redundant->removePred(head);
+  deferredRemove(redundant);
 }
 
 bool CompoundConditionBuilder::maybeCoalesce(CFGBlock *Head) {

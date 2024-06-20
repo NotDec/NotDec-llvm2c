@@ -342,6 +342,7 @@ public:
 // TODO: add const to the module and function?
 class IStructuralAnalysis {
 protected:
+  std::set<CFGBlock *> toRemove;
   SAFuncContext &FCtx;
   CFG &CFG;
   // initialize after FCtx
@@ -472,6 +473,26 @@ public:
     }
     return true;
   }
+
+  void deferredRemove(CFGBlock *B) {
+    assert(B->succ_size() == 0);
+    assert(B->pred_size() == 0);
+    toRemove.insert(B);
+  }
+
+  /// defer the removal of blocks after the iteration of blocks, to prevent use
+  /// after free.
+  bool doRemoveBlocks() {
+    bool changed = false;
+    for (auto block : toRemove) {
+      assert(block->succ_size() == 0);
+      assert(block->pred_size() == 0);
+      CFG.remove(block);
+      changed = true;
+    }
+    toRemove.clear();
+    return changed;
+  }
 };
 
 // A -> B -> C, and
@@ -493,9 +514,10 @@ public:
           pred->replaceSucc(Block, succ);
           succ->addPredecessor(pred);
         }
-        CFG.remove(Block);
+        deferredRemove(Block);
       }
     }
+    doRemoveBlocks();
   }
 };
 

@@ -20,19 +20,29 @@ public:
     Break,
     Continue,
   };
+
+  /// Represent an edge that is going to be eliminated.
+  /// However, it can represent multiple edges in switch statement, because
+  /// multiple edges have the same From and To.
   struct VirtualEdge {
     CFGBlock *From;
     CFGBlock *To;
     VirtualEdgeType Ty;
     VirtualEdge(CFGBlock *From, CFGBlock *To, VirtualEdgeType Ty)
         : From(From), To(To), Ty(Ty) {}
+    // compare for order.
+    bool operator<(const VirtualEdge &other) const {
+      if (From == other.From)
+        return To < other.To;
+      return (From < other.From);
+    }
   };
 
 protected:
   bool isCanceled = false;
   CFGDomTree Dom;
   std::vector<CFGBlock *> unresolvedSwitches;
-  std::vector<std::pair<CFGBlock *, std::set<CFGBlock *>>> unresolvedCycles;
+  std::queue<std::pair<CFGBlock *, std::set<CFGBlock *>>> unresolvedCycles;
   bool ReduceAcyclic(CFGBlock *Block);
   bool isCyclic(CFGBlock *Block);
   bool ReduceCyclic(CFGBlock *Block);
@@ -51,7 +61,7 @@ protected:
   bool isBackEdge(CFGBlock *A, CFGBlock *B);
   std::pair<CFGBlock *, CFGBlock *>
   determineFollowLatch(CFGBlock *head, std::set<CFGBlock *> &loopNodes);
-  void virtualizeEdge(VirtualEdge &edge);
+  void virtualizeEdge(const VirtualEdge &edge);
   void collapseToTailRegion(CFGBlock *From, CFGBlock *To, clang::Stmt *stm);
   bool virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
                                 CFGBlock *follow,

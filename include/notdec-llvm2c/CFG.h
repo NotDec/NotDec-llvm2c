@@ -518,8 +518,12 @@ public:
   void dump(const LangOptions &LO, bool ShowColors) const;
 
   iterator createBlock();
-
   int sanityCheck();
+  ~CFG() {
+    for (CFGBlock *B : Blocks) {
+      delete B;
+    }
+  }
 
 private:
   CFGBlock *Entry = nullptr;
