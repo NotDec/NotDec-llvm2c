@@ -15,7 +15,7 @@
 
 namespace notdec::llvm2c {
 
-#define DEBUG_TYPE "SAGoto"
+#define DEBUG_TYPE "structural-goto"
 
 template <typename ForwardIt>
 ForwardIt

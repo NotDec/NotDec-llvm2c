@@ -27,7 +27,7 @@
 #include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/Utils.h"
 
-#define DEBUG_TYPE "SAPhoenix"
+#define DEBUG_TYPE "structural-phoenix"
 
 namespace notdec::llvm2c {
 
