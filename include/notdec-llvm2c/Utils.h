@@ -2,6 +2,7 @@
 #ifndef _NOTDEC_BACKEND_UTILS_H_
 #define _NOTDEC_BACKEND_UTILS_H_
 
+#include <iostream>
 #include <type_traits>
 
 #include <clang/AST/ASTContext.h>
@@ -11,6 +12,8 @@
 #include <llvm/Support/Debug.h>
 
 namespace notdec::llvm2c {
+
+void printModule(llvm::Module &M, const char *path);
 
 // ===============
 // Pass

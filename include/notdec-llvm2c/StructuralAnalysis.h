@@ -4,6 +4,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <clang/AST/ASTContext.h>
@@ -110,22 +111,42 @@ class TypeBuilder {
   // Map from llvm struct type to clang RecordDecl type.
   std::map<llvm::Type *, clang::Decl *> typeMap;
   llvm::StringSet<> &Names;
+  std::map<llvm::Value *, clang::QualType> ValueTypes;
+  std::map<llvm::Function *, clang::QualType> FuncRetTypes;
 
 public:
-  TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names)
-      : Ctx(Ctx), VN(&VN), Names(Names) {}
-  clang::RecordDecl *createRecordDecl(llvm::StructType &Ty, bool isDefinition,
-                                      bool hasPrevDef);
+  TypeBuilder(
+      clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
+      std::map<llvm::Value *, clang::QualType> *ValueTypes = nullptr,
+      std::map<llvm::Function *, clang::QualType> *FuncRetTypes = nullptr)
+      : Ctx(Ctx), VN(&VN), Names(Names) {
+    if (ValueTypes != nullptr) {
+      this->ValueTypes = *ValueTypes;
+    }
+    if (FuncRetTypes != nullptr) {
+      this->FuncRetTypes = *FuncRetTypes;
+    }
+  }
+  clang::QualType getType(llvm::Value &Val);
+  clang::QualType
+  getFunctionType(llvm::Function &Func,
+                  const clang::FunctionProtoType::ExtProtoInfo &EPI);
   clang::QualType visitStructType(llvm::StructType &Ty);
   clang::QualType visitType(llvm::Type &Ty);
+
+protected:
+  clang::RecordDecl *createRecordDecl(llvm::StructType &Ty, bool isDefinition,
+                                      bool hasPrevDef);
   clang::IdentifierInfo *getIdentifierInfo(llvm::StringRef Name) {
     return getNewIdentifierInfo(Names, Ctx.Idents, Name);
   }
   clang::QualType
   visitFunctionType(llvm::FunctionType &Ty,
-                    const clang::FunctionProtoType::ExtProtoInfo &EPI);
+                    const clang::FunctionProtoType::ExtProtoInfo &EPI,
+                    llvm::Function *ActualFunc = nullptr);
 
-  // TODO move to a dedicated file
+public:
+  // TODO move to a dedicated file?
   static clang::QualType makeSigned(clang::ASTContext &Ctx,
                                     clang::QualType Ty) {
     auto qty = Ty->getCanonicalTypeInternal();
@@ -213,13 +234,16 @@ protected:
 
   clang::Expr *visitConstant(llvm::Constant &I,
                              clang::QualType Ty = clang::QualType());
-  clang::QualType visitType(llvm::Type &Ty) { return TB.visitType(Ty); }
+  clang::QualType getType(llvm::Value &Val) { return TB.getType(Val); }
 
 public:
   ExprBuilder(SAContext &SCtx, clang::ASTContext &Ctx, TypeBuilder &TB)
       : SCtx(SCtx), Ctx(Ctx), TB(TB) {}
   ExprBuilder(SAFuncContext &FCtx);
-  clang::Expr *visitInstruction(llvm::Instruction &I) { return nullptr; }
+  clang::Expr *visitInstruction(llvm::Instruction &I) {
+    llvm::errs() << "ExprBuilder: unhandled instruction: " << I << "\n";
+    return nullptr;
+  }
   // The main interface to convert a llvm::Value to Expr.
   clang::Expr *visitValue(llvm::Value *Val,
                           clang::QualType Ty = clang::QualType());
@@ -285,6 +309,9 @@ protected:
   // Stores the mapping from llvm global object to clang decls for Functions and
   // GlobalVariables.
   std::map<llvm::GlobalObject *, clang::ValueDecl *> globalDecls;
+  // TODO move to TypeBuilder?
+  std::map<llvm::Value *, clang::QualType> ValueTypes;
+  std::map<llvm::Function *, clang::QualType> FuncRetTypes;
 
   // Clang AST should be placed first, so that it is initialized first.
   std::unique_ptr<clang::ASTUnit> ASTunit;
@@ -296,10 +323,19 @@ protected:
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
-  SAContext(llvm::Module &mod, Options opts)
+  SAContext(llvm::Module &mod, Options opts, std::unique_ptr<HighTypes> &HT)
       : opts(opts), Names(std::make_unique<llvm::StringSet<>>()), M(mod),
-        ASTunit(clang::tooling::buildASTFromCode("", "decompiled.c")),
-        TB(getASTContext(), VN, *Names), EB(*this, getASTContext(), TB) {
+        ValueTypes((HT != nullptr)
+                       ? std::move(HT->ValueTypes)
+                       : std::map<llvm::Value *, clang::QualType>()),
+        FuncRetTypes((HT != nullptr)
+                         ? std::move(HT->FuncRetTypes)
+                         : std::map<llvm::Function *, clang::QualType>()),
+        ASTunit((HT != nullptr && HT->ASTUnit != nullptr)
+                    ? std::move(HT->ASTUnit)
+                    : clang::tooling::buildASTFromCode("", "decompiled.c")),
+        TB(getASTContext(), VN, *Names, &ValueTypes, &FuncRetTypes),
+        EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
     // and int width is correct.
   }
@@ -583,8 +619,9 @@ protected:
   CFGBlock *Blk = nullptr;
   ExprBuilder EB;
 
-  clang::QualType visitType(llvm::Type &Ty) {
-    return FCtx.getTypeBuilder().visitType(Ty);
+  TypeBuilder &getTypeBuilder() { return FCtx.getTypeBuilder(); }
+  clang::QualType getType(llvm::Value &Val) {
+    return FCtx.getTypeBuilder().getType(Val);
   }
 
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt) {
@@ -601,9 +638,8 @@ public:
           FCtx.getIdentifierInfo(FCtx.getValueNamer().getArgName(Arg));
       clang::ParmVarDecl *PD = clang::ParmVarDecl::Create(
           Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
-          clang::SourceLocation(), II,
-          FCtx.getTypeBuilder().visitType(*Arg.getType()), nullptr,
-          clang::SC_None, nullptr);
+          clang::SourceLocation(), II, FCtx.getTypeBuilder().getType(Arg),
+          nullptr, clang::SC_None, nullptr);
       addExprOrStmt(Arg, *makeDeclRefExpr(PD));
       FCtx.getFunctionDecl()->addDecl(PD);
       Params.push_back(PD);
