@@ -805,7 +805,7 @@ bool Phoenix::virtualizeIrregularSwitchEntries(CFGBlock *n) {
 bool Phoenix::virtualizeReturn(CFGBlock *n) {
   llvm::Optional<Phoenix::VirtualEdge> returnEdge;
   for (auto &s : n->succs()) {
-    if (isPureReturn(s)) {
+    if (n->succ_size() <= 2 && isPureReturn(s)) {
       returnEdge.emplace(n, s, VirtualEdgeType::Goto);
       break;
     }
