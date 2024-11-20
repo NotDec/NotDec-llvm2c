@@ -111,23 +111,13 @@ class TypeBuilder {
   // Map from llvm struct type to clang RecordDecl type.
   std::map<llvm::Type *, clang::Decl *> typeMap;
   llvm::StringSet<> &Names;
-  std::map<llvm::Value *, clang::QualType> ValueTypes;
-  std::map<llvm::Function *, clang::QualType> FuncRetTypes;
 
 public:
-  TypeBuilder(
-      clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
-      std::map<llvm::Value *, clang::QualType> *ValueTypes = nullptr,
-      std::map<llvm::Function *, clang::QualType> *FuncRetTypes = nullptr)
-      : Ctx(Ctx), VN(&VN), Names(Names) {
-    if (ValueTypes != nullptr) {
-      this->ValueTypes = *ValueTypes;
-    }
-    if (FuncRetTypes != nullptr) {
-      this->FuncRetTypes = *FuncRetTypes;
-    }
-  }
-  clang::QualType getType(llvm::Value &Val);
+  HighTypes *HT;
+  TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
+              HighTypes *HT)
+      : Ctx(Ctx), VN(&VN), Names(Names), HT(HT) {}
+  clang::QualType getType(WValuePtr Val, llvm::User *User);
   clang::QualType
   getFunctionType(llvm::Function &Func,
                   const clang::FunctionProtoType::ExtProtoInfo &EPI);
@@ -219,6 +209,9 @@ public:
 /// Build an expression that refers to the IR value. It does not create stmts
 /// for instructions or IR expressions.
 ///
+/// Only return value that has not side effects, even calculations, Or create
+/// local variables.
+///
 /// To have a comprehensive IR value visitor, refer to Value class hierarchy
 /// https://llvm.org/doxygen/classllvm_1_1Value.html and
 /// llvm/lib/IR/Verifier.cpp.
@@ -232,9 +225,11 @@ protected:
   clang::ASTContext &Ctx;
   TypeBuilder &TB;
 
-  clang::Expr *visitConstant(llvm::Constant &I,
+  clang::Expr *visitConstant(llvm::Constant &I, llvm::User *User,
                              clang::QualType Ty = clang::QualType());
-  clang::QualType getType(llvm::Value &Val) { return TB.getType(Val); }
+  clang::QualType getType(WValuePtr Val, llvm::User *User) {
+    return TB.getType(Val, User);
+  }
 
 public:
   ExprBuilder(SAContext &SCtx, clang::ASTContext &Ctx, TypeBuilder &TB)
@@ -245,18 +240,19 @@ public:
     return nullptr;
   }
   // The main interface to convert a llvm::Value to Expr.
-  clang::Expr *visitValue(llvm::Value *Val,
+  clang::Expr *visitValue(llvm::Value *Val, llvm::User *User,
                           clang::QualType Ty = clang::QualType());
-  clang::Expr *visitInitializer(llvm::Value *Val, clang::QualType Ty);
+  clang::Expr *visitInitializer(llvm::Value *Val, llvm::User *User,
+                                clang::QualType Ty);
   clang::Expr *createCompoundLiteralExpr(llvm::Value *Val);
 };
 
 /// Structural analysis context for a function.
 class SAFuncContext {
-  SAContext &ctx;
+  SAContext &Ctx;
   llvm::Function &Func;
   // map from llvm inst to clang expr
-  std::map<llvm::Value *, clang::Expr *> ExprMap;
+  std::map<WValuePtr, clang::Expr *> ExprMap;
   // map from llvm block to CFGBlock. Store the iterator to facilitate deletion
   std::map<llvm::BasicBlock *, CFGBlock *> ll2cfg;
   std::map<CFGBlock *, llvm::BasicBlock *> cfg2ll;
@@ -274,19 +270,24 @@ public:
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block);
   /// Directly register the mapping from llvm value to clang expr. Do not use
   /// this and use addExprOrStmt instead most of the time.
-  void addMapping(llvm::Value &v, clang::Expr &Expr) { ExprMap[&v] = &Expr; }
+  void addMapping(WValuePtr V, clang::Expr &Expr) {
+    if (auto *V1 = std::get_if<llvm::Value *>(&V)) {
+      assert(*V1 != nullptr && "SAFuncContext.addMapping: nullptr value");
+    }
+    ExprMap[V] = &Expr;
+  }
   clang::IdentifierInfo *getIdentifierInfo(llvm::StringRef Name) {
     return getNewIdentifierInfo(*Names, getASTContext().Idents, Name);
   }
   clang::FunctionDecl *getFunctionDecl() { return FD; }
   llvm::Function &getFunction() { return Func; }
-  SAContext &getSAContext() { return ctx; }
+  SAContext &getSAContext() { return Ctx; }
   clang::ASTContext &getASTContext();
   class CFG &getCFG() { return *Cfg; }
   TypeBuilder &getTypeBuilder() { return TB; }
   ValueNamer &getValueNamer();
-  bool isExpr(llvm::Value &v) { return ExprMap.count(&v) > 0; }
-  clang::Expr *getExpr(llvm::Value &v) { return ExprMap.at(&v); }
+  bool isExpr(WValuePtr V) { return ExprMap.count(V) > 0; }
+  clang::Expr *getExpr(WValuePtr V) { return ExprMap.at(V); }
   CFGBlock *&getBlock(llvm::BasicBlock &bb) { return ll2cfg.at(&bb); }
   CFGBlock *createBlock(llvm::BasicBlock &bb) {
     CFG::iterator b = getCFG().createBlock();
@@ -310,8 +311,7 @@ protected:
   // GlobalVariables.
   std::map<llvm::GlobalObject *, clang::ValueDecl *> globalDecls;
   // TODO move to TypeBuilder?
-  std::map<llvm::Value *, clang::QualType> ValueTypes;
-  std::map<llvm::Function *, clang::QualType> FuncRetTypes;
+  std::unique_ptr<HighTypes> HT;
 
   // Clang AST should be placed first, so that it is initialized first.
   std::unique_ptr<clang::ASTUnit> ASTunit;
@@ -323,18 +323,13 @@ protected:
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
-  SAContext(llvm::Module &mod, Options opts, std::unique_ptr<HighTypes> &HT)
+  SAContext(llvm::Module &mod, Options opts, std::unique_ptr<HighTypes> &HT1)
       : opts(opts), Names(std::make_unique<llvm::StringSet<>>()), M(mod),
-        ValueTypes((HT != nullptr)
-                       ? std::move(HT->ValueTypes)
-                       : std::map<llvm::Value *, clang::QualType>()),
-        FuncRetTypes((HT != nullptr)
-                         ? std::move(HT->FuncRetTypes)
-                         : std::map<llvm::Function *, clang::QualType>()),
+        HT(std::move(HT1)),
         ASTunit((HT != nullptr && HT->ASTUnit != nullptr)
                     ? std::move(HT->ASTUnit)
                     : clang::tooling::buildASTFromCode("", "decompiled.c")),
-        TB(getASTContext(), VN, *Names, &ValueTypes, &FuncRetTypes),
+        TB(getASTContext(), VN, *Names, HT.get()),
         EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
     // and int width is correct.
@@ -609,9 +604,16 @@ public:
 
 /// CFGBuilder builds ASTs for basic blocks. In contrast, ExprBuilder build ASTs
 /// for expressions and does not insert new statements.
+///
 /// CFGBuilder converts visited instructions and register the result to the expr
 /// or statement map using `FCtx.addExpr` or `FCtx.AddStmt`. Instructions that
 /// has side effects are converted to statements, or expr otherwise.
+///
+/// - After SSA demotion, we can have a topological sort of instructions
+/// use-defs. We iterate and build code blocks.
+///
+/// - Only when the instruction is used once in current block, we fold
+/// instruction as an expression. See `SAFuncContext::addExprOrStmt`.
 class CFGBuilder : public llvm::InstVisitor<CFGBuilder> {
 protected:
   clang::ASTContext &Ctx;
@@ -620,8 +622,8 @@ protected:
   ExprBuilder EB;
 
   TypeBuilder &getTypeBuilder() { return FCtx.getTypeBuilder(); }
-  clang::QualType getType(llvm::Value &Val) {
-    return FCtx.getTypeBuilder().getType(Val);
+  clang::QualType getType(WValuePtr Val, llvm::User *User) {
+    return FCtx.getTypeBuilder().getType(Val, User);
   }
 
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt) {
@@ -638,8 +640,9 @@ public:
           FCtx.getIdentifierInfo(FCtx.getValueNamer().getArgName(Arg));
       clang::ParmVarDecl *PD = clang::ParmVarDecl::Create(
           Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
-          clang::SourceLocation(), II, FCtx.getTypeBuilder().getType(Arg),
-          nullptr, clang::SC_None, nullptr);
+          clang::SourceLocation(), II,
+          FCtx.getTypeBuilder().getType(&Arg, nullptr), nullptr, clang::SC_None,
+          nullptr);
       addExprOrStmt(Arg, *makeDeclRefExpr(PD));
       FCtx.getFunctionDecl()->addDecl(PD);
       Params.push_back(PD);
@@ -678,7 +681,7 @@ public:
   // edges are added separately
   void visitBranchInst(llvm::BranchInst &I) {
     if (I.isConditional()) {
-      Blk->setTerminator(EB.visitValue(I.getCondition()));
+      Blk->setTerminator(EB.visitValue(I.getCondition(), &I));
     }
   }
   void visitBinaryOperator(llvm::BinaryOperator &I);
