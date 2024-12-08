@@ -1,6 +1,8 @@
 #include <cassert>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Use.h>
+#include <string>
 #include <utility>
 
 #include "llvm/ADT/PostOrderIterator.h"
@@ -156,30 +158,51 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
 }
 
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
-                       llvm::GEPOperator &I) {
-  clang::Expr *Val = EB.visitValue(I.getPointerOperand(), &I);
+                       clang::Expr *Val, llvm::ArrayRef<clang::Expr *> Indexes,
+                       bool isOffset) {
   const clang::Type *Ty = Val->getType().getTypePtr();
-  for (unsigned i = 0; i < I.getNumIndices(); i++) {
-    llvm::Value *LIndex = *(I.idx_begin() + i);
-    // TODO Assert llvm type to ensure that each step is correct.
-    // llvm::Type *lty = I.getTypeAtIndex(I.getSourceElementType(), i);
+  for (unsigned i = 0; i < Indexes.size(); i++) {
+    clang::Expr *Index = Indexes[i];
     if (auto PointerTy = Ty->getAs<clang::PointerType>()) {
       // 1. pointer arithmetic + deref
       Ty = PointerTy->getPointeeType().getTypePtr();
-      clang::Expr *Index;
-      if (llvm::isa<llvm::ConstantInt>(LIndex) &&
-          llvm::cast<llvm::ConstantInt>(LIndex)->getZExtValue() == 0) {
-        // skip the add
-      } else {
-        Index = EB.visitValue(LIndex, &I);
-        // Create pointer arithmetic
+      if (Index == nullptr) {
+        // we use nullptr as int 0 here.
+        Val = deref(Ctx, Val);
+        continue;
+      }
+      if (!isOffset) {
         Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add,
                                    Val->getType(), clang::VK_LValue);
+        Val = deref(Ctx, Val);
+      } else {
+        // divide the offset by the size of the type.
+        auto Size = Ctx.getTypeSizeInChars(Ty).getQuantity();
+        // if it is constant, then we can pre-calculate the offset.
+        if (auto IntegerLiteral =
+                llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
+          auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
+                              ->getValue()
+                              .getSExtValue();
+          if (IndexNum % Size == 0) {
+            Index = clang::IntegerLiteral::Create(
+                Ctx, llvm::APInt(32, IndexNum / Size, false), Ctx.IntTy,
+                clang::SourceLocation());
+            Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add,
+                                       Val->getType(), clang::VK_LValue);
+            Val = deref(Ctx, Val);
+          } else {
+            // fall back to byte-sized offset add.
+            assert(false && "TODO: unimplemented");
+          }
+        } else {
+          // Or we need to create division of sizeof(Ty).
+          assert(false && "TODO: unimplemented");
+        }
       }
-      Val = deref(Ctx, Val);
+
     } else if (auto ArrayTy = Ty->getAsArrayTypeUnsafe()) {
       // 2. array indexing
-      clang::Expr *Index = EB.visitValue(LIndex, &I);
       Ty = ArrayTy->getElementType().getTypePtr();
       Val = new (Ctx) clang::ArraySubscriptExpr(
           Val, Index, ArrayTy->getElementType(), clang::VK_LValue,
@@ -187,9 +210,39 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     } else if (auto RecordTy = Ty->getAs<clang::RecordType>()) {
       // 3. field reference
       auto Decl = RecordTy->getDecl();
-      auto Field = Decl->field_begin();
-      auto IndexNum = llvm::cast<llvm::ConstantInt>(LIndex)->getZExtValue();
-      std::advance(Field, IndexNum);
+      clang::FieldDecl *TargetField = nullptr;
+      // if index is from gep instruction
+      if (!isOffset) {
+        auto Field = Decl->field_begin();
+        assert(llvm::isa<clang::IntegerLiteral>(Index) &&
+               "Gep index is not constant int!");
+        auto IndexNum =
+            llvm::cast<clang::IntegerLiteral>(Index)->getValue().getZExtValue();
+        std::advance(Field, IndexNum);
+        TargetField = *Field;
+      } else {
+        // TODO find the field at the offset.
+        // look for the offset annotation
+        if (auto IntegerLiteral =
+                llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
+          auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
+                              ->getValue()
+                              .getSExtValue();
+          for (auto Field : Decl->fields()) {
+            if (Field->hasAttr<clang::AnnotateAttr>()) {
+              auto Attr = Field->getAttr<clang::AnnotateAttr>();
+              if (Attr->getAnnotation() == "off:" + std::to_string(IndexNum)) {
+                TargetField = Field;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (TargetField == nullptr) {
+        return nullptr;
+      }
       // check if the val is deref, if so, then remove it and use arrow expr.
       bool useArrow = false;
       if (llvm::isa<clang::UnaryOperator>(Val) &&
@@ -198,16 +251,16 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
         Val = llvm::cast<clang::UnaryOperator>(Val)->getSubExpr();
         useArrow = true;
       }
-      Ty = Field->getType().getTypePtr();
+      Ty = TargetField->getType().getTypePtr();
       Val = clang::MemberExpr::Create(
           Ctx, Val, useArrow, clang::SourceLocation(),
-          clang::NestedNameSpecifierLoc(), clang::SourceLocation(), *Field,
-          clang::DeclAccessPair::make(*Field, Field->getAccess()),
-          clang::DeclarationNameInfo(), nullptr, Field->getType(),
+          clang::NestedNameSpecifierLoc(), clang::SourceLocation(), TargetField,
+          clang::DeclAccessPair::make(TargetField, TargetField->getAccess()),
+          clang::DeclarationNameInfo(), nullptr, TargetField->getType(),
           clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
     } else {
       llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                   << "UnImplemented: CFGBuilder.visitGetElementPtrInst cannot "
+                   << "UnImplemented: handleGEP cannot "
                       "handle type: ";
       Ty->dump();
       llvm::errs() << "\n";
@@ -216,6 +269,18 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
   }
   // implicit addrOf at the end of GEP
   return addrOf(Ctx, Val);
+}
+
+clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
+                       llvm::GEPOperator &I) {
+  clang::Expr *Val = EB.visitValue(I.getPointerOperand(), &I);
+  llvm::SmallVector<clang::Expr *, 8> Indices;
+  for (unsigned i = 0; i < I.getNumIndices(); i++) {
+    llvm::Value *LIndex = *(I.idx_begin() + i);
+    clang::Expr *Index = EB.visitValue(LIndex, &I);
+    Indices.push_back(Index);
+  }
+  return handleGEP(Ctx, EB, Val, Indices, false);
 }
 
 void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
@@ -413,8 +478,8 @@ convertOp(llvm::CmpInst::Predicate op) {
     return clang::BO_NE;
   case llvm::CmpInst::FCMP_ORD:
   case llvm::CmpInst::FCMP_UNO:
-    llvm_unreachable(
-        "CFGBuilder.convertOp: FCMP_ORD or FCMP_UNO should already be handled");
+    llvm_unreachable("CFGBuilder.convertOp: FCMP_ORD or FCMP_UNO should "
+                     "already be handled");
   case llvm::CmpInst::BAD_FCMP_PREDICATE:
   case llvm::CmpInst::BAD_ICMP_PREDICATE:
     return clang::None;
@@ -470,37 +535,82 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     assert(Args[i] != nullptr && "CFGBuilder.visitCallInst: Args[i] is null?");
   }
   llvm::Function *Callee = I.getCalledFunction();
-  clang::QualType ret;
+  clang::QualType Ret;
   clang::Expr *FRef;
+  clang::QualType FunctionType;
   if (Callee != nullptr) {
     auto FD = FCtx.getSAContext().getFunctionDecl(*Callee);
+    FunctionType = FD->getType();
     clang::QualType Ty = FD->getType();
     FRef = makeDeclRefExpr(FD);
     if (Ty->isLValueReferenceType() && FRef->getType()->isFunctionType()) {
       Ty = Ctx.getPointerType(Ty.getNonReferenceType());
       FRef = makeImplicitCast(FRef, Ty, clang::CK_FunctionToPointerDecay);
     }
-    ret = FD->getReturnType();
+    Ret = FD->getReturnType();
   } else {
     // Function pointer call
     // TODO: double check
     auto CalleeExpr = EB.visitValue(I.getCalledOperand(), &I);
+    FunctionType = CalleeExpr->getType();
     assert(CalleeExpr != nullptr &&
            "CFGBuilder.visitCallInst: CalleeExpr is null?");
     assert(CalleeExpr->getType()->isPointerType() &&
            CalleeExpr->getType()->getPointeeType()->isFunctionType() &&
            "CallInst operand is not a function pointer?");
     FRef = CalleeExpr;
-    ret =
+    Ret =
         llvm::cast<clang::FunctionType>(CalleeExpr->getType()->getPointeeType())
             ->getReturnType();
   }
+  // Handle argument casts
+  if (FunctionType->isFunctionProtoType()) {
+    auto *FT = llvm::cast<clang::FunctionProtoType>(FunctionType);
+    auto Params = FT->getParamTypes();
+    for (unsigned i = 0; i < Params.size(); i++) {
+      auto ParamTy = Params[i];
+      Args[i] = FCtx.getTypeBuilder().checkCast(Args[i], ParamTy);
+    }
+  } else {
+    llvm::errs()
+        << "CFGBuilder.visitCallInst: no type available for arg casting.\n";
+  }
   // TODO? CallExpr type is function return type or not?
-  auto Call = clang::CallExpr::Create(Ctx, FRef, Args, ret, clang::VK_PRValue,
+  auto Call = clang::CallExpr::Create(Ctx, FRef, Args, Ret, clang::VK_PRValue,
                                       clang::SourceLocation(),
                                       clang::FPOptionsOverride());
 
   addExprOrStmt(I, *Call);
+}
+
+clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
+  if (isTypeCompatible(Val->getType(), To)) {
+    return Val;
+  } else {
+    // TODO should we use CK_Bitcast here?
+    return clang::CStyleCastExpr::Create(
+        Ctx, To, clang::VK_PRValue, clang::CK_BitCast, Val, nullptr,
+        clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(To),
+        clang::SourceLocation(), clang::SourceLocation());
+  }
+}
+
+bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
+  if (From == To || From.getCanonicalType() == To.getCanonicalType()) {
+    return true;
+  }
+  if (From->isReferenceType() || To->isReferenceType()) {
+    assert(false &&
+           "TODO isTypeCompatible: reference type is not supposed to exist.");
+  }
+
+  if (From->isPointerType() && To->isPointerType()) {
+    return isTypeCompatible(From->getPointeeType(), To->getPointeeType());
+  } else if (From->isPointerType() != To->isPointerType()) {
+    // pointer and non-pointer
+    return false;
+  }
+  assert(false && "TODO isTypeCompatible: implement the rest.");
 }
 
 ValueNamer &SAFuncContext::getValueNamer() {
@@ -744,12 +854,26 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
   Conversion cv = getSignedness(OpCode);
   // insert conversion if needed
   clang::Expr *lhs = EB.visitValue(L, &Result);
+  clang::Expr *rhs = EB.visitValue(R, &Result);
+
+  // If it is add or sub with ptr, handle it like a gep
+  if (OpCode == llvm::Instruction::Add || OpCode == llvm::Instruction::Sub) {
+    // Check if it is ptr/array + number or ptr/array - number
+    if (OpCode == llvm::Instruction::Add && lhs->getType()->isIntegerType() &&
+        (rhs->getType()->isPointerType() || rhs->getType()->isArrayType())) {
+      std::swap(L, R);
+    }
+    if ((lhs->getType()->isPointerType() || lhs->getType()->isArrayType()) &&
+        rhs->getType()->isIntegerType()) {
+      return handleGEP(Ctx, EB, lhs, {nullptr, rhs}, true);
+    }
+  }
+
   if (cv == Signed || cv == Arithmetic) {
     lhs = castSigned(Ctx, TB, lhs);
   } else if (cv == Unsigned || cv == Logical) {
     lhs = castUnsigned(Ctx, TB, lhs);
   }
-  clang::Expr *rhs = EB.visitValue(R, &Result);
   if (cv == Signed) {
     rhs = castSigned(Ctx, TB, rhs);
   } else if (cv == Unsigned) {
@@ -1031,7 +1155,8 @@ void SAFuncContext::run() {
       nullptr, SAContext::getStorageClass(Func));
   FD->setPreviousDeclaration(PrevFD);
 
-  // We do not need to create ParamDecl because we handle it in the entry block.
+  // We do not need to create ParamDecl because we handle it in the entry
+  // block.
 
   std::deque<llvm::BasicBlock *> TopoSort;
   for (llvm::po_iterator<llvm::BasicBlock *>
@@ -1138,12 +1263,10 @@ clang::Expr *ExprBuilder::visitValue(llvm::Value *Val, llvm::User *User,
                                      clang::QualType Ty) {
   // Differentiate int32/int64 by User.
   // if (auto V = std::get_if<llvm::Value *>(&Val)) {
-  //   if (auto CI = llvm::dyn_cast<llvm::ConstantInt>(*V)) {
-  //     if (CI->getBitWidth() == 32 || CI->getBitWidth() == 64) {
-  //       assert(User != nullptr && "RetypdGenerator::getTypeVar: User is
-  //       Null!"); Val = IConstant{.Val = llvm::cast<llvm::ConstantInt>(*V),
-  //       .User = User};
-  //     }
+  //   if (auto CI = llvm::dyn_cast<llvm::Constant>(*V)) {
+  //     assert(User != nullptr && "RetypdGenerator::getTypeVar: User is
+  //     Null!"); Val = IConstant{.Val = llvm::cast<llvm::Constant>(*V),
+  //     .User = User};
   //   }
   // }
 
@@ -1204,7 +1327,7 @@ clang::QualType TypeBuilder::visitFunctionType(
   if (!InHighType) {
     if (ActualFunc != nullptr) {
       llvm::errs() << "Function: " << ActualFunc->getName()
-                   << " has no type in HighTypes"
+                   << " has no return value type in HighTypes"
                    << "\n";
     }
     RetTy = visitType(*Ty.getReturnType());
@@ -1226,9 +1349,9 @@ clang::RecordDecl *TypeBuilder::createRecordDecl(llvm::StructType &Ty,
       clang::SourceLocation(), clang::SourceLocation(), II, prev);
   // Set free standing so that unnamed struct can be combined:
   // (`struct {int x;} a,b`)
-  // This also requires that the var decl uses a ElaboratedType whose owned tag
-  // decl is the previous RecordDecl
-  // See also https://lists.llvm.org/pipermail/cfe-dev/2021-February/067631.html
+  // This also requires that the var decl uses a ElaboratedType whose owned
+  // tag decl is the previous RecordDecl See also
+  // https://lists.llvm.org/pipermail/cfe-dev/2021-February/067631.html
   decl->setFreeStanding(isNotLiteral);
   // save to map early so that recursive pointers are allowed, for example:
   // `struct A { struct A *a; };`
@@ -1260,8 +1383,8 @@ clang::QualType TypeBuilder::visitStructType(llvm::StructType &Ty) {
   if (Ty.isLiteral()) {
     // Handle unnamed struct definition: (`struct {int x;} a,b`)
     // See also
-    // https://lists.llvm.org/pipermail/cfe-dev/2021-February/067631.html create
-    // a non-freestanding RecordDecl in place.
+    // https://lists.llvm.org/pipermail/cfe-dev/2021-February/067631.html
+    // create a non-freestanding RecordDecl in place.
     auto decl = createRecordDecl(Ty, true, false);
     // This also requires that the var decl uses a ElaboratedType whose owned
     // tag decl is the previous RecordDecl
@@ -1275,26 +1398,29 @@ clang::QualType TypeBuilder::visitStructType(llvm::StructType &Ty) {
 }
 
 clang::QualType TypeBuilder::getType(WValuePtr Val, llvm::User *User) {
-  // Differentiate int32/int64 by User.
+  clang::QualType Ret;
+  // Differentiate Constant by User.
   auto V = std::get_if<llvm::Value *>(&Val);
   if (V) {
-    if (auto CI = llvm::dyn_cast<llvm::ConstantInt>(*V)) {
-      if (CI->getBitWidth() == 32 || CI->getBitWidth() == 64) {
+    if (!llvm::isa<llvm::GlobalValue>(*V)) {
+      if (auto CI = llvm::dyn_cast<llvm::Constant>(*V)) {
         assert(User != nullptr && "RetypdGenerator::getTypeVar: User is Null!");
-        Val = UsedConstant(llvm::cast<llvm::ConstantInt>(*V), User);
+        Val = UsedConstant(llvm::cast<llvm::Constant>(*V), User);
       }
     }
   }
 
   if (HT != nullptr && HT->ValueTypes.count(Val) > 0) {
-    return HT->ValueTypes[Val];
+    Ret = HT->ValueTypes[Val];
   } else if (auto F = llvm::dyn_cast_or_null<llvm::Function>(*V)) {
     llvm::errs()
         << "Warning: getType for function (call getFunctionType instead!): "
         << F->getName() << "\n";
-    return getFunctionType(*F, clang::FunctionProtoType::ExtProtoInfo());
+    Ret = getFunctionType(*F, clang::FunctionProtoType::ExtProtoInfo());
   }
-  return visitType(*getTy(Val));
+  Ret = visitType(*getTy(Val));
+  assert(!Ret.isNull() && "TypeBuilder.getType: Ret is null?");
+  return Ret;
 }
 
 clang::QualType TypeBuilder::visitType(llvm::Type &Ty) {
@@ -1394,11 +1520,12 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                                              clang::SourceLocation());
     ret->setArrayFiller(new (Ctx) clang::ImplicitValueInitExpr(Ty));
     return ret;
-    // We create ImplicitValueInitExpr for zero initializer but it requires type
-    // information, so use visitInitializer instead
-    // llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
+    // We create ImplicitValueInitExpr for zero initializer but it requires
+    // type information, so use visitInitializer instead llvm::errs() <<
+    // __FILE__ << ":" << __LINE__ << ": "
     //              << "Error: ExprBuilder.visitConstant cannot handle "
-    //                 "ConstantAggregateZero, use visitInitializer instead.\n";
+    //                 "ConstantAggregateZero, use visitInitializer
+    //                 instead.\n";
   } else if (llvm::ConstantPointerNull *CPN =
                  llvm::dyn_cast<llvm::ConstantPointerNull>(&C)) {
     // TODO insert a ImplicitCastExpr<NullToPointer> to corresponding type?
