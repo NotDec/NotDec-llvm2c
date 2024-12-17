@@ -69,6 +69,8 @@ inline llvm::Type *getTy(WValuePtr Val) {
 }
 
 struct HighTypes {
+  // TODO refactor to std::map<WValuePtr, std::pair<clang::QualType,
+  // clang::QualType>>
   std::map<WValuePtr, clang::QualType> ValueTypes;
   std::map<WValuePtr, clang::QualType> ValueTypesUpperBound;
   std::unique_ptr<clang::ASTUnit> ASTUnit;

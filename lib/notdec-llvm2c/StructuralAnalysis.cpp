@@ -2,6 +2,7 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Use.h>
+#include <map>
 #include <string>
 #include <utility>
 
@@ -610,6 +611,11 @@ bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
     // pointer and non-pointer
     return false;
   }
+  if (From->isBooleanType() && To->isIntegerType()) {
+    return false;
+  } else if (From->isIntegerType() && To->isBooleanType()) {
+    return false;
+  }
   assert(false && "TODO isTypeCompatible: implement the rest.");
 }
 
@@ -1002,8 +1008,85 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
                      std::unique_ptr<HighTypes> HT) {
   if (!opts.noDemoteSSA) {
+
+    std::map<std::pair<llvm::Function *, std::string>,
+             std::pair<clang::QualType, clang::QualType>>
+        NameMap;
+    // first find all phi and its address. move the type to name map.
+    for (llvm::Function &F : M) {
+      for (llvm::BasicBlock &BB : F) {
+        for (llvm::Instruction &I : BB) {
+          if (llvm::isa<llvm::PHINode>(&I)) {
+            llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
+            clang::QualType T, TU;
+            if (HT->ValueTypes.count(&PN) == 0) {
+              T = HT->ValueTypes.at(&PN);
+              if (!T.isNull()) {
+                T = HT->ASTUnit->getASTContext().getPointerType(T);
+              }
+            }
+            HT->ValueTypes.erase(&PN);
+            if (HT->ValueTypesUpperBound.count(&PN) > 0) {
+              TU = HT->ValueTypesUpperBound.at(&PN);
+              if (!TU.isNull()) {
+                TU = HT->ASTUnit->getASTContext().getPointerType(TU);
+              }
+              HT->ValueTypesUpperBound.erase(&PN);
+            }
+            auto it = NameMap.insert(
+                {{&F, PN.getName().str()}, std::make_pair(T, TU)});
+            assert(it.second && "decompileModule: duplicate phi name?");
+          }
+        }
+      }
+    }
+
     // demote SSA using reg2mem
+    printModule(M, "llvm2c-before-demotessa.ll");
     notdec::llvm2c::demoteSSA(M);
+    printModule(M, "llvm2c-after-demotessa.ll");
+
+    // find all phi alloca and phi reload, set type as previous.
+    for (llvm::Function &F : M) {
+      // std::set<llvm::AllocaInst *> AllocaSet;
+      for (llvm::BasicBlock &BB : F) {
+        for (llvm::Instruction &I : BB) {
+          if (llvm::isa<llvm::AllocaInst>(&I)) {
+            llvm::AllocaInst &AI = llvm::cast<llvm::AllocaInst>(I);
+            if (HT->ValueTypes.count(&AI) == 0) {
+              auto N1 = AI.getName().str();
+              assert(N1.rfind(".reg2mem", N1.length() - 8) ==
+                         (N1.length() - 8) &&
+                     "decompileModule: alloca not from reg2mem?");
+              auto N = N1.substr(0, N1.length() - 8);
+              AI.setName(N);
+              auto Ts = NameMap.at({&F, N});
+              if (!Ts.first.isNull()) {
+                auto I1 = HT->ValueTypes.insert({&AI, Ts.first});
+                assert(I1.second && "decompileModule: duplicate alloca name?");
+              }
+              if (!Ts.second.isNull()) {
+                auto I2 = HT->ValueTypesUpperBound.insert({&AI, Ts.second});
+                assert(I2.second && "decompileModule: duplicate alloca name?");
+              }
+
+              // AllocaSet.insert(&AI);
+            }
+          }
+          // Not very necessary? Because we have set the type for alloca.
+          // if (llvm::isa<llvm::LoadInst>(&I)) {
+          //   llvm::LoadInst &LI = llvm::cast<llvm::LoadInst>(I);
+          //   if (llvm::isa<llvm::AllocaInst>(LI.getPointerOperand())) {
+          //     llvm::AllocaInst &AI =
+          //         *llvm::cast<llvm::AllocaInst>(LI.getPointerOperand());
+          //     if (AllocaSet.count(&AI) > 0) {
+
+          //     }
+          //   }
+          // }
+        }
+      }
+    }
   }
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
@@ -1012,7 +1095,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
              << "\n========= End IR before structural analysis =========\n");
 
   // TODO remove:
-  printModule(M, "current.ll");
+  // printModule(M, "current.ll");
   if (HT != nullptr) {
     HT->dump();
   }
@@ -1533,30 +1616,47 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                                          Ctx.IntTy, clang::SourceLocation());
   } else if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(&C)) {
     auto Val = CI->getValue();
+    if (CI->getType()->getBitWidth() == 1) {
+      // todo use C bool
+      return new (Ctx) clang::CXXBoolLiteralExpr(!Val.isZero(), Ctx.BoolTy,
+                                                 clang::SourceLocation());
+    }
     if (Val.getBitWidth() == 1) {
       Val = Val.zext(32);
     }
+
+    if (Ty.isNull()) {
+      Ty = getType(CI, User);
+    }
+
     // if constant is zero, and type is pointer type, the use nullptr
-    // if type is pointer type, use cast
-    if (!Ty.isNull()) {
-      if (Ty->isPointerType()) {
-        if (Val.isNullValue()) {
-          return new (Ctx)
-              clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
-        }
-      }
-      if (!Ty->isIntegerType()) {
-        return handleCast(Ctx, CI->getContext(), *this, TB,
-                          llvm::Instruction::CastOps::BitCast, &C, Ty, &C);
-      } else {
-        return clang::IntegerLiteral::Create(Ctx, Val, Ty,
-                                             clang::SourceLocation());
+    if (Ty->isPointerType()) {
+      if (Val.isNullValue()) {
+        return new (Ctx)
+            clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
       }
     }
+    // if type is pointer type, use cast
+    if (!Ty->isIntegerType()) {
+      return handleCast(Ctx, CI->getContext(), *this, TB,
+                        llvm::Instruction::CastOps::BitCast, &C, Ty, &C);
+    }
+
     // TODO: eliminate Ui8 Ui16 i8 i16 suffix?
     // https://stackoverflow.com/questions/33659846/microsoft-integer-literal-extensions-where-documented
-    return clang::IntegerLiteral::Create(Ctx, Val, getType(CI, User),
-                                         clang::SourceLocation());
+    if (Val.getBitWidth() > 8 && Val.isNegative() &&
+        Ty->isUnsignedIntegerType()) {
+      clang::Expr *Ret = clang::IntegerLiteral::Create(
+          Ctx, Val, Ctx.getIntTypeForBitwidth(Val.getBitWidth(), true),
+          clang::SourceLocation());
+      Ret = createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
+                                 Ret);
+      return Ret;
+    } else {
+      return clang::IntegerLiteral::Create(Ctx, Val, Ty,
+                                           clang::SourceLocation());
+    }
+
   } else if (llvm::ConstantFP *CFP = llvm::dyn_cast<llvm::ConstantFP>(&C)) {
     return clang::FloatingLiteral::Create(Ctx, CFP->getValueAPF(), true,
                                           getType(CFP, User),

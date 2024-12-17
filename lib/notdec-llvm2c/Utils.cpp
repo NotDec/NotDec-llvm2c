@@ -277,33 +277,35 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
       continue;
     }
     std::vector<llvm::BasicBlock *> preds(pred_begin(B), pred_end(B));
-    for (auto pred : preds) {
-      if (pred->getSingleSuccessor() == B) {
-        auto br = pred->getTerminator();
-        builder.SetInsertPoint(br);
-        if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
-          auto rv = p->getIncomingValueForBlock(pred);
-          builder.CreateRet(rv);
+    if (!preds.empty()) {
+      for (auto pred : preds) {
+        if (pred->getSingleSuccessor() == B) {
+          auto br = pred->getTerminator();
+          builder.SetInsertPoint(br);
+          if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
+            auto rv = p->getIncomingValueForBlock(pred);
+            builder.CreateRet(rv);
+          } else {
+            builder.CreateRet(r);
+          }
+          B->removePredecessor(pred, true);
+          br->eraseFromParent();
         } else {
-          builder.CreateRet(r);
+          BasicBlock *N = BasicBlock::Create(C, B->getName(), &F, B);
+          builder.SetInsertPoint(N);
+          if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
+            auto rv = p->getIncomingValueForBlock(pred);
+            builder.CreateRet(rv);
+          } else {
+            builder.CreateRet(r);
+          }
+          // update the pred
+          B->removePredecessor(pred, true);
+          pred->getTerminator()->replaceSuccessorWith(B, N);
         }
-        B->removePredecessor(pred, true);
-        br->eraseFromParent();
-      } else {
-        BasicBlock *N = BasicBlock::Create(C, B->getName(), &F, B);
-        builder.SetInsertPoint(N);
-        if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
-          auto rv = p->getIncomingValueForBlock(pred);
-          builder.CreateRet(rv);
-        } else {
-          builder.CreateRet(r);
-        }
-        // update the pred
-        B->removePredecessor(pred, true);
-        pred->getTerminator()->replaceSuccessorWith(B, N);
       }
+      B->eraseFromParent();
     }
-    B->eraseFromParent();
   }
   return PreservedAnalyses::none();
 }
