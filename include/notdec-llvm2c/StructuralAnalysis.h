@@ -40,6 +40,13 @@
 
 namespace notdec::llvm2c {
 
+inline bool isAddrOf(clang::Expr *E) {
+  if (auto UO = llvm::dyn_cast<clang::UnaryOperator>(E)) {
+    return UO->getOpcode() == clang::UO_AddrOf;
+  }
+  return false;
+}
+
 // utility functions
 clang::Stmt *getStmt(CFGElement e);
 bool onlyUsedInBlock(llvm::Instruction &inst);
@@ -328,10 +335,9 @@ public:
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
   SAContext(llvm::Module &mod, Options opts, std::unique_ptr<HighTypes> &HT1)
       : opts(opts), Names(std::make_unique<llvm::StringSet<>>()), M(mod),
-        HT(std::move(HT1)),
-        ASTunit((HT != nullptr && HT->ASTUnit != nullptr)
-                    ? std::move(HT->ASTUnit)
-                    : clang::tooling::buildASTFromCode("", "decompiled.c")),
+        HT(std::move(HT1)), ASTunit((HT != nullptr && HT->ASTUnit != nullptr)
+                                        ? std::move(HT->ASTUnit)
+                                        : buildAST("decompiled.c")),
         TB(getASTContext(), VN, *Names, HT.get()),
         EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set

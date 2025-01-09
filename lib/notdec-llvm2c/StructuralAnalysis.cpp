@@ -90,9 +90,14 @@ bool isMustViaBlock(llvm::BasicBlock &bb) {
 
 clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
   // eliminate addrOf + deref
-  if (llvm::isa<clang::UnaryOperator>(E) &&
-      llvm::cast<clang::UnaryOperator>(E)->getOpcode() == clang::UO_Deref) {
-    return llvm::cast<clang::UnaryOperator>(E)->getSubExpr();
+  clang::Expr *ENoCast = E;
+  if (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
+    ENoCast = Cast->getSubExpr();
+  }
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_Deref) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
   }
   // eliminate addrOf + array subscript 0.
   if (auto ArraySub = llvm::dyn_cast<clang::ArraySubscriptExpr>(E)) {
@@ -110,9 +115,14 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
 
 clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
   // eliminate deref + addrOf
-  if (llvm::isa<clang::UnaryOperator>(E) &&
-      llvm::cast<clang::UnaryOperator>(E)->getOpcode() == clang::UO_AddrOf) {
-    return llvm::cast<clang::UnaryOperator>(E)->getSubExpr();
+  clang::Expr *ENoCast = E;
+  if (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
+    ENoCast = Cast->getSubExpr();
+  }
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_AddrOf) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
   }
   clang::QualType Ty = E->getType();
   if (Ty->isPointerType()) {
@@ -158,9 +168,10 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   }
 }
 
+// isOffset: the indexes is byte offset or field index.
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
                        clang::Expr *Val, llvm::ArrayRef<clang::Expr *> Indexes,
-                       bool isOffset) {
+                       bool isByteOffset) {
   const clang::Type *Ty = Val->getType().getTypePtr();
   for (unsigned i = 0; i < Indexes.size(); i++) {
     clang::Expr *Index = Indexes[i];
@@ -172,7 +183,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
         Val = deref(Ctx, Val);
         continue;
       }
-      if (!isOffset) {
+      if (!isByteOffset) {
         Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add,
                                    Val->getType(), clang::VK_LValue);
         Val = deref(Ctx, Val);
@@ -208,12 +219,12 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
       Val = new (Ctx) clang::ArraySubscriptExpr(
           Val, Index, ArrayTy->getElementType(), clang::VK_LValue,
           clang::OK_Ordinary, clang::SourceLocation());
-    } else if (auto RecordTy = Ty->getAs<clang::RecordType>()) {
+    } else if (auto *RecordTy = Ty->getAs<clang::RecordType>()) {
       // 3. field reference
       auto Decl = RecordTy->getDecl();
       clang::FieldDecl *TargetField = nullptr;
       // if index is from gep instruction
-      if (!isOffset) {
+      if (!isByteOffset) {
         auto Field = Decl->field_begin();
         assert(llvm::isa<clang::IntegerLiteral>(Index) &&
                "Gep index is not constant int!");
@@ -224,6 +235,9 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
       } else {
         // TODO find the field at the offset.
         // look for the offset annotation
+        if (auto Cast = llvm::dyn_cast<clang::CastExpr>(Index)) {
+          Index = Cast->getSubExpr();
+        }
         if (auto IntegerLiteral =
                 llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
           auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
@@ -242,6 +256,12 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
       }
 
       if (TargetField == nullptr) {
+        // Check if the offset is contained within a field.
+        // TODO
+        llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
+                     << "UnImplemented: handleGEP cannot "
+                        "find field at offset: ";
+        assert(false);
         return nullptr;
       }
       // check if the val is deref, if so, then remove it and use arrow expr.
@@ -640,7 +660,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
          "SAFuncContext.addExprOrStmt: Instruction has uses but is not Expr?");
   auto &Expr = llvm::cast<clang::Expr>(Stmt);
   auto &Inst = *llvm::cast<llvm::Instruction>(&V);
-  if (onlyUsedInBlock(Inst)) {
+  if (onlyUsedInBlock(Inst) || isAddrOf(&Expr)) {
     // Has one use and is in the same block
     ExprMap[&V] = &Expr; // wait to be folded
   } else {
@@ -903,6 +923,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
 void CFGBuilder::visitBinaryOperator(llvm::BinaryOperator &I) {
   auto binop = handleBinary(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), I,
                             I.getOperand(0), I.getOperand(1));
+  assert(binop != nullptr && "CFGBuilder.visitBinaryOperator: binop is null?");
   addExprOrStmt(I, *binop);
   return;
 }
@@ -1500,8 +1521,10 @@ clang::QualType TypeBuilder::getType(WValuePtr Val, llvm::User *User) {
         << "Warning: getType for function (call getFunctionType instead!): "
         << F->getName() << "\n";
     Ret = getFunctionType(*F, clang::FunctionProtoType::ExtProtoInfo());
+  } else {
+    Ret = visitType(*getTy(Val));
   }
-  Ret = visitType(*getTy(Val));
+
   assert(!Ret.isNull() && "TypeBuilder.getType: Ret is null?");
   return Ret;
 }
@@ -1583,9 +1606,10 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                                          clang::SourceLocation());
   } else if (llvm::ConstantDataSequential *CS =
                  llvm::dyn_cast<llvm::ConstantDataSequential>(&C)) {
-    if (CS->isCString()) {
+    // TODO split into multiple C string?
+    if (CS->isString()) {
       return clang::StringLiteral::Create(
-          Ctx, CS->getAsCString(), clang::StringLiteral::Ascii, false,
+          Ctx, CS->getAsString(), clang::StringLiteral::Ascii, false,
           Ctx.getStringLiteralArrayType(Ctx.CharTy, CS->getNumElements()),
           clang::SourceLocation());
     }

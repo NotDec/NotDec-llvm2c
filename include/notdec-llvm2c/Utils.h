@@ -2,11 +2,13 @@
 #ifndef _NOTDEC_BACKEND_UTILS_H_
 #define _NOTDEC_BACKEND_UTILS_H_
 
+#include <clang/AST/Type.h>
 #include <iostream>
 #include <type_traits>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
+#include <clang/Frontend/ASTUnit.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/Debug.h>
@@ -14,6 +16,7 @@
 namespace notdec::llvm2c {
 
 void printModule(llvm::Module &M, const char *path);
+std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName);
 
 // ===============
 // Pass
@@ -262,6 +265,36 @@ inline clang::CStyleCastExpr *createCStyleCastExpr(clang::ASTContext &Ctx,
       Ctx, QT, VK, CK, addParenthesis<clang::CStyleCastExpr>(Ctx, E, true),
       nullptr, clang::FPOptionsOverride(), Ctx.getTrivialTypeSourceInfo(QT),
       clang::SourceLocation(), clang::SourceLocation());
+}
+
+// dump LLVM object to string
+template <typename T> std::string llvmObjToString(const T *t) {
+  std::string str;
+  llvm::raw_string_ostream ss(str);
+  if (t)
+    t->print(ss);
+  else
+    ss << "nullptr";
+  return ss.str();
+}
+
+std::string llvmObjToString(const llvm::Module *t);
+
+// dump Clang object to string
+template <typename T> std::string clangObjToString(const T *stmt) {
+  clang::LangOptions lo;
+  std::string out_str;
+  llvm::raw_string_ostream outstream(out_str);
+  stmt->printPretty(outstream, NULL, clang::PrintingPolicy(lo));
+  return out_str;
+}
+
+inline std::string clangObjToString(clang::QualType Ty) {
+  clang::LangOptions lo;
+  std::string out_str;
+  llvm::raw_string_ostream outstream(out_str);
+  Ty.print(outstream, clang::PrintingPolicy(lo));
+  return out_str;
 }
 
 } // namespace notdec::llvm2c

@@ -1,5 +1,4 @@
 #include <iostream>
-#include <llvm/IR/Instruction.h>
 #include <type_traits>
 #include <vector>
 
@@ -7,6 +6,7 @@
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -18,6 +18,7 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
+#include <clang/Tooling/Tooling.h>
 
 #include "notdec-llvm2c/Utils.h"
 
@@ -34,6 +35,16 @@ void printModule(llvm::Module &M, const char *path) {
     std::abort();
   }
   M.print(os, nullptr);
+}
+
+std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
+  auto AST = clang::tooling::buildASTFromCodeWithArgs(
+      "", {"-target", "wasm32-unknown-wasi"}, FileName, "clang-tool",
+      std::make_shared<clang::PCHContainerOperations>());
+  auto Int64Ty = AST->getASTContext().getIntTypeForBitwidth(64, true);
+  auto Int64Name = clangObjToString(Int64Ty);
+  assert(Int64Name != "long" && "long should not be 64 bit in wasm32");
+  return AST;
 }
 
 /// Run the RegToMemPass to demote SSA to memory, i.e., eliminate Phi nodes.
@@ -368,6 +379,16 @@ bool needParen(PrecedenceLevel PParent, PrecedenceLevel PChild, bool isLeft) {
     return isLeft ? isRightAssociative(PParent) : isLeftAssociative(PParent);
   }
   return false;
+}
+
+std::string llvmObjToString(const llvm::Module *t) {
+  std::string str;
+  llvm::raw_string_ostream ss(str);
+  if (t)
+    t->print(ss, nullptr);
+  else
+    ss << "nullptr";
+  return ss.str();
 }
 
 } // namespace notdec::llvm2c
