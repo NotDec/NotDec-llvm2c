@@ -132,7 +132,7 @@ public:
   clang::QualType visitType(llvm::Type &Ty);
 
   clang::Expr *checkCast(clang::Expr *Val, clang::QualType To);
-  static bool isTypeCompatible(clang::QualType From, clang::QualType To);
+  bool isTypeCompatible(clang::QualType From, clang::QualType To);
 
 protected:
   clang::RecordDecl *createRecordDecl(llvm::StructType &Ty, bool isDefinition,
