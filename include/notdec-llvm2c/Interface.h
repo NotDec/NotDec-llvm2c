@@ -43,19 +43,66 @@ struct RetVal {
 struct UsedConstant {
   llvm::Constant *Val;
   llvm::User *User;
-  UsedConstant(llvm::Constant *Val, llvm::User *User) : Val(Val), User(User) {
+  long OpInd = -1;
+  UsedConstant(llvm::Constant *Val, llvm::User *User, long OpInd)
+      : Val(Val), User(User), OpInd(OpInd) {
     assert(Val != nullptr && User != nullptr);
   }
   bool operator<(const UsedConstant &rhs) const {
-    return std::tie(Val, User) < std::tie(rhs.Val, rhs.User);
+    return std::tie(Val, User, OpInd) < std::tie(rhs.Val, rhs.User, rhs.OpInd);
   }
   bool operator==(const UsedConstant &rhs) const {
     return !(*this < rhs) && !(rhs < *this);
   }
 };
 
+struct ConsAddr {
+  llvm::ConstantInt *Val;
+  bool operator<(const ConsAddr &rhs) const {
+    return std::tie(Val) < std::tie(rhs.Val);
+  }
+  bool operator==(const ConsAddr &rhs) const {
+    return !(*this < rhs) && !(rhs < *this);
+  }
+};
+
 // wrapped value pointer
-using WValuePtr = std::variant<llvm::Value *, RetVal, UsedConstant>;
+using WValuePtr = std::variant<llvm::Value *, RetVal, UsedConstant, ConsAddr>;
+
+inline bool hasUser(const llvm::Value *Val, const llvm::User *User) {
+  for (auto U : Val->users()) {
+    if (U == User) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline void llvmVal2WVal(WValuePtr &Val, llvm::User *User, long OpInd) {
+  using namespace llvm;
+  // Differentiate int32/int64 by User.
+  if (auto V = std::get_if<llvm::Value *>(&Val)) {
+    if (isa<GlobalValue>(*V)) {
+      return;
+    }
+    if (auto CI = dyn_cast<Constant>(*V)) {
+      // Convert inttoptr constant int to ConstantAddr
+      if (auto CExpr = dyn_cast<ConstantExpr>(CI)) {
+        if (CExpr->isCast() && CExpr->getOpcode() == Instruction::IntToPtr) {
+          if (auto CI1 = dyn_cast<ConstantInt>(CExpr->getOperand(0))) {
+            V = nullptr;
+            Val = ConsAddr{.Val = CI1};
+            return;
+          }
+        }
+      }
+      assert(User != nullptr && "RetypdGenerator::getTypeVar: User is Null!");
+      assert(hasUser(*V, User) &&
+             "convertTypeVarVal: constant not used by user");
+      Val = UsedConstant(cast<Constant>(*V), User, OpInd);
+    }
+  }
+}
 
 inline llvm::Type *getTy(WValuePtr Val) {
   if (auto V = std::get_if<llvm::Value *>(&Val)) {

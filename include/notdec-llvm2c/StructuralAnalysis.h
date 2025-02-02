@@ -124,7 +124,7 @@ public:
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
               HighTypes *HT)
       : Ctx(Ctx), VN(&VN), Names(Names), HT(HT) {}
-  clang::QualType getType(WValuePtr Val, llvm::User *User);
+  clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd);
   clang::QualType
   getFunctionType(llvm::Function &Func,
                   const clang::FunctionProtoType::ExtProtoInfo &EPI);
@@ -235,10 +235,10 @@ protected:
   clang::ASTContext &Ctx;
   TypeBuilder &TB;
 
-  clang::Expr *visitConstant(llvm::Constant &I, llvm::User *User,
+  clang::Expr *visitConstant(llvm::Constant &I, llvm::User *User, long OpInd,
                              clang::QualType Ty = clang::QualType());
-  clang::QualType getType(WValuePtr Val, llvm::User *User) {
-    return TB.getType(Val, User);
+  clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd) {
+    return TB.getType(Val, User, OpInd);
   }
 
 public:
@@ -250,11 +250,12 @@ public:
     return nullptr;
   }
   // The main interface to convert a llvm::Value to Expr.
-  clang::Expr *visitValue(llvm::Value *Val, llvm::User *User,
+  clang::Expr *visitValue(llvm::Value *Val, llvm::User *User, long OpInd,
                           clang::QualType Ty = clang::QualType());
-  clang::Expr *visitInitializer(llvm::Value *Val, llvm::User *User,
+  clang::Expr *visitInitializer(llvm::Value *Val, llvm::User *User, long OpInd,
                                 clang::QualType Ty);
-  clang::Expr *createCompoundLiteralExpr(llvm::Value *Val);
+  clang::Expr *createCompoundLiteralExpr(llvm::Value *Val, llvm::User *User,
+                                         long OpInd);
 };
 
 /// Structural analysis context for a function.
@@ -631,8 +632,8 @@ protected:
   ExprBuilder EB;
 
   TypeBuilder &getTypeBuilder() { return FCtx.getTypeBuilder(); }
-  clang::QualType getType(WValuePtr Val, llvm::User *User) {
-    return FCtx.getTypeBuilder().getType(Val, User);
+  clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd) {
+    return FCtx.getTypeBuilder().getType(Val, User, OpInd);
   }
 
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt) {
@@ -650,8 +651,8 @@ public:
       clang::ParmVarDecl *PD = clang::ParmVarDecl::Create(
           Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
           clang::SourceLocation(), II,
-          FCtx.getTypeBuilder().getType(&Arg, nullptr), nullptr, clang::SC_None,
-          nullptr);
+          FCtx.getTypeBuilder().getType(&Arg, nullptr, -1), nullptr,
+          clang::SC_None, nullptr);
       addExprOrStmt(Arg, *makeDeclRefExpr(PD));
       FCtx.getFunctionDecl()->addDecl(PD);
       Params.push_back(PD);
@@ -690,7 +691,7 @@ public:
   // edges are added separately
   void visitBranchInst(llvm::BranchInst &I) {
     if (I.isConditional()) {
-      Blk->setTerminator(EB.visitValue(I.getCondition(), &I));
+      Blk->setTerminator(EB.visitValue(I.getCondition(), &I, 0));
     }
   }
   void visitBinaryOperator(llvm::BinaryOperator &I);
