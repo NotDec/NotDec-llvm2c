@@ -8,6 +8,8 @@ add_library(notdec-llvm2c SHARED STATIC
     PostOrderCFGView.cpp
     Dominators.cpp
     CompoundConditionBuilder.cpp
+    ASTPrinter/StmtPrinter.cpp
+    ASTPrinter/DeclPrinter.cpp
 )
 
 target_link_libraries(notdec-llvm2c

@@ -85,9 +85,9 @@ inline void llvmVal2WVal(WValuePtr &Val, llvm::User *User, long OpInd) {
     if (isa<GlobalValue>(*V)) {
       return;
     }
-    if (auto CI = dyn_cast<Constant>(*V)) {
+    if (auto CI = dyn_cast<llvm::Constant>(*V)) {
       // Convert inttoptr constant int to ConstantAddr
-      if (auto CExpr = dyn_cast<ConstantExpr>(CI)) {
+      if (auto CExpr = dyn_cast<llvm::ConstantExpr>(CI)) {
         if (CExpr->isCast() && CExpr->getOpcode() == Instruction::IntToPtr) {
           if (auto CI1 = dyn_cast<ConstantInt>(CExpr->getOperand(0))) {
             V = nullptr;
@@ -119,8 +119,9 @@ struct HighTypes {
   // TODO refactor to std::map<WValuePtr, std::pair<clang::QualType,
   // clang::QualType>>
   std::map<WValuePtr, clang::QualType> ValueTypes;
-  std::map<WValuePtr, clang::QualType> ValueTypesUpperBound;
+  std::map<WValuePtr, clang::QualType> ValueTypesLowerBound;
   std::unique_ptr<clang::ASTUnit> ASTUnit;
+  clang::QualType MemoryType;
 
   HighTypes() = default;
   HighTypes(HighTypes &&Other) = default;
@@ -148,7 +149,7 @@ struct HighTypes {
     llvm::errs() << "HighTypes.ValueTypes:\n";
     PrintMap(ValueTypes);
     llvm::errs() << "HighTypes.ValueTypesUpperBound:\n";
-    PrintMap(ValueTypesUpperBound);
+    PrintMap(ValueTypesLowerBound);
   }
 };
 

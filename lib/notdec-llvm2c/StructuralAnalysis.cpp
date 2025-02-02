@@ -49,6 +49,7 @@
 #include <variant>
 #include <vector>
 
+#include "ASTPrinter/DeclPrinter.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/Goto.h"
@@ -840,9 +841,9 @@ clang::Expr *handleLLVMCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
 /// builder (for ConstantExpr operators).
 clang::Expr *handleCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
                         ExprBuilder &EB, TypeBuilder &TB,
-                        llvm::Instruction::CastOps OpCode, llvm::User *Result,
+                        llvm::Instruction::CastOps OpCode, llvm::User *User,
                         clang::QualType destTy, llvm::Value *Operand) {
-  auto Val = EB.visitValue(Operand, Result, 0);
+  auto Val = EB.visitValue(Operand, User, 0);
   auto srcTy = Val->getType();
   if (srcTy == destTy) {
     // no need to cast
@@ -935,9 +936,12 @@ void CFGBuilder::visitBinaryOperator(llvm::BinaryOperator &I) {
 
 void CFGBuilder::visitReturnInst(llvm::ReturnInst &I) {
   clang::Stmt *ret;
-  ret = clang::ReturnStmt::Create(Ctx, clang::SourceLocation(),
-                                  EB.visitValue(I.getReturnValue(), &I, 0),
-                                  nullptr);
+  clang::Expr *retVal = nullptr;
+  if (I.getReturnValue() != nullptr) {
+    retVal = EB.visitValue(I.getReturnValue(), &I, 0);
+  }
+  ret =
+      clang::ReturnStmt::Create(Ctx, clang::SourceLocation(), retVal, nullptr);
   addExprOrStmt(I, *ret);
   // not add to terminator!
   // Blk->setTerminator(CFGTerminator(ret));
@@ -1036,7 +1040,6 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
                      std::unique_ptr<HighTypes> HT) {
   if (!opts.noDemoteSSA) {
-
     std::map<std::pair<llvm::Function *, std::string>,
              std::pair<clang::QualType, clang::QualType>>
         NameMap;
@@ -1054,12 +1057,12 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
               }
             }
             HT->ValueTypes.erase(&PN);
-            if (HT->ValueTypesUpperBound.count(&PN) > 0) {
-              TU = HT->ValueTypesUpperBound.at(&PN);
+            if (HT->ValueTypesLowerBound.count(&PN) > 0) {
+              TU = HT->ValueTypesLowerBound.at(&PN);
               if (!TU.isNull()) {
                 TU = HT->ASTUnit->getASTContext().getPointerType(TU);
               }
-              HT->ValueTypesUpperBound.erase(&PN);
+              HT->ValueTypesLowerBound.erase(&PN);
             }
             auto it = NameMap.insert(
                 {{&F, PN.getName().str()}, std::make_pair(T, TU)});
@@ -1094,7 +1097,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
                 assert(I1.second && "decompileModule: duplicate alloca name?");
               }
               if (!Ts.second.isNull()) {
-                auto I2 = HT->ValueTypesUpperBound.insert({&AI, Ts.second});
+                auto I2 = HT->ValueTypesLowerBound.insert({&AI, Ts.second});
                 assert(I2.second && "decompileModule: duplicate alloca name?");
               }
 
@@ -1122,7 +1125,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
   LLVM_DEBUG(llvm::dbgs()
              << "\n========= End IR before structural analysis =========\n");
 
-  // TODO remove:
+  // TODO remove debug print:
   // printModule(M, "current.ll");
   if (HT != nullptr) {
     HT->dump();
@@ -1140,7 +1143,9 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
-  Ctx.getASTContext().getTranslationUnitDecl()->print(OS);
+  DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(), Ctx.getASTContext(), 0);
+  auto TD = Ctx.getASTContext().getTranslationUnitDecl();
+  DP.Visit(TD);
 }
 
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb) {
@@ -1375,14 +1380,9 @@ clang::Expr *ExprBuilder::createCompoundLiteralExpr(llvm::Value *Val,
 
 clang::Expr *ExprBuilder::visitValue(llvm::Value *Val, llvm::User *User,
                                      long OpInd, clang::QualType Ty) {
-  // Differentiate int32/int64 by User.
-  // if (auto V = std::get_if<llvm::Value *>(&Val)) {
-  //   if (auto CI = llvm::dyn_cast<llvm::Constant>(*V)) {
-  //     assert(User != nullptr && "RetypdGenerator::getTypeVar: User is
-  //     Null!"); Val = IConstant{.Val = llvm::cast<llvm::Constant>(*V),
-  //     .User = User};
-  //   }
-  // }
+  if (Ty.isNull()) {
+    Ty = TB.getType(Val, User, OpInd);
+  }
 
   // Check for ExprMap
   if (FCtx != nullptr && FCtx->isExpr(Val)) {
@@ -1517,9 +1517,11 @@ clang::QualType TypeBuilder::getType(WValuePtr Val, llvm::User *User,
   llvmVal2WVal(Val, User, OpInd);
   auto *V = std::get_if<llvm::Value *>(&Val);
 
+  llvm::Function *F;
   if (HT != nullptr && HT->ValueTypes.count(Val) > 0) {
     Ret = HT->ValueTypes[Val];
-  } else if (auto F = llvm::dyn_cast_or_null<llvm::Function>(*V)) {
+  } else if ((V != nullptr) &&
+             (F = llvm::dyn_cast_or_null<llvm::Function>(*V))) {
     llvm::errs()
         << "Warning: getType for function (call getFunctionType instead!): "
         << F->getName() << "\n";
@@ -1639,8 +1641,17 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
   } else if (llvm::ConstantPointerNull *CPN =
                  llvm::dyn_cast<llvm::ConstantPointerNull>(&C)) {
     // TODO insert a ImplicitCastExpr<NullToPointer> to corresponding type?
-    return clang::IntegerLiteral::Create(Ctx, llvm::APInt(32, 0, false),
-                                         Ctx.IntTy, clang::SourceLocation());
+    // for C++ nullptr, use CXXNullPtrLiteralExpr
+    bool isCpp = false;
+    if (isCpp) {
+      return new (Ctx)
+          clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
+    } else {
+      auto *Zero = clang::IntegerLiteral::Create(
+          Ctx, llvm::APInt(32, 0, false), Ctx.IntTy, clang::SourceLocation());
+      return createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,
+                                  clang::CK_NullToPointer, Zero);
+    }
   } else if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(&C)) {
     auto Val = CI->getValue();
     if (CI->getType()->getBitWidth() == 1) {
@@ -1666,7 +1677,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     // if type is pointer type, use cast
     if (!Ty->isIntegerType()) {
       return handleCast(Ctx, CI->getContext(), *this, TB,
-                        llvm::Instruction::CastOps::BitCast, &C, Ty, &C);
+                        llvm::Instruction::CastOps::BitCast, User, Ty, &C);
     }
 
     // TODO: eliminate Ui8 Ui16 i8 i16 suffix?

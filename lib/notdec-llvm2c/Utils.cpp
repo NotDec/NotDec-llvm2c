@@ -39,7 +39,7 @@ void printModule(llvm::Module &M, const char *path) {
 
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
   auto AST = clang::tooling::buildASTFromCodeWithArgs(
-      "", {"-target", "wasm32-unknown-wasi"}, FileName, "clang-tool",
+      "", {"-target", "wasm32-unknown-wasi", "-fparse-all-comments"}, FileName, "clang-tool",
       std::make_shared<clang::PCHContainerOperations>());
   auto Int64Ty = AST->getASTContext().getIntTypeForBitwidth(64, true);
   auto Int64Name = clangObjToString(Int64Ty);

@@ -261,6 +261,7 @@ inline clang::CStyleCastExpr *createCStyleCastExpr(clang::ASTContext &Ctx,
                                                    clang::ExprValueKind VK,
                                                    clang::CastKind CK,
                                                    clang::Expr *E) {
+  assert(!QT.isNull());
   return clang::CStyleCastExpr::Create(
       Ctx, QT, VK, CK, addParenthesis<clang::CStyleCastExpr>(Ctx, E, true),
       nullptr, clang::FPOptionsOverride(), Ctx.getTrivialTypeSourceInfo(QT),
