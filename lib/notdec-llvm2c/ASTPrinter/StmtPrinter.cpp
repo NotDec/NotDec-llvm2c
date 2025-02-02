@@ -997,21 +997,30 @@ void StmtPrinter::VisitIntegerLiteral(IntegerLiteral *Node) {
   OS << llvm::toString(Node->getValue(), 10, isSigned);
 
   // Emit suffixes.  Integer literals are always a builtin integer type.
+
   switch (Node->getType()->castAs<BuiltinType>()->getKind()) {
   default:
     llvm_unreachable("Unexpected type for integer literal!");
   case BuiltinType::Char_S:
   case BuiltinType::Char_U:
-    OS << "i8";
+    if (MyPolicy.MSVCIntSuffix)
+      OS << "i8";
     break;
   case BuiltinType::UChar:
-    OS << "Ui8";
+    if (MyPolicy.MSVCIntSuffix)
+      OS << "Ui8";
+    else
+      OS << 'U';
     break;
   case BuiltinType::Short:
-    OS << "i16";
+    if (MyPolicy.MSVCIntSuffix)
+      OS << "i16";
     break;
   case BuiltinType::UShort:
-    OS << "Ui16";
+    if (MyPolicy.MSVCIntSuffix)
+      OS << "Ui16";
+    else
+      OS << 'U';
     break;
   case BuiltinType::Int:
     break; // no suffix.

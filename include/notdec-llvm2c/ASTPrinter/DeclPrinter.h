@@ -10,7 +10,7 @@ using namespace clang;
 
 struct MyPrintingPolicy {
   bool AllowGroupedDecl = true; // TODO
-  bool PrintIntLiteralSuffix = false;
+  bool MSVCIntSuffix = false;
 };
 
 class DeclPrinter : public DeclVisitor<DeclPrinter> {
