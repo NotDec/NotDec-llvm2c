@@ -222,11 +222,18 @@ void DeclPrinter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
   VisitDeclContext(D, false);
 }
 
+void DeclPrinter::printDeclComments(Decl *D) {
+  if (DeclComments.find(D) != DeclComments.end()) {
+    Out << " /* " << DeclComments[D] << " */ ";
+  }
+}
+
 void DeclPrinter::VisitTypedefDecl(TypedefDecl *D) {
   Out << "typedef ";
   QualType Ty = D->getTypeSourceInfo()->getType();
   Ty.print(Out, Policy, D->getName(), Indentation);
   prettyPrintAttributes(D);
+  printDeclComments(D);
 }
 
 void DeclPrinter::VisitEnumDecl(EnumDecl *D) {
@@ -246,6 +253,7 @@ void DeclPrinter::VisitEnumDecl(EnumDecl *D) {
   if (D->isFixed())
     Out << " : " << D->getIntegerType().stream(Policy);
 
+  printDeclComments(D);
   if (D->isCompleteDefinition()) {
     Out << " {\n";
     VisitDeclContext(D);
@@ -260,7 +268,8 @@ void DeclPrinter::VisitRecordDecl(RecordDecl *D) {
 
   if (D->getIdentifier())
     Out << ' ' << *D;
-
+  
+  printDeclComments(D);
   if (D->isCompleteDefinition()) {
     Out << " {\n";
     VisitDeclContext(D);
@@ -275,6 +284,7 @@ void DeclPrinter::VisitEnumConstantDecl(EnumConstantDecl *D) {
     Out << " = ";
     Init->printPretty(Out, nullptr, Policy, Indentation, "\n", &Context);
   }
+  printDeclComments(D);
 }
 
 void DeclPrinter::VisitEmptyDecl(EmptyDecl *D) { prettyPrintAttributes(D); }
@@ -425,6 +435,7 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
   }
 
   prettyPrintAttributes(D);
+  printDeclComments(D);
 
   if (D->isPure())
     Out << " = 0";
@@ -485,6 +496,7 @@ void DeclPrinter::VisitFieldDecl(FieldDecl *D) {
     Init->printPretty(Out, nullptr, Policy, Indentation, "\n", &Context);
   }
   prettyPrintAttributes(D);
+  printDeclComments(D);
 }
 
 void DeclPrinter::VisitLabelDecl(LabelDecl *D) { Out << *D << ":"; }
@@ -547,6 +559,7 @@ void DeclPrinter::VisitVarDecl(VarDecl *D) {
     }
   }
   prettyPrintAttributes(D);
+  printDeclComments(D);
 }
 
 void DeclPrinter::VisitParmVarDecl(ParmVarDecl *D) { VisitVarDecl(D); }

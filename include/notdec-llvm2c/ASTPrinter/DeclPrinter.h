@@ -19,17 +19,21 @@ class DeclPrinter : public DeclVisitor<DeclPrinter> {
   const clang::PrintingPolicy &Policy;
   unsigned Indentation;
   MyPrintingPolicy MyPolicy;
+  std::map<clang::Decl *, std::string> DeclComments;
 
   raw_ostream &Indent() { return Indent(Indentation); }
   raw_ostream &Indent(unsigned Indentation);
   void ProcessDeclGroup(SmallVectorImpl<Decl *> &Decls);
 
 public:
-
   DeclPrinter(raw_ostream &Out, const PrintingPolicy &Policy,
-              const ASTContext &Context, unsigned Indentation = 2, MyPrintingPolicy P2 = MyPrintingPolicy())
-      : Out(Out), Context(Context), Policy(Policy), Indentation(Indentation), MyPolicy(P2) {}
+              const ASTContext &Context, unsigned Indentation = 2,
+              MyPrintingPolicy P2 = MyPrintingPolicy(),
+              std::map<clang::Decl *, std::string> DeclComments = {})
+      : Out(Out), Context(Context), Policy(Policy), Indentation(Indentation),
+        MyPolicy(P2), DeclComments(DeclComments) {}
 
+  void printDeclComments(Decl *D);
   void VisitDeclContext(DeclContext *DC, bool Indent = true);
 
   void VisitTranslationUnitDecl(TranslationUnitDecl *D);

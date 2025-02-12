@@ -5,6 +5,7 @@
 #ifndef _NOTDEC_BACKEND_INTERFACE_H_
 #define _NOTDEC_BACKEND_INTERFACE_H_
 
+#include <clang/AST/DeclBase.h>
 #include <clang/AST/Type.h>
 #include <clang/Frontend/ASTUnit.h>
 #include <llvm/IR/Argument.h>
@@ -120,6 +121,7 @@ struct HighTypes {
   // clang::QualType>>
   std::map<WValuePtr, clang::QualType> ValueTypes;
   std::map<WValuePtr, clang::QualType> ValueTypesLowerBound;
+  std::map<clang::Decl *, std::string> DeclComments;
   std::unique_ptr<clang::ASTUnit> ASTUnit;
   clang::QualType MemoryType;
 
