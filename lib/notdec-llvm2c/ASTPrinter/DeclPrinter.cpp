@@ -188,6 +188,8 @@ void DeclPrinter::ProcessDeclGroup(SmallVectorImpl<Decl *> &Decls) {
   unsigned NumDecls = Decls.size();
   if (NumDecls == 1) {
     Visit(*Begin);
+    Out << ";\n";
+    Decls.clear();
     return;
   }
 

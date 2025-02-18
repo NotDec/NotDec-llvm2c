@@ -1143,7 +1143,8 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
-  DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(), Ctx.getASTContext(), 0);
+  DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
+                 Ctx.getASTContext(), 0);
   auto TD = Ctx.getASTContext().getTranslationUnitDecl();
   DP.Visit(TD);
 }
@@ -1676,8 +1677,12 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     }
     // if type is pointer type, use cast
     if (!Ty->isIntegerType()) {
-      return handleCast(Ctx, CI->getContext(), *this, TB,
-                        llvm::Instruction::CastOps::BitCast, User, Ty, &C);
+      // TODO create Global variable for constant?
+      // return handleCast(Ctx, CI->getContext(), *this, TB,
+      //                   llvm::Instruction::CastOps::BitCast, User, Ty, &C);
+      return createCStyleCastExpr(
+          Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
+          clang::IntegerLiteral::Create(Ctx, Val, TB.visitType(*CI->getType()), clang::SourceLocation()));
     }
 
     // TODO: eliminate Ui8 Ui16 i8 i16 suffix?
