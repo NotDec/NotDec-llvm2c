@@ -244,6 +244,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
           auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
                               ->getValue()
                               .getSExtValue();
+          // TODO refactor to struct manager
           for (auto Field : Decl->fields()) {
             if (Field->hasAttr<clang::AnnotateAttr>()) {
               auto Attr = Field->getAttr<clang::AnnotateAttr>();
@@ -1144,7 +1145,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
-                 Ctx.getASTContext(), 0);
+                 Ctx.getASTContext(), 0, MyPrintingPolicy(), Ctx.getHighTypes().DeclComments);
   auto TD = Ctx.getASTContext().getTranslationUnitDecl();
   DP.Visit(TD);
 }
@@ -1682,7 +1683,8 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
       //                   llvm::Instruction::CastOps::BitCast, User, Ty, &C);
       return createCStyleCastExpr(
           Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
-          clang::IntegerLiteral::Create(Ctx, Val, TB.visitType(*CI->getType()), clang::SourceLocation()));
+          clang::IntegerLiteral::Create(Ctx, Val, TB.visitType(*CI->getType()),
+                                        clang::SourceLocation()));
     }
 
     // TODO: eliminate Ui8 Ui16 i8 i16 suffix?

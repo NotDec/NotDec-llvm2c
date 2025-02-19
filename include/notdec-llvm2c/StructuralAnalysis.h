@@ -375,6 +375,7 @@ public:
     return globalDecls.at(&GO);
   }
   const Options &getOpts() const { return opts; }
+  auto& getHighTypes() { return *HT; }
 
   static const llvm::StringSet<> Keywords;
   static bool isKeyword(llvm::StringRef Name);
