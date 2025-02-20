@@ -5,8 +5,8 @@ int main() {
   start:
   i++;
   switch(i) {
-    case 1: printf("%d\n", i); goto start; break;
-    case 2: printf("%d\n", i); goto start; break;
-    case 3: printf("%d\n", i); break;
+    case 1: printf("%d%d\n", 1, i); goto start; break;
+    case 2: printf("%d%d\n", 2, i); goto start; break;
+    case 3: printf("%d%d\n", 3, i); break;
   }
 }

@@ -1,5 +1,6 @@
 
 #include <clang/AST/Attr.h>
+#include <clang/AST/Type.h>
 #include <llvm/ADT/StringExtras.h>
 
 #include "notdec-llvm2c/ASTPrinter/StmtPrinter.h"
@@ -1001,11 +1002,12 @@ void StmtPrinter::VisitIntegerLiteral(IntegerLiteral *Node) {
   switch (Node->getType()->castAs<BuiltinType>()->getKind()) {
   default:
     llvm_unreachable("Unexpected type for integer literal!");
+  case BuiltinType::SChar:
   case BuiltinType::Char_S:
-  case BuiltinType::Char_U:
     if (MyPolicy.MSVCIntSuffix)
       OS << "i8";
     break;
+  case BuiltinType::Char_U:
   case BuiltinType::UChar:
     if (MyPolicy.MSVCIntSuffix)
       OS << "Ui8";

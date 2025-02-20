@@ -642,6 +642,9 @@ bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
   if (Ctx.getTypeSize(From) != Ctx.getTypeSize(To)) {
     return false;
   }
+  if (From->isIntegerType() && To->isIntegerType()) {
+    return false;
+  }
   assert(false && "TODO isTypeCompatible: implement the rest.");
 }
 
