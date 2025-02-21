@@ -8,6 +8,8 @@ add_library(notdec-llvm2c SHARED STATIC
     PostOrderCFGView.cpp
     Dominators.cpp
     CompoundConditionBuilder.cpp
+    StructManager.cpp
+    Range.cpp
     ASTPrinter/StmtPrinter.cpp
     ASTPrinter/DeclPrinter.cpp
 )
