@@ -20,6 +20,8 @@
 #include <memory>
 #include <variant>
 
+#include "StructManager.h"
+
 namespace notdec::llvm2c {
 
 enum StructuralAlgorithms { SA_Goto, SA_Phoenix };
@@ -122,6 +124,8 @@ struct HighTypes {
   std::map<WValuePtr, clang::QualType> ValueTypes;
   std::map<WValuePtr, clang::QualType> ValueTypesLowerBound;
   std::map<clang::Decl *, std::string> DeclComments;
+  std::map<clang::Decl *, StructInfo> StructInfos;
+
   std::unique_ptr<clang::ASTUnit> ASTUnit;
   clang::QualType MemoryType;
 

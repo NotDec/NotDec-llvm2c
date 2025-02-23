@@ -172,7 +172,8 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
 // isOffset: the indexes is byte offset or field index.
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
                        clang::Expr *Val, llvm::ArrayRef<clang::Expr *> Indexes,
-                       bool isByteOffset) {
+                       bool isByteOffset,
+                       std::map<clang::Decl *, StructInfo> *StructInfos) {
   const clang::Type *Ty = Val->getType().getTypePtr();
   for (unsigned i = 0; i < Indexes.size(); i++) {
     clang::Expr *Index = Indexes[i];
@@ -244,16 +245,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
           auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
                               ->getValue()
                               .getSExtValue();
-          // TODO refactor to struct manager
-          for (auto Field : Decl->fields()) {
-            if (Field->hasAttr<clang::AnnotateAttr>()) {
-              auto Attr = Field->getAttr<clang::AnnotateAttr>();
-              if (Attr->getAnnotation() == "off:" + std::to_string(IndexNum)) {
-                TargetField = Field;
-                break;
-              }
-            }
-          }
+          TargetField = StructInfos->at(Decl).derefAt(IndexNum).Decl;
         }
       }
 
@@ -291,7 +283,11 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     }
   }
   // implicit addrOf at the end of GEP
-  return addrOf(Ctx, Val);
+  if (Val->getType()->isArrayType()) {
+    return Val;
+  } else {
+    return addrOf(Ctx, Val);
+  }
 }
 
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
@@ -303,7 +299,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     clang::Expr *Index = EB.visitValue(LIndex, &I, i + 1);
     Indices.push_back(Index);
   }
-  return handleGEP(Ctx, EB, Val, Indices, false);
+  return handleGEP(Ctx, EB, Val, Indices, false, nullptr);
 }
 
 void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
@@ -619,6 +615,21 @@ clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
 }
 
 bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
+  // char[0] vs char (*)[32]
+  if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
+    return isTypeCompatible(From->getPointeeType(), To);
+  }
+  if (To->isPointerType() && To->getPointeeType()->isArrayType()) {
+    return isTypeCompatible(From, To->getPointeeType());
+  }
+
+  if (From->canDecayToPointerType()) {
+    From = Ctx.getDecayedType(From);
+  }
+  if (To->canDecayToPointerType()) {
+    To = Ctx.getDecayedType(To);
+  }
+
   if (From == To || From.getCanonicalType() == To.getCanonicalType()) {
     return true;
   }
@@ -846,10 +857,9 @@ clang::Expr *handleLLVMCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
 clang::Expr *handleCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
                         ExprBuilder &EB, TypeBuilder &TB,
                         llvm::Instruction::CastOps OpCode, llvm::User *User,
-                        clang::QualType destTy, llvm::Value *Operand) {
-  auto Val = EB.visitValue(Operand, User, 0);
+                        clang::QualType destTy, clang::Expr *Val) {
   auto srcTy = Val->getType();
-  if (srcTy == destTy) {
+  if (TB.isTypeCompatible(srcTy, destTy)) {
     // no need to cast
     return Val;
   }
@@ -871,12 +881,13 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
   if (I.getNumUses() == 0 && I.getName().startswith("reg2mem alloca point")) {
     return;
   }
+  auto* Val = EB.visitValue(I.getOperand(0), &I, 0);
   auto destTy = getType(&I, nullptr, -1);
   auto expr = handleCast(Ctx, I.getContext(), EB, FCtx.getTypeBuilder(),
-                         I.getOpcode(), &I, destTy, I.getOperand(0));
+                         I.getOpcode(), &I, destTy, Val);
   if (expr == nullptr) {
     // no need to cast
-    FCtx.addMapping(&I, *EB.visitValue(I.getOperand(0), &I, 0));
+    FCtx.addMapping(&I, *Val);
     return;
   }
   addExprOrStmt(I, *expr);
@@ -884,7 +895,8 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
 
 clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
                           TypeBuilder &TB, llvm::Instruction::BinaryOps OpCode,
-                          llvm::User &Result, llvm::Value *L, llvm::Value *R) {
+                          llvm::User &Result, llvm::Value *L, llvm::Value *R,
+                          std::map<clang::Decl *, StructInfo> *StructInfos) {
   clang::Optional<clang::BinaryOperatorKind> op = convertOp(OpCode);
   assert(op.hasValue() && "CFGBuilder.visitBinaryOperator: unexpected op type");
   Conversion cv = getSignedness(OpCode);
@@ -901,7 +913,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
     }
     if ((lhs->getType()->isPointerType() || lhs->getType()->isArrayType()) &&
         rhs->getType()->isIntegerType()) {
-      return handleGEP(Ctx, EB, lhs, {nullptr, rhs}, true);
+      return handleGEP(Ctx, EB, lhs, {nullptr, rhs}, true, StructInfos);
     }
   }
 
@@ -932,7 +944,8 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
 
 void CFGBuilder::visitBinaryOperator(llvm::BinaryOperator &I) {
   auto binop = handleBinary(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), I,
-                            I.getOperand(0), I.getOperand(1));
+                            I.getOperand(0), I.getOperand(1),
+                            &FCtx.getSAContext().getHighTypes().StructInfos);
   assert(binop != nullptr && "CFGBuilder.visitBinaryOperator: binop is null?");
   addExprOrStmt(I, *binop);
   return;
@@ -1148,7 +1161,8 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
-                 Ctx.getASTContext(), 0, MyPrintingPolicy(), Ctx.getHighTypes().DeclComments);
+                 Ctx.getASTContext(), 0, MyPrintingPolicy(),
+                 Ctx.getHighTypes().DeclComments);
   auto TD = Ctx.getASTContext().getTranslationUnitDecl();
   DP.Visit(TD);
 }
@@ -1254,6 +1268,13 @@ void SAContext::createDecls() {
           EB.visitInitializer(GV.getInitializer(), &GV, 0, VD->getType()));
     }
   }
+  // create Memory decl
+  clang::IdentifierInfo *II = getIdentifierInfo("MEMORY");
+  Memory = clang::VarDecl::Create(
+      getASTContext(), getASTContext().getTranslationUnitDecl(),
+      clang::SourceLocation(), clang::SourceLocation(), II, HT->MemoryType,
+      nullptr, clang::SC_None);
+  getASTContext().getTranslationUnitDecl()->addDecl(Memory);
 }
 
 void SAFuncContext::run() {
@@ -1673,17 +1694,30 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     }
 
     // if constant is zero, and type is pointer type, the use nullptr
-    if (Ty->isPointerType()) {
+    if (Ty->isPointerType() || Ty->isArrayType()) {
       if (Val.isNullValue()) {
         return new (Ctx)
             clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
       }
+      // if type is pointer type, use cast
+      auto *MDecl =
+          SCtx.getHighTypes().MemoryType->getAs<clang::RecordType>()->getDecl();
+      auto &SI = SCtx.getHighTypes().StructInfos.at(MDecl);
+      auto &Ent = SI.derefAt(Val.getZExtValue());
+      auto *E = clang::MemberExpr::Create(
+          Ctx, makeDeclRefExpr(SCtx.Memory),
+          /*isarrow=*/false, clang::SourceLocation(),
+          clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Ent.Decl,
+          clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
+          clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
+          clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
+      if (Ent.Decl->getType()->isArrayType()) {
+        return E;
+      } else {
+        return addrOf(Ctx, E);
+      }
     }
-    // if type is pointer type, use cast
     if (!Ty->isIntegerType()) {
-      // TODO create Global variable for constant?
-      // return handleCast(Ctx, CI->getContext(), *this, TB,
-      //                   llvm::Instruction::CastOps::BitCast, User, Ty, &C);
       return createCStyleCastExpr(
           Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
           clang::IntegerLiteral::Create(Ctx, Val, TB.visitType(*CI->getType()),
@@ -1732,7 +1766,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     case llvm::Instruction::AddrSpaceCast:
       return handleCast(Ctx, CE->getContext(), *this, TB,
                         (llvm::Instruction::CastOps)CE->getOpcode(), CE,
-                        TB.getType(CE, User, OpInd), CE->getOperand(0));
+                        TB.getType(CE, User, OpInd), visitValue(CE->getOperand(0), CE, 0));
 
     case llvm::Instruction::ICmp:
     case llvm::Instruction::FCmp:
@@ -1759,7 +1793,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     case llvm::Instruction::Xor:
       return handleBinary(Ctx, *this, TB,
                           (llvm::Instruction::BinaryOps)CE->getOpcode(), *CE,
-                          CE->getOperand(0), CE->getOperand(1));
+                          CE->getOperand(0), CE->getOperand(1), nullptr);
     default:
       llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                    << "UnImplemented: ExprBuilder.visitConstant cannot handle "

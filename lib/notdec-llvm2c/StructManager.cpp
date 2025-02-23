@@ -1,6 +1,7 @@
 #include "notdec-llvm2c/StructManager.h"
 
 #include <cassert>
+#include <clang/AST/Expr.h>
 #include <cstddef>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>
@@ -10,6 +11,27 @@
 #include <vector>
 
 namespace notdec {
+
+void StructInfo::resolveInitialValue() {
+  for (auto &Ent : Fields) {
+    if (Ent.isPadding) {
+      continue;
+    }
+    if (Ent.Decl == nullptr) {
+      continue;
+    }
+    auto QT = Ent.Decl->getType();
+    if (QT->isArrayType() && QT->getAsArrayTypeUnsafe()->getElementType()->isCharType()) {
+      auto Offset = Ent.R.Start.offset;
+      auto CStr = Bytes->decodeCStr(Offset);
+      if (CStr.size() > 0) {
+        Ent.Decl->setInClassInitializer(clang::StringLiteral::Create(
+            Decl->getASTContext(), CStr, clang::StringLiteral::Ascii, false,
+            QT, clang::SourceLocation()));
+      }
+    }
+  }
+}
 
 FieldEntry &StructInfo::derefAt(OffsetTy Offset) {
   for (auto &Ent : Fields) {

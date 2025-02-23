@@ -332,6 +332,9 @@ protected:
   ExprBuilder EB; // for building initialize exprs
 
 public:
+  clang::ValueDecl * Memory;
+
+public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
   SAContext(llvm::Module &mod, Options opts, std::unique_ptr<HighTypes> &HT1)
