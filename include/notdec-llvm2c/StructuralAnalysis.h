@@ -248,6 +248,8 @@ protected:
     return TB.getType(Val, User, OpInd);
   }
 
+  clang::Expr *getNull(clang::QualType Ty);
+
 public:
   ExprBuilder(SAContext &SCtx, clang::ASTContext &Ctx, TypeBuilder &TB)
       : SCtx(SCtx), Ctx(Ctx), TB(TB) {}

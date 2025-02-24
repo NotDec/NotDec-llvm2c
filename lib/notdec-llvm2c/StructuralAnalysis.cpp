@@ -1181,6 +1181,21 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
   //   HT->dump();
   // }
 
+  // Add all decls.
+  if (HT != nullptr) {
+    // Skip memory type for flattening.
+    RecordDecl *MDecl;
+    if (!HT->MemoryType.isNull()) {
+      MDecl = HT->MemoryType->getAs<clang::RecordType>()->getDecl();
+    }
+    for (auto *Decl : HT->AllDecls) {
+      if (Decl == MDecl) {
+        continue;
+      }
+      HT->ASTUnit->getASTContext().getTranslationUnitDecl()->addDecl(Decl);
+    }
+  }
+
   SAContext Ctx(const_cast<llvm::Module &>(M), opts, HT);
   Ctx.createDecls();
   for (const llvm::Function &F : M) {
@@ -1267,8 +1282,7 @@ void SAContext::createDecls() {
           getIdentifierInfo(getValueNamer().getArgName(Arg));
       clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
           getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
-          ArgII,  TB.getTypeL(&Arg, &F, -1),
-          nullptr, clang::SC_None, nullptr);
+          ArgII, TB.getTypeL(&Arg, &F, -1), nullptr, clang::SC_None, nullptr);
       Params.push_back(PVD);
     }
     FD->setParams(Params);
@@ -1303,12 +1317,17 @@ void SAContext::createDecls() {
     }
   }
   // create Memory decl
+  auto *MDecl = HT->MemoryType->getAs<clang::RecordType>()->getDecl();
+  getASTContext().getTranslationUnitDecl()->addDecl(MDecl);
+
   clang::IdentifierInfo *II = getIdentifierInfo("MEMORY");
   Memory = clang::VarDecl::Create(
       getASTContext(), getASTContext().getTranslationUnitDecl(),
       clang::SourceLocation(), clang::SourceLocation(), II, HT->MemoryType,
       nullptr, clang::SC_None);
   getASTContext().getTranslationUnitDecl()->addDecl(Memory);
+
+  // auto &SI = HT->StructInfos.at(MDecl);
 }
 
 void SAFuncContext::run() {
@@ -1642,6 +1661,18 @@ clang::Expr *ExprBuilder::visitInitializer(llvm::Value *Val, llvm::User *User,
   return visitValue(Val, User, OpInd, Ty);
 }
 
+clang::Expr *ExprBuilder::getNull(clang::QualType Ty) {
+  bool isCpp = false;
+  if (isCpp) {
+    return new (Ctx) clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
+  } else {
+    auto *Zero = clang::IntegerLiteral::Create(
+        Ctx, llvm::APInt(32, 0, false), Ctx.IntTy, clang::SourceLocation());
+    return createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,
+                                clang::CK_NullToPointer, Zero);
+  }
+}
+
 clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                                         long OpInd, clang::QualType Ty) {
   // Check HighTypes for possible type.
@@ -1700,18 +1731,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     //                 instead.\n";
   } else if (llvm::ConstantPointerNull *CPN =
                  llvm::dyn_cast<llvm::ConstantPointerNull>(&C)) {
-    // TODO insert a ImplicitCastExpr<NullToPointer> to corresponding type?
-    // for C++ nullptr, use CXXNullPtrLiteralExpr
-    bool isCpp = false;
-    if (isCpp) {
-      return new (Ctx)
-          clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
-    } else {
-      auto *Zero = clang::IntegerLiteral::Create(
-          Ctx, llvm::APInt(32, 0, false), Ctx.IntTy, clang::SourceLocation());
-      return createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,
-                                  clang::CK_NullToPointer, Zero);
-    }
+    return getNull(Ty);
   } else if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(&C)) {
     auto Val = CI->getValue();
     if (CI->getType()->getBitWidth() == 1) {
@@ -1730,10 +1750,9 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     // if constant is zero, and type is pointer type, the use nullptr
     if (Ty->isPointerType() || Ty->isArrayType()) {
       if (Val.isNullValue()) {
-        return new (Ctx)
-            clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
+        return getNull(Ty);
       }
-      // if type is pointer type, use cast
+      // if type is pointer type, find global variable
       auto *MDecl =
           SCtx.getHighTypes().MemoryType->getAs<clang::RecordType>()->getDecl();
       auto &SI = SCtx.getHighTypes().StructInfos.at(MDecl);

@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <variant>
+#include <vector>
 
 #include "StructManager.h"
 
@@ -125,6 +126,7 @@ struct HighTypes {
   std::map<WValuePtr, clang::QualType> ValueTypesLowerBound;
   std::map<clang::Decl *, std::string> DeclComments;
   std::map<clang::Decl *, StructInfo> StructInfos;
+  std::set<clang::Decl*> AllDecls;
 
   std::unique_ptr<clang::ASTUnit> ASTUnit;
   clang::QualType MemoryType;
