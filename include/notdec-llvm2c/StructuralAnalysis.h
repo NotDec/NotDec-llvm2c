@@ -40,6 +40,10 @@
 
 namespace notdec::llvm2c {
 
+// remove all array types within.
+clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty);
+clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty);
+
 inline bool isAddrOf(clang::Expr *E) {
   if (auto UO = llvm::dyn_cast<clang::UnaryOperator>(E)) {
     return UO->getOpcode() == clang::UO_AddrOf;
@@ -125,6 +129,9 @@ public:
               HighTypes *HT)
       : Ctx(Ctx), VN(&VN), Names(Names), HT(HT) {}
   clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd);
+  clang::QualType getTypeL(WValuePtr Val, llvm::User *User, long OpInd) {
+    return toLValueType(Ctx, getType(Val, User, OpInd));
+  }
   clang::QualType
   getFunctionType(llvm::Function &Func,
                   const clang::FunctionProtoType::ExtProtoInfo &EPI);
@@ -379,6 +386,7 @@ public:
   }
   const Options &getOpts() const { return opts; }
   auto& getHighTypes() { return *HT; }
+  auto hasHighTypes() { return HT != nullptr; }
 
   static const llvm::StringSet<> Keywords;
   static bool isKeyword(llvm::StringRef Name);
@@ -655,7 +663,7 @@ public:
       clang::ParmVarDecl *PD = clang::ParmVarDecl::Create(
           Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
           clang::SourceLocation(), II,
-          FCtx.getTypeBuilder().getType(&Arg, nullptr, -1), nullptr,
+          FCtx.getTypeBuilder().getTypeL(&Arg, nullptr, -1), nullptr,
           clang::SC_None, nullptr);
       addExprOrStmt(Arg, *makeDeclRefExpr(PD));
       FCtx.getFunctionDecl()->addDecl(PD);

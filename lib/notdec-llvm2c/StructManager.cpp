@@ -46,27 +46,28 @@ FieldEntry &StructInfo::derefAt(OffsetTy Offset) {
 }
 
 void StructInfo::addPaddings() {
-  for (size_t i = 0; i < Fields.size(); i++) {
-    auto &Ent = Fields[i];
-    if (i + 1 < Fields.size()) {
-      auto &Next = Fields[i + 1];
-      auto NextOffset = Next.R.Start.offset;
-      auto CurEnd = Ent.R.Start.offset + Ent.R.Size;
-      if (CurEnd < NextOffset) {
-        if (Ent.R.Start.access.size() > 0) {
-          // expand the array size
-          Ent.R.Size = NextOffset - Ent.R.Start.offset;
-        } else {
-          // add padding
-          Fields.insert(
-              Fields.begin() + i + 1,
-              FieldEntry{.R = Range{.Start = IndexTy{.offset = CurEnd},
-                                    .Size = NextOffset - CurEnd},
-                         .isPadding = true});
-        }
-      }
-    }
-  }
+  // for (size_t i = 0; i < Fields.size(); i++) {
+  //   auto &Ent = Fields[i];
+  //   if (i + 1 < Fields.size()) {
+  //     auto &Next = Fields[i + 1];
+  //     auto NextOffset = Next.R.Start.offset;
+  //     auto CurEnd = Ent.R.Start.offset + Ent.R.Size;
+  //     bool isArray = Ent.Decl == nullptr ? false : Ent.Decl->getType()->isArrayType();
+  //     if (CurEnd < NextOffset) {
+  //       if (Ent.R.Start.access.size() > 0 || isArray) {
+  //         // expand the array size
+  //         Ent.R.Size = NextOffset - Ent.R.Start.offset;
+  //       } else {
+  //         // add padding
+  //         Fields.insert(
+  //             Fields.begin() + i + 1,
+  //             FieldEntry{.R = Range{.Start = IndexTy{.offset = CurEnd},
+  //                                   .Size = NextOffset - CurEnd},
+  //                        .isPadding = true});
+  //       }
+  //     }
+  //   }
+  // }
 }
 
 std::shared_ptr<BytesManager> BytesManager::create(llvm::Module &M) {

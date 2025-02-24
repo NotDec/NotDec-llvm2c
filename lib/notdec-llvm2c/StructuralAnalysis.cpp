@@ -62,6 +62,28 @@
 
 namespace notdec::llvm2c {
 
+clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty) {
+  unsigned Quals = Ty.getQualifiers().getFastQualifiers();
+  if (Ty->isArrayType()) {
+    return clang::QualType(Ty->getArrayElementTypeNoTypeQual(), Quals);
+  }
+  if (Ty->isPointerType()) {
+    return clang::QualType(
+        Ctx.getPointerType(removeArrayType(Ctx, Ty->getPointeeType()))
+            .getTypePtr(),
+        Quals);
+  }
+  return Ty;
+}
+
+clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty) {
+  if (Ty->isArrayType()) {
+    return Ty;
+  } else {
+    return removeArrayType(Ctx, Ty);
+  }
+}
+
 clang::Stmt *getStmt(CFGElement e) {
   if (auto stmt = e.getAs<CFGStmt>()) {
     return const_cast<clang::Stmt *>(stmt->getStmt());
@@ -149,7 +171,7 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
     clang::VarDecl *VD = clang::VarDecl::Create(
         Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
         clang::SourceLocation(), II,
-        FCtx.getTypeBuilder().getType(&I, nullptr, -1)->getPointeeType(),
+        FCtx.getTypeBuilder().getTypeL(&I, nullptr, -1)->getPointeeType(),
         nullptr, clang::SC_None);
 
     // Create a decl statement.
@@ -283,11 +305,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     }
   }
   // implicit addrOf at the end of GEP
-  if (Val->getType()->isArrayType()) {
-    return Val;
-  } else {
-    return addrOf(Ctx, Val);
-  }
+  return addrOf(Ctx, Val);
 }
 
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
@@ -616,12 +634,12 @@ clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
 
 bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
   // char[0] vs char (*)[32]
-  if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
-    return isTypeCompatible(From->getPointeeType(), To);
-  }
-  if (To->isPointerType() && To->getPointeeType()->isArrayType()) {
-    return isTypeCompatible(From, To->getPointeeType());
-  }
+  // if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
+  //   return isTypeCompatible(From->getPointeeType(), To);
+  // }
+  // if (To->isPointerType() && To->getPointeeType()->isArrayType()) {
+  //   return isTypeCompatible(From, To->getPointeeType());
+  // }
 
   if (From->canDecayToPointerType()) {
     From = Ctx.getDecayedType(From);
@@ -656,6 +674,11 @@ bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
   if (From->isIntegerType() && To->isIntegerType()) {
     return false;
   }
+  if (From->isStructureOrClassType() || To->isStructureOrClassType()) {
+    return false;
+  }
+  From->dump();
+  To->dump();
   assert(false && "TODO isTypeCompatible: implement the rest.");
 }
 
@@ -689,9 +712,13 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
 
     llvm::SmallString<128> Buf;
     clang::IdentifierInfo *II2 = getIdentifierInfo(Name);
+    auto Ty = TB.getTypeL(&Inst, nullptr, -1);
+    if (Ty->canDecayToPointerType()) {
+      Ty = Ctx.getASTContext().getDecayedType(Ty);
+    }
     clang::VarDecl *Decl = clang::VarDecl::Create(
         getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
-        II2, TB.getType(&Inst, nullptr, -1), nullptr, clang::SC_None);
+        II2, Ty, nullptr, clang::SC_None);
     Decl->setInit(&Expr);
     clang::DeclStmt *DS = new (getASTContext())
         clang::DeclStmt(clang::DeclGroupRef(Decl), clang::SourceLocation(),
@@ -859,6 +886,9 @@ clang::Expr *handleCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
                         llvm::Instruction::CastOps OpCode, llvm::User *User,
                         clang::QualType destTy, clang::Expr *Val) {
   auto srcTy = Val->getType();
+  if (destTy->canDecayToPointerType()) {
+    destTy = Ctx.getDecayedType(destTy);
+  }
   if (TB.isTypeCompatible(srcTy, destTy)) {
     // no need to cast
     return Val;
@@ -881,10 +911,13 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
   if (I.getNumUses() == 0 && I.getName().startswith("reg2mem alloca point")) {
     return;
   }
-  auto* Val = EB.visitValue(I.getOperand(0), &I, 0);
+  auto *Val = EB.visitValue(I.getOperand(0), &I, 0);
   auto destTy = getType(&I, nullptr, -1);
-  auto expr = handleCast(Ctx, I.getContext(), EB, FCtx.getTypeBuilder(),
-                         I.getOpcode(), &I, destTy, Val);
+  // if there is HighTypes, ignore low level casts.
+  auto expr = FCtx.getSAContext().hasHighTypes()
+                  ? nullptr
+                  : handleCast(Ctx, I.getContext(), EB, FCtx.getTypeBuilder(),
+                               I.getOpcode(), &I, destTy, Val);
   if (expr == nullptr) {
     // no need to cast
     FCtx.addMapping(&I, *Val);
@@ -1144,9 +1177,9 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
 
   // TODO remove debug print:
   // printModule(M, "current.ll");
-  if (HT != nullptr) {
-    HT->dump();
-  }
+  // if (HT != nullptr) {
+  //   HT->dump();
+  // }
 
   SAContext Ctx(const_cast<llvm::Module &>(M), opts, HT);
   Ctx.createDecls();
@@ -1234,7 +1267,8 @@ void SAContext::createDecls() {
           getIdentifierInfo(getValueNamer().getArgName(Arg));
       clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
           getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
-          ArgII, TB.getType(&Arg, &F, -1), nullptr, clang::SC_None, nullptr);
+          ArgII,  TB.getTypeL(&Arg, &F, -1),
+          nullptr, clang::SC_None, nullptr);
       Params.push_back(PVD);
     }
     FD->setParams(Params);
@@ -1247,7 +1281,7 @@ void SAContext::createDecls() {
   for (llvm::GlobalVariable &GV : M.globals()) {
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getGlobName(GV));
-    auto Ty = TB.getType(&GV, nullptr, -1)->getPointeeType();
+    auto Ty = TB.getTypeL(&GV, nullptr, -1)->getPointeeType();
     if (GV.isConstant()) {
       Ty = Ty.withConst();
     }
@@ -1449,7 +1483,7 @@ clang::QualType TypeBuilder::visitFunctionType(
   llvm::SmallVector<clang::QualType, 8> Args(Ty.getNumParams());
   for (unsigned i = 0; i < Ty.getNumParams(); i++) {
     if (ActualFunc != nullptr) {
-      Args[i] = getType(ActualFunc->getArg(i), nullptr, -1);
+      Args[i] = getTypeL(ActualFunc->getArg(i), nullptr, -1);
     } else {
       Args[i] = visitType(*Ty.getParamType(i));
     }
@@ -1711,11 +1745,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
           clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
           clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
           clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
-      if (Ent.Decl->getType()->isArrayType()) {
-        return E;
-      } else {
-        return addrOf(Ctx, E);
-      }
+      return addrOf(Ctx, E);
     }
     if (!Ty->isIntegerType()) {
       return createCStyleCastExpr(
@@ -1766,7 +1796,8 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     case llvm::Instruction::AddrSpaceCast:
       return handleCast(Ctx, CE->getContext(), *this, TB,
                         (llvm::Instruction::CastOps)CE->getOpcode(), CE,
-                        TB.getType(CE, User, OpInd), visitValue(CE->getOperand(0), CE, 0));
+                        TB.getType(CE, User, OpInd),
+                        visitValue(CE->getOperand(0), CE, 0));
 
     case llvm::Instruction::ICmp:
     case llvm::Instruction::FCmp:
