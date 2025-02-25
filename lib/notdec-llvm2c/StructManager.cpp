@@ -77,6 +77,17 @@ FieldEntry &StructInfo::derefAt(OffsetTy Offset) {
   assert(false && "Offset not found");
 }
 
+
+bool StructInfo::canDerefAt(OffsetTy Offset) {
+  for (auto &Ent : Fields) {
+    if (Ent.R.containsOffset(Offset)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
 void StructInfo::addPaddings() {
   // for (size_t i = 0; i < Fields.size(); i++) {
   //   auto &Ent = Fields[i];

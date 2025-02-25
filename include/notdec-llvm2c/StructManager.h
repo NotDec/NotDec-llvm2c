@@ -95,6 +95,7 @@ struct StructInfo {
   void addPaddings();
   // clang::RecordDecl * createFieldsInDecl();
   FieldEntry& derefAt(OffsetTy Offset);
+  bool canDerefAt(OffsetTy Offset);
 };
 
 
