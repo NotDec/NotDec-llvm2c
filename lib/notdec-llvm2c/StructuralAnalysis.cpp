@@ -1318,6 +1318,12 @@ void SAContext::createDecls() {
 
   // create global variable decls
   for (llvm::GlobalVariable &GV : M.globals()) {
+    if (HT) {
+      if (GV.getName() == "__stack_pointer" ||
+          GV.getName().startswith("__notdec_mem")) {
+        continue;
+      }
+    }
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getGlobName(GV));
     auto Ty = TB.getTypeL(&GV, nullptr, -1)->getPointeeType();
@@ -1334,7 +1340,11 @@ void SAContext::createDecls() {
   }
 
   // create global variable initializers
+  // defer because initializer may refer to the address of globals that have not created.
   for (llvm::GlobalVariable &GV : M.globals()) {
+    if (!globalDecls.count(&GV)) {
+      continue;
+    }
     auto VD = getGlobalVarDecl(GV);
     if (GV.hasInitializer()) {
       VD->setInit(
@@ -1557,11 +1567,11 @@ clang::QualType TypeBuilder::visitFunctionType(
   }
 
   if (!InHighType) {
-    if (ActualFunc != nullptr) {
-      llvm::errs() << "Function: " << ActualFunc->getName()
-                   << " has no return value type in HighTypes"
-                   << "\n";
-    }
+    // if (ActualFunc != nullptr) {
+    //   llvm::errs() << "Function: " << ActualFunc->getName()
+    //                << " has no return value type in HighTypes"
+    //                << "\n";
+    // }
     RetTy = visitType(*Ty.getReturnType());
   }
   return Ctx.getFunctionType(RetTy, Args, EPI);

@@ -110,7 +110,7 @@ std::shared_ptr<BytesManager> BytesManager::create(llvm::Module &M) {
       continue;
     }
     auto Offset = std::stol(Name.str(), nullptr, 16);
-    assert(Offset > 0);
+    assert(Offset >= 0);
     if (G.hasInitializer()) {
       auto *Init = G.getInitializer();
       if (auto *C = llvm::dyn_cast<llvm::ConstantDataArray>(Init)) {

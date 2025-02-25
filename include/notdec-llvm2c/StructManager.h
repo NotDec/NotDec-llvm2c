@@ -32,7 +32,9 @@ struct Range {
   OffsetTy Size;
 
   bool containsOffset(OffsetTy Offset) const {
-    // TODO for Array??
+    if (Start.offset == Offset) {
+      return true;
+    }
     return Start.offset <= Offset && Offset < Start.offset + Size;
   }
 };
