@@ -4,6 +4,7 @@
 #define _NOTDEC_STRUCTMANAGER_H_
 
 #include <clang/AST/Decl.h>
+#include <cstddef>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -41,7 +42,7 @@ struct FieldEntry {
   bool isPadding = false;
   retypd::CGEdge *Edge = nullptr;
   retypd::CGNode *Target = nullptr;
-  clang::FieldDecl *Decl = nullptr;
+  clang::DeclaratorDecl *Decl = nullptr;
 };
 
 struct BytesManager {
@@ -62,6 +63,8 @@ struct StructInfo {
     }
     return Max;
   }
+
+  void updateFieldSize(size_t Index, OffsetTy Size);
 
   void addField(const FieldEntry &Ent) {
     size_t i = 0;

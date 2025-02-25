@@ -267,7 +267,8 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
           auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
                               ->getValue()
                               .getSExtValue();
-          TargetField = StructInfos->at(Decl).derefAt(IndexNum).Decl;
+          TargetField = llvm::cast<FieldDecl>(
+              StructInfos->at(Decl).derefAt(IndexNum).Decl);
         }
       }
 
@@ -1318,16 +1319,30 @@ void SAContext::createDecls() {
   }
   // create Memory decl
   auto *MDecl = HT->MemoryType->getAs<clang::RecordType>()->getDecl();
-  getASTContext().getTranslationUnitDecl()->addDecl(MDecl);
 
-  clang::IdentifierInfo *II = getIdentifierInfo("MEMORY");
-  Memory = clang::VarDecl::Create(
-      getASTContext(), getASTContext().getTranslationUnitDecl(),
-      clang::SourceLocation(), clang::SourceLocation(), II, HT->MemoryType,
-      nullptr, clang::SC_None);
-  getASTContext().getTranslationUnitDecl()->addDecl(Memory);
+  // getASTContext().getTranslationUnitDecl()->addDecl(MDecl);
+  // clang::IdentifierInfo *II = getIdentifierInfo("MEMORY");
+  // Memory = clang::VarDecl::Create(
+  //     getASTContext(), getASTContext().getTranslationUnitDecl(),
+  //     clang::SourceLocation(), clang::SourceLocation(), II, HT->MemoryType,
+  //     nullptr, clang::SC_None);
+  // getASTContext().getTranslationUnitDecl()->addDecl(Memory);
 
-  // auto &SI = HT->StructInfos.at(MDecl);
+  auto &SI = HT->StructInfos.at(MDecl);
+  // convert struct to vardecl.
+  for (auto &Field : SI.Fields) {
+    FieldDecl *FD = llvm::cast<FieldDecl>(Field.Decl);
+    clang::IdentifierInfo *II = getIdentifierInfo(FD->getName());
+    clang::VarDecl *VD = clang::VarDecl::Create(
+        getASTContext(), getASTContext().getTranslationUnitDecl(),
+        clang::SourceLocation(), clang::SourceLocation(), II, FD->getType(),
+        nullptr, clang::SC_None);
+    if (FD->hasInClassInitializer()) {
+      VD->setInit(FD->getInClassInitializer());
+    }
+    getASTContext().getTranslationUnitDecl()->addDecl(VD);
+    Field.Decl = VD;
+  }
 }
 
 void SAFuncContext::run() {
@@ -1757,14 +1772,22 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
           SCtx.getHighTypes().MemoryType->getAs<clang::RecordType>()->getDecl();
       auto &SI = SCtx.getHighTypes().StructInfos.at(MDecl);
       auto &Ent = SI.derefAt(Val.getZExtValue());
-      auto *E = clang::MemberExpr::Create(
-          Ctx, makeDeclRefExpr(SCtx.Memory),
-          /*isarrow=*/false, clang::SourceLocation(),
-          clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Ent.Decl,
-          clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
-          clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
-          clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
-      return addrOf(Ctx, E);
+      if (SCtx.Memory) {
+        // get member of global memory type.
+        auto *E = clang::MemberExpr::Create(
+            Ctx, makeDeclRefExpr(SCtx.Memory),
+            /*isarrow=*/false, clang::SourceLocation(),
+            clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Ent.Decl,
+            clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
+            clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
+            clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
+        return addrOf(Ctx, E);
+      } else {
+        assert(llvm::isa<VarDecl>(Ent.Decl) &&
+               "Globals in memory is not a VarDecl?");
+        // get global var
+        return addrOf(Ctx, makeDeclRefExpr(Ent.Decl));
+      }
     }
     if (!Ty->isIntegerType()) {
       return createCStyleCastExpr(

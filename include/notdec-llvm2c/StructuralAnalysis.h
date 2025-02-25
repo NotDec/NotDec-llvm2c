@@ -341,7 +341,7 @@ protected:
   ExprBuilder EB; // for building initialize exprs
 
 public:
-  clang::ValueDecl * Memory;
+  clang::ValueDecl * Memory = nullptr;
 
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm

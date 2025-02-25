@@ -1,6 +1,7 @@
 #include "notdec-llvm2c/StructManager.h"
 
 #include <cassert>
+#include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
 #include <cstddef>
 #include <llvm/ADT/StringRef.h>
@@ -12,8 +13,29 @@
 
 namespace notdec {
 
+void StructInfo::updateFieldSize(size_t Index, OffsetTy Size) {
+  auto OldSize = Fields[Index].R.Size;
+  Fields[Index].R.Size = Size;
+  auto *Decl = Fields[Index].Decl;
+  if (Decl != nullptr) {
+    auto QT = Decl->getType();
+    if (QT->isArrayType()) {
+      auto OldArrSize = llvm::cast<clang::ConstantArrayType>(QT)->getSize().getZExtValue();
+      auto NewArrSize = llvm::APInt(32, Size / (OldSize / OldArrSize));
+      auto AT = QT->getAsArrayTypeUnsafe();
+      Decl->setType(Decl->getASTContext().getConstantArrayType(
+        AT->getElementType(), llvm::APInt(32, Size),
+          clang::IntegerLiteral::Create(
+              Decl->getASTContext(), llvm::APInt(32, Size),
+              Decl->getASTContext().IntTy, clang::SourceLocation()),
+          clang::ArrayType::Normal, 0));
+    }
+  }
+}
+
 void StructInfo::resolveInitialValue() {
-  for (auto &Ent : Fields) {
+  for (size_t i = 0; i < Fields.size(); i++) {
+    auto &Ent = Fields[i];
     if (Ent.isPadding) {
       continue;
     }
@@ -21,13 +43,23 @@ void StructInfo::resolveInitialValue() {
       continue;
     }
     auto QT = Ent.Decl->getType();
-    if (QT->isArrayType() && QT->getAsArrayTypeUnsafe()->getElementType()->isCharType()) {
+    if (QT->isArrayType() &&
+        QT->getAsArrayTypeUnsafe()->getElementType()->isCharType()) {
       auto Offset = Ent.R.Start.offset;
       auto CStr = Bytes->decodeCStr(Offset);
       if (CStr.size() > 0) {
-        Ent.Decl->setInClassInitializer(clang::StringLiteral::Create(
-            Decl->getASTContext(), CStr, clang::StringLiteral::Ascii, false,
-            QT, clang::SourceLocation()));
+        llvm::cast<clang::FieldDecl>(Ent.Decl)->setInClassInitializer(
+            clang::StringLiteral::Create(Decl->getASTContext(), CStr,
+                                         clang::StringLiteral::Ascii, false, QT,
+                                         clang::SourceLocation()));
+        // shrink the array size if the entry is too large.
+        // expand if there is enough space.
+        auto NewSize = CStr.size() + 1;
+        if (Ent.R.Size > NewSize || (i + 1 == Fields.size()) ||
+            (i + 1 < Fields.size() &&
+             Fields[i + 1].R.Start.offset - Ent.R.Start.offset > NewSize)) {
+          updateFieldSize(i, NewSize);
+        }
       }
     }
   }
@@ -52,8 +84,8 @@ void StructInfo::addPaddings() {
   //     auto &Next = Fields[i + 1];
   //     auto NextOffset = Next.R.Start.offset;
   //     auto CurEnd = Ent.R.Start.offset + Ent.R.Size;
-  //     bool isArray = Ent.Decl == nullptr ? false : Ent.Decl->getType()->isArrayType();
-  //     if (CurEnd < NextOffset) {
+  //     bool isArray = Ent.Decl == nullptr ? false :
+  //     Ent.Decl->getType()->isArrayType(); if (CurEnd < NextOffset) {
   //       if (Ent.R.Start.access.size() > 0 || isArray) {
   //         // expand the array size
   //         Ent.R.Size = NextOffset - Ent.R.Start.offset;
