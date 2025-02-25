@@ -62,6 +62,93 @@
 
 namespace notdec::llvm2c {
 
+clang::CastKind convertCastKind(llvm::Instruction::CastOps OpCode,
+                                bool isBool) {
+  clang::CastKind ck;
+  switch (OpCode) {
+  case llvm::Instruction::Trunc:
+    ck = clang::CK_IntegralCast;
+    break;
+  case llvm::Instruction::ZExt:
+    ck = clang::CK_IntegralCast;
+    break;
+  case llvm::Instruction::SExt:
+    ck = clang::CK_IntegralCast;
+    break;
+  case llvm::Instruction::FPTrunc:
+    ck = clang::CK_FloatingCast;
+    break;
+  case llvm::Instruction::FPExt:
+    ck = clang::CK_FloatingCast;
+    break;
+  case llvm::Instruction::UIToFP:
+    ck = clang::CK_IntegralToFloating;
+    break;
+  case llvm::Instruction::SIToFP:
+    ck = clang::CK_IntegralToFloating;
+    break;
+  case llvm::Instruction::FPToUI:
+    if (isBool) {
+      ck = clang::CK_FloatingToBoolean;
+    } else {
+      ck = clang::CK_FloatingToIntegral;
+    }
+    break;
+  case llvm::Instruction::FPToSI:
+    ck = clang::CK_FloatingToIntegral;
+    break;
+  case llvm::Instruction::PtrToInt:
+    if (isBool) {
+      ck = clang::CK_PointerToBoolean;
+    } else {
+      ck = clang::CK_PointerToIntegral;
+    }
+    break;
+  case llvm::Instruction::IntToPtr:
+    ck = clang::CK_IntegralToPointer;
+    break;
+  case llvm::Instruction::BitCast:
+    ck = clang::CK_BitCast;
+    break;
+  case llvm::Instruction::AddrSpaceCast:
+    ck = clang::CK_AddressSpaceConversion;
+    break;
+  default:
+    llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
+                 << "CFGBuilder.visitCastInst: unexpected opcode: " << OpCode
+                 << "\n";
+    std::abort();
+  }
+  return ck;
+}
+
+/// Handle the cast instruction. Shared by instruction visitor and expr
+/// builder (for ConstantExpr operators).
+clang::Expr *createCCast(clang::ASTContext &Ctx, ExprBuilder &EB,
+                         TypeBuilder &TB, llvm::Instruction::CastOps OpCode,
+                         llvm::User *User, clang::QualType destTy,
+                         clang::Expr *Val) {
+  auto srcTy = Val->getType();
+  if (destTy->canDecayToPointerType()) {
+    destTy = Ctx.getDecayedType(destTy);
+  }
+  if (TB.isTypeCompatible(srcTy, destTy)) {
+    // no need to cast
+    return Val;
+  }
+  bool isBool = destTy->isBooleanType();
+
+  clang::CastKind ck = convertCastKind(OpCode, isBool);
+  // Fixup CastKind. Actually we should not use OpCode to infer ck here.
+  if (srcTy->isPointerType() && destTy->isPointerType()) {
+    ck = clang::CK_BitCast;
+  }
+
+  clang::Expr *expr =
+      createCStyleCastExpr(Ctx, destTy, clang::VK_PRValue, ck, Val);
+  return expr;
+}
+
 clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty) {
   unsigned Quals = Ty.getQualifiers().getFastQualifiers();
   if (Ty->isArrayType()) {
@@ -192,9 +279,8 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
 }
 
 // isOffset: the indexes is byte offset or field index.
-clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
-                       clang::Expr *Val, llvm::ArrayRef<clang::Expr *> Indexes,
-                       bool isByteOffset,
+clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
+                       llvm::ArrayRef<clang::Expr *> Indexes, bool isByteOffset,
                        std::map<clang::Decl *, StructInfo> *StructInfos) {
   const clang::Type *Ty = Val->getType().getTypePtr();
   for (unsigned i = 0; i < Indexes.size(); i++) {
@@ -236,7 +322,6 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
           assert(false && "TODO: unimplemented");
         }
       }
-
     } else if (auto ArrayTy = Ty->getAsArrayTypeUnsafe()) {
       // 2. array indexing
       Ty = ArrayTy->getElementType().getTypePtr();
@@ -309,6 +394,20 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
   return addrOf(Ctx, Val);
 }
 
+clang::Expr *TypeBuilder::tryGepZero(clang::Expr *Val) {
+  if (HT && Val->getType()->isPointerType()) {
+    auto PointeeTy = Val->getType()->getPointeeType();
+    if (PointeeTy->isStructureType() || PointeeTy->isArrayType()) {
+      return handleGEP(Ctx, Val,
+                       {nullptr, clang::IntegerLiteral::Create(
+                                     Ctx, llvm::APInt(32, 0, false), Ctx.IntTy,
+                                     clang::SourceLocation())},
+                       true, &HT->StructInfos);
+    }
+  }
+  return nullptr;
+}
+
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
                        llvm::GEPOperator &I) {
   clang::Expr *Val = EB.visitValue(I.getPointerOperand(), &I, 0);
@@ -318,7 +417,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     clang::Expr *Index = EB.visitValue(LIndex, &I, i + 1);
     Indices.push_back(Index);
   }
-  return handleGEP(Ctx, EB, Val, Indices, false, nullptr);
+  return handleGEP(Ctx, Val, Indices, false, nullptr);
 }
 
 void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
@@ -330,6 +429,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   clang::Expr *val = EB.visitValue(I.getValueOperand(), &I, 0);
   clang::Expr *ptr = EB.visitValue(I.getPointerOperand(), &I, 1);
   ptr = deref(Ctx, ptr);
+  val = getTypeBuilder().checkCast(val, ptr->getType());
   clang::Expr *assign = createBinaryOperator(Ctx, ptr, val, clang::BO_Assign,
                                              ptr->getType(), clang::VK_LValue);
   addExprOrStmt(I, *assign);
@@ -624,16 +724,27 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
 clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
   if (isTypeCompatible(Val->getType(), To)) {
     return Val;
-  } else {
-    // TODO should we use CK_Bitcast here?
-    return clang::CStyleCastExpr::Create(
-        Ctx, To, clang::VK_PRValue, clang::CK_BitCast, Val, nullptr,
-        clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(To),
-        clang::SourceLocation(), clang::SourceLocation());
   }
+
+  // try to case using gep
+  if (HT && Val->getType()->isPointerType()) {
+    clang::Expr *R = Val;
+    while ((R = tryGepZero(R))) {
+      if (isTypeCompatible(R->getType(), To)) {
+        return R;
+      }
+    }
+  }
+
+  // TODO should we use CK_Bitcast here?
+  return clang::CStyleCastExpr::Create(
+      Ctx, To, clang::VK_PRValue, clang::CK_BitCast, Val, nullptr,
+      clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(To),
+      clang::SourceLocation(), clang::SourceLocation());
 }
 
-bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
+bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
+                      clang::QualType To) {
   // char[0] vs char (*)[32]
   // if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
   //   return isTypeCompatible(From->getPointeeType(), To);
@@ -658,7 +769,7 @@ bool TypeBuilder::isTypeCompatible(clang::QualType From, clang::QualType To) {
   }
 
   if (From->isPointerType() && To->isPointerType()) {
-    return isTypeCompatible(From->getPointeeType(), To->getPointeeType());
+    return isTypeCompatible(Ctx, From->getPointeeType(), To->getPointeeType());
   } else if (From->isPointerType() != To->isPointerType()) {
     // pointer and non-pointer
     return false;
@@ -794,66 +905,6 @@ void CFGBuilder::visitUnaryOperator(llvm::UnaryOperator &I) {
   addExprOrStmt(I, *expr);
 }
 
-clang::CastKind convertCastKind(llvm::Instruction::CastOps OpCode,
-                                bool isBool) {
-  clang::CastKind ck;
-  switch (OpCode) {
-  case llvm::Instruction::Trunc:
-    ck = clang::CK_IntegralCast;
-    break;
-  case llvm::Instruction::ZExt:
-    ck = clang::CK_IntegralCast;
-    break;
-  case llvm::Instruction::SExt:
-    ck = clang::CK_IntegralCast;
-    break;
-  case llvm::Instruction::FPTrunc:
-    ck = clang::CK_FloatingCast;
-    break;
-  case llvm::Instruction::FPExt:
-    ck = clang::CK_FloatingCast;
-    break;
-  case llvm::Instruction::UIToFP:
-    ck = clang::CK_IntegralToFloating;
-    break;
-  case llvm::Instruction::SIToFP:
-    ck = clang::CK_IntegralToFloating;
-    break;
-  case llvm::Instruction::FPToUI:
-    if (isBool) {
-      ck = clang::CK_FloatingToBoolean;
-    } else {
-      ck = clang::CK_FloatingToIntegral;
-    }
-    break;
-  case llvm::Instruction::FPToSI:
-    ck = clang::CK_FloatingToIntegral;
-    break;
-  case llvm::Instruction::PtrToInt:
-    if (isBool) {
-      ck = clang::CK_PointerToBoolean;
-    } else {
-      ck = clang::CK_PointerToIntegral;
-    }
-    break;
-  case llvm::Instruction::IntToPtr:
-    ck = clang::CK_IntegralToPointer;
-    break;
-  case llvm::Instruction::BitCast:
-    ck = clang::CK_BitCast;
-    break;
-  case llvm::Instruction::AddrSpaceCast:
-    ck = clang::CK_AddressSpaceConversion;
-    break;
-  default:
-    llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                 << "CFGBuilder.visitCastInst: unexpected opcode: " << OpCode
-                 << "\n";
-    std::abort();
-  }
-  return ck;
-}
-
 clang::Expr *handleLLVMCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
                             ExprBuilder &EB, TypeBuilder &TB,
                             llvm::Instruction::CastOps OpCode,
@@ -880,33 +931,6 @@ clang::Expr *handleLLVMCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
   return expr;
 }
 
-/// Handle the cast instruction. Shared by instruction visitor and expr
-/// builder (for ConstantExpr operators).
-clang::Expr *handleCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
-                        ExprBuilder &EB, TypeBuilder &TB,
-                        llvm::Instruction::CastOps OpCode, llvm::User *User,
-                        clang::QualType destTy, clang::Expr *Val) {
-  auto srcTy = Val->getType();
-  if (destTy->canDecayToPointerType()) {
-    destTy = Ctx.getDecayedType(destTy);
-  }
-  if (TB.isTypeCompatible(srcTy, destTy)) {
-    // no need to cast
-    return Val;
-  }
-  bool isBool = destTy->isBooleanType();
-
-  clang::CastKind ck = convertCastKind(OpCode, isBool);
-  // Fixup CastKind. Actually we should not use OpCode to infer ck here.
-  if (srcTy->isPointerType() && destTy->isPointerType()) {
-    ck = clang::CK_BitCast;
-  }
-
-  clang::Expr *expr =
-      createCStyleCastExpr(Ctx, destTy, clang::VK_PRValue, ck, Val);
-  return expr;
-}
-
 void CFGBuilder::visitCastInst(llvm::CastInst &I) {
   // Ignore reg2mem alloca point inserted by reg2mem.
   if (I.getNumUses() == 0 && I.getName().startswith("reg2mem alloca point")) {
@@ -917,8 +941,8 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
   // if there is HighTypes, ignore low level casts.
   auto expr = FCtx.getSAContext().hasHighTypes()
                   ? nullptr
-                  : handleCast(Ctx, I.getContext(), EB, FCtx.getTypeBuilder(),
-                               I.getOpcode(), &I, destTy, Val);
+                  : createCCast(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(),
+                                &I, destTy, Val);
   if (expr == nullptr) {
     // no need to cast
     FCtx.addMapping(&I, *Val);
@@ -947,7 +971,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
     }
     if ((lhs->getType()->isPointerType() || lhs->getType()->isArrayType()) &&
         rhs->getType()->isIntegerType()) {
-      return handleGEP(Ctx, EB, lhs, {nullptr, rhs}, true, StructInfos);
+      return handleGEP(Ctx, lhs, {nullptr, rhs}, true, StructInfos);
     }
   }
 
@@ -1836,10 +1860,9 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     case llvm::Instruction::IntToPtr:
     case llvm::Instruction::BitCast:
     case llvm::Instruction::AddrSpaceCast:
-      return handleCast(Ctx, CE->getContext(), *this, TB,
-                        (llvm::Instruction::CastOps)CE->getOpcode(), CE,
-                        TB.getType(CE, User, OpInd),
-                        visitValue(CE->getOperand(0), CE, 0));
+      return createCCast(
+          Ctx, *this, TB, (llvm::Instruction::CastOps)CE->getOpcode(), CE,
+          TB.getType(CE, User, OpInd), visitValue(CE->getOperand(0), CE, 0));
 
     case llvm::Instruction::ICmp:
     case llvm::Instruction::FCmp:

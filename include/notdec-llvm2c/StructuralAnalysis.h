@@ -39,7 +39,10 @@
 #include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
+class ExprBuilder;
 
+bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
+                      clang::QualType To);
 // remove all array types within.
 clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty);
 clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty);
@@ -138,8 +141,11 @@ public:
   clang::QualType visitStructType(llvm::StructType &Ty);
   clang::QualType visitType(llvm::Type &Ty);
 
+  clang::Expr *tryGepZero(clang::Expr *Val);
   clang::Expr *checkCast(clang::Expr *Val, clang::QualType To);
-  bool isTypeCompatible(clang::QualType From, clang::QualType To);
+  bool isTypeCompatible(clang::QualType From, clang::QualType To) {
+    return notdec::llvm2c::isTypeCompatible(Ctx, From, To);
+  }
 
 protected:
   clang::RecordDecl *createRecordDecl(llvm::StructType &Ty, bool isDefinition,
@@ -341,7 +347,7 @@ protected:
   ExprBuilder EB; // for building initialize exprs
 
 public:
-  clang::ValueDecl * Memory = nullptr;
+  clang::ValueDecl *Memory = nullptr;
 
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
@@ -387,7 +393,7 @@ public:
     return globalDecls.at(&GO);
   }
   const Options &getOpts() const { return opts; }
-  auto& getHighTypes() { return *HT; }
+  auto &getHighTypes() { return *HT; }
   auto hasHighTypes() { return HT != nullptr; }
 
   static const llvm::StringSet<> Keywords;
