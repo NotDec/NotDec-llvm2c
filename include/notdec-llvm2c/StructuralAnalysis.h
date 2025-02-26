@@ -131,8 +131,8 @@ public:
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
               HighTypes *HT)
       : Ctx(Ctx), VN(&VN), Names(Names), HT(HT) {}
-  clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd);
-  clang::QualType getTypeL(WValuePtr Val, llvm::User *User, long OpInd) {
+  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
+  clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
     return toLValueType(Ctx, getType(Val, User, OpInd));
   }
   clang::QualType
@@ -250,7 +250,7 @@ protected:
 
   clang::Expr *visitConstant(llvm::Constant &I, llvm::User *User, long OpInd,
                              clang::QualType Ty = clang::QualType());
-  clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd) {
+  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
     return TB.getType(Val, User, OpInd);
   }
 
@@ -278,7 +278,7 @@ class SAFuncContext {
   SAContext &Ctx;
   llvm::Function &Func;
   // map from llvm inst to clang expr
-  std::map<WValuePtr, clang::Expr *> ExprMap;
+  std::map<ExtValuePtr, clang::Expr *> ExprMap;
   // map from llvm block to CFGBlock. Store the iterator to facilitate deletion
   std::map<llvm::BasicBlock *, CFGBlock *> ll2cfg;
   std::map<CFGBlock *, llvm::BasicBlock *> cfg2ll;
@@ -296,7 +296,7 @@ public:
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block);
   /// Directly register the mapping from llvm value to clang expr. Do not use
   /// this and use addExprOrStmt instead most of the time.
-  void addMapping(WValuePtr V, clang::Expr &Expr) {
+  void addMapping(ExtValuePtr V, clang::Expr &Expr) {
     if (auto *V1 = std::get_if<llvm::Value *>(&V)) {
       assert(*V1 != nullptr && "SAFuncContext.addMapping: nullptr value");
     }
@@ -312,8 +312,8 @@ public:
   class CFG &getCFG() { return *Cfg; }
   TypeBuilder &getTypeBuilder() { return TB; }
   ValueNamer &getValueNamer();
-  bool isExpr(WValuePtr V) { return ExprMap.count(V) > 0; }
-  clang::Expr *getExpr(WValuePtr V) { return ExprMap.at(V); }
+  bool isExpr(ExtValuePtr V) { return ExprMap.count(V) > 0; }
+  clang::Expr *getExpr(ExtValuePtr V) { return ExprMap.at(V); }
   CFGBlock *&getBlock(llvm::BasicBlock &bb) { return ll2cfg.at(&bb); }
   CFGBlock *createBlock(llvm::BasicBlock &bb) {
     CFG::iterator b = getCFG().createBlock();
@@ -652,7 +652,7 @@ protected:
   ExprBuilder EB;
 
   TypeBuilder &getTypeBuilder() { return FCtx.getTypeBuilder(); }
-  clang::QualType getType(WValuePtr Val, llvm::User *User, long OpInd) {
+  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
     return FCtx.getTypeBuilder().getType(Val, User, OpInd);
   }
 

@@ -9,6 +9,8 @@ add_library(notdec-llvm2c SHARED STATIC
     Dominators.cpp
     CompoundConditionBuilder.cpp
     Interface/StructManager.cpp
+    Interface/ExtValuePtr.cpp
+    Interface/ValueNamer.cpp
     Range.cpp
     ASTPrinter/StmtPrinter.cpp
     ASTPrinter/DeclPrinter.cpp

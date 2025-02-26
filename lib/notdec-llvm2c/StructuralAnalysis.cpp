@@ -1564,7 +1564,7 @@ clang::QualType TypeBuilder::visitFunctionType(
   clang::QualType RetTy;
   bool InHighType = false;
   if (ActualFunc != nullptr && !ActualFunc->getReturnType()->isVoidTy()) {
-    auto RetV = RetVal{.Func = ActualFunc};
+    auto RetV = ReturnValue{.Func = ActualFunc};
     if (HT != nullptr && HT->ValueTypes.count(RetV) > 0) {
       InHighType = true;
       RetTy = HT->ValueTypes[RetV];
@@ -1644,10 +1644,10 @@ clang::QualType TypeBuilder::visitStructType(llvm::StructType &Ty) {
   }
 }
 
-clang::QualType TypeBuilder::getType(WValuePtr Val, llvm::User *User,
+clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
                                      long OpInd) {
   clang::QualType Ret;
-  llvmVal2WVal(Val, User, OpInd);
+  llvmValue2ExtVal(Val, User, OpInd);
   auto *V = std::get_if<llvm::Value *>(&Val);
 
   llvm::Function *F;
@@ -1660,7 +1660,7 @@ clang::QualType TypeBuilder::getType(WValuePtr Val, llvm::User *User,
         << F->getName() << "\n";
     Ret = getFunctionType(*F, clang::FunctionProtoType::ExtProtoInfo());
   } else {
-    Ret = visitType(*getTy(Val));
+    Ret = visitType(*notdec::getType(Val));
   }
 
   assert(!Ret.isNull() && "TypeBuilder.getType: Ret is null?");
@@ -1732,8 +1732,8 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
   // Check HighTypes for possible type.
   auto *HT = TB.HT;
   if (HT != nullptr) {
-    WValuePtr Val = &C;
-    llvmVal2WVal(Val, User, OpInd);
+    ExtValuePtr Val = &C;
+    llvmValue2ExtVal(Val, User, OpInd);
     if (HT->ValueTypes.count(Val) > 0) {
       Ty = HT->ValueTypes[Val];
     } else if (HT->ValueTypes.count(&C) > 0) {
