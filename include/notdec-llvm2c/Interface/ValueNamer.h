@@ -13,8 +13,9 @@ namespace notdec {
 using llvm::Value;
 
 extern std::set<size_t> TraceIds;
+void loadTraceStr(const char *Traces);
 
-#define PRINT_TRACE(ID)                                                   \
+#define PRINT_TRACE(ID)                                                        \
   llvm::errs() << "TraceID=" << ID << " " << __FUNCTION__ << ": "
 
 struct ValueNamer {
