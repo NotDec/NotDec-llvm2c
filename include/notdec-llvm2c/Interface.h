@@ -21,7 +21,7 @@
 #include <variant>
 #include <vector>
 
-#include "StructManager.h"
+#include "Interface/StructManager.h"
 
 namespace notdec::llvm2c {
 

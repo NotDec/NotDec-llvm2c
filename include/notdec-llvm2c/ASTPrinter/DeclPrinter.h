@@ -3,7 +3,7 @@
 #define _NOTDEC_DECLPRINTER_H_
 
 #include "Interface.h"
-#include "StructManager.h"
+#include "Interface/StructManager.h"
 #include <clang/AST/DeclVisitor.h>
 #include <llvm/Support/raw_ostream.h>
 #include <optional>

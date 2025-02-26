@@ -12,7 +12,7 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Module.h>
 
-#include "Range.h"
+#include "notdec-llvm2c/Interface/Range.h"
 
 namespace notdec::retypd {
 struct CGNode;

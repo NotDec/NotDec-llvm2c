@@ -1,4 +1,4 @@
-#include "notdec-llvm2c/StructManager.h"
+#include "notdec-llvm2c/Interface/StructManager.h"
 
 #include <cassert>
 #include <clang/AST/ASTContext.h>
