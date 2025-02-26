@@ -241,10 +241,10 @@ clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
     Ty = Ty->castAsArrayTypeUnsafe()->getElementType();
   } else {
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                 << "CFGBuilder.deref: unexpected type: ";
+                 << "ERROR: CFGBuilder.deref: unexpected type: ";
     Ty.dump();
     llvm::errs() << "\n";
-    std::abort();
+    // std::abort();
   }
   return createUnaryOperator(Ctx, E, clang::UO_Deref, Ty, clang::VK_LValue);
 }
@@ -352,8 +352,10 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
           auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
                               ->getValue()
                               .getSExtValue();
-          TargetField = llvm::cast<FieldDecl>(
-              StructInfos->at(Decl).derefAt(IndexNum).Decl);
+          auto &Ent = StructInfos->at(Decl);
+          if (Ent.canDerefAt(IndexNum)) {
+            TargetField = llvm::cast<FieldDecl>(Ent.derefAt(IndexNum).Decl);
+          }
         }
       }
 
@@ -361,9 +363,9 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
         // Check if the offset is contained within a field.
         // TODO
         llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                     << "UnImplemented: handleGEP cannot "
+                     << "Warning: handleGEP cannot "
                         "find field at offset: ";
-        assert(false);
+        // assert(false);
         return nullptr;
       }
       // check if the val is deref, if so, then remove it and use arrow expr.
@@ -1340,7 +1342,8 @@ void SAContext::createDecls() {
   }
 
   // create global variable initializers
-  // defer because initializer may refer to the address of globals that have not created.
+  // defer because initializer may refer to the address of globals that have not
+  // created.
   for (llvm::GlobalVariable &GV : M.globals()) {
     if (!globalDecls.count(&GV)) {
       continue;
@@ -1366,7 +1369,9 @@ void SAContext::createDecls() {
   // convert struct to vardecl.
   for (auto &Field : SI.Fields) {
     FieldDecl *FD = llvm::cast<FieldDecl>(Field.Decl);
-    clang::IdentifierInfo *II = getIdentifierInfo(FD->getName());
+    auto Name = FD->getName();
+    Name.consume_front("field_");
+    clang::IdentifierInfo *II = getIdentifierInfo(("global_" + Name).str());
     clang::VarDecl *VD = clang::VarDecl::Create(
         getASTContext(), getASTContext().getTranslationUnitDecl(),
         clang::SourceLocation(), clang::SourceLocation(), II, FD->getType(),
