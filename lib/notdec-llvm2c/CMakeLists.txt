@@ -11,6 +11,7 @@ add_library(notdec-llvm2c SHARED STATIC
     Interface/StructManager.cpp
     Interface/ExtValuePtr.cpp
     Interface/ValueNamer.cpp
+    Interface/HType.cpp
     Range.cpp
     ASTPrinter/StmtPrinter.cpp
     ASTPrinter/DeclPrinter.cpp
