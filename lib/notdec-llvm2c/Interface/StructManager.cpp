@@ -71,6 +71,9 @@ FieldEntry &StructInfo::derefAt(OffsetTy Offset) {
       if (Ent.R.Start.offset == Offset) {
         return Ent;
       }
+      if (Ent.R.Start.offset <= Offset && Offset < Ent.R.Start.offset + Ent.R.Size) {
+        return Ent;
+      }
       // return Ent;
     }
   }

@@ -695,13 +695,15 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     FunctionType = CalleeExpr->getType();
     assert(CalleeExpr != nullptr &&
            "CFGBuilder.visitCallInst: CalleeExpr is null?");
-    assert(CalleeExpr->getType()->isPointerType() &&
-           CalleeExpr->getType()->getPointeeType()->isFunctionType() &&
+    auto Ty = CalleeExpr->getType();
+    if (Ty->isPointerType()) {
+      Ty = Ty->getPointeeType();
+    }
+    assert(Ty->isFunctionType() &&
            "CallInst operand is not a function pointer?");
     FRef = CalleeExpr;
-    Ret =
-        llvm::cast<clang::FunctionType>(CalleeExpr->getType()->getPointeeType())
-            ->getReturnType();
+
+    Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
   }
   // Handle argument casts
   if (FunctionType->isFunctionProtoType()) {
@@ -755,10 +757,10 @@ bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
   //   return isTypeCompatible(From, To->getPointeeType());
   // }
 
-  if (From->canDecayToPointerType()) {
+  if (From->isArrayType()) {
     From = Ctx.getDecayedType(From);
   }
-  if (To->canDecayToPointerType()) {
+  if (To->isArrayType()) {
     To = Ctx.getDecayedType(To);
   }
 
@@ -790,6 +792,10 @@ bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
   }
   if (From->isStructureOrClassType() || To->isStructureOrClassType()) {
     return false;
+  }
+  // TODO
+  if (From->isFunctionType() && To->isFunctionType()) {
+    return true;
   }
   From->dump();
   To->dump();
@@ -1659,6 +1665,7 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
         << "Warning: getType for function (call getFunctionType instead!): "
         << F->getName() << "\n";
     Ret = getFunctionType(*F, clang::FunctionProtoType::ExtProtoInfo());
+    Ret = Ctx.getPointerType(Ret);
   } else {
     Ret = visitType(*notdec::getType(Val));
   }
