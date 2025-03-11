@@ -36,10 +36,13 @@
 
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Interface.h"
+#include "notdec-llvm2c/TypeManager.h"
 #include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
 class ExprBuilder;
+
+void demoteSSAFixHT(llvm::Module &M, HTypeResult &Result);
 
 bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
                       clang::QualType To);
@@ -127,10 +130,10 @@ class TypeBuilder {
   llvm::StringSet<> &Names;
 
 public:
-  HighTypes *HT;
+  std::shared_ptr<ClangTypeResult> CT;
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
-              HighTypes *HT)
-      : Ctx(Ctx), VN(&VN), Names(Names), HT(HT) {}
+              std::shared_ptr<ClangTypeResult> CT)
+      : Ctx(Ctx), VN(&VN), Names(Names), CT(CT) {}
   clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
   clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
     return toLValueType(Ctx, getType(Val, User, OpInd));
@@ -329,18 +332,17 @@ public:
 /// Main data structures for structural analysis
 class SAContext {
 protected:
+  llvm::Module &M;
+  // Clang AST should be placed first, so that it is initialized first.
+  std::shared_ptr<clang::ASTUnit> ASTunit;
+  std::shared_ptr<ClangTypeResult> CT;
+
   Options opts;
   std::unique_ptr<llvm::StringSet<>> Names;
-  llvm::Module &M;
   std::map<llvm::Function *, SAFuncContext> funcContexts;
   // Stores the mapping from llvm global object to clang decls for Functions and
   // GlobalVariables.
   std::map<llvm::GlobalObject *, clang::ValueDecl *> globalDecls;
-  // TODO move to TypeBuilder?
-  std::unique_ptr<HighTypes> HT;
-
-  // Clang AST should be placed first, so that it is initialized first.
-  std::unique_ptr<clang::ASTUnit> ASTunit;
 
   TypeBuilder TB;
   ValueNamer VN;
@@ -352,13 +354,11 @@ public:
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
-  SAContext(llvm::Module &mod, Options opts, std::unique_ptr<HighTypes> &HT1)
-      : opts(opts), Names(std::make_unique<llvm::StringSet<>>()), M(mod),
-        HT(std::move(HT1)), ASTunit((HT != nullptr && HT->ASTUnit != nullptr)
-                                        ? std::move(HT->ASTUnit)
-                                        : buildAST("decompiled.c")),
-        TB(getASTContext(), VN, *Names, HT.get()),
-        EB(*this, getASTContext(), TB) {
+  SAContext(llvm::Module &mod, std::shared_ptr<clang::ASTUnit> AST,
+            Options opts, std::shared_ptr<ClangTypeResult> CT)
+      : M(mod), ASTunit(AST), CT(CT), opts(opts),
+        Names(std::make_unique<llvm::StringSet<>>()),
+        TB(getASTContext(), VN, *Names, CT), EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
     // and int width is correct.
   }
@@ -393,8 +393,8 @@ public:
     return globalDecls.at(&GO);
   }
   const Options &getOpts() const { return opts; }
-  auto &getHighTypes() { return *HT; }
-  auto hasHighTypes() { return HT != nullptr; }
+  auto getHighTypes() { return CT; }
+  auto hasHighTypes() { return CT != nullptr; }
 
   static const llvm::StringSet<> Keywords;
   static bool isKeyword(llvm::StringRef Name);

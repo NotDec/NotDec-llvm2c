@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <llvm/ADT/StringRef.h>
@@ -27,77 +28,52 @@ namespace notdec {
 using IndexTy = OffsetRange;
 using OffsetTy = decltype(IndexTy::offset);
 
-struct Range {
-  IndexTy Start;
+struct SimpleRange {
+  OffsetTy Start;
   OffsetTy Size;
 
   bool containsOffset(OffsetTy Offset) const {
-    if (Start.offset == Offset) {
+    if (Start == Offset) {
       return true;
     }
-    return Start.offset <= Offset && Offset < Start.offset + Size;
+    return Start <= Offset && Offset < Start + Size;
   }
 };
 
 struct FieldEntry {
-  Range R;
-  bool isPadding = false;
-  retypd::CGEdge *Edge = nullptr;
+  SimpleRange R;
+  const retypd::CGEdge *Edge = nullptr;
   retypd::CGNode *Target = nullptr;
-  clang::DeclaratorDecl *Decl = nullptr;
+  // clang::DeclaratorDecl *Decl = nullptr;
 };
 
 struct BytesManager {
-  std::vector<std::pair<Range, llvm::StringRef>> Bytes;
+  std::vector<std::pair<SimpleRange, llvm::StringRef>> Bytes;
   static std::shared_ptr<BytesManager> create(llvm::Module &M);
   llvm::StringRef decodeCStr(int64_t Offset);
 };
 
-struct StructInfo {
-  std::vector<FieldEntry> Fields;
-  std::shared_ptr<BytesManager> Bytes;
-  clang::RecordDecl *Decl;
-  // long TotalSize;
-  long getMaxOffset() {
-    long Max = 0;
-    for (auto &Ent : Fields) {
-      Max = std::max(Max, Ent.R.Start.offset + Ent.R.Size);
-    }
-    return Max;
-  }
-
-  void updateFieldSize(size_t Index, OffsetTy Size);
-
-  void addField(const FieldEntry &Ent) {
-    size_t i = 0;
-    for (; i < Fields.size(); i++) {
-      auto &F = Fields[i];
-      if (F.R.Start.offset == Ent.R.Start.offset) {
-        if (F.R.Size > Ent.R.Size) {
-          // keep the larger field
-          break;
-        } else if (F.R.Size < Ent.R.Size) {
-          // replace the field
-          Fields[i] = Ent;
-          break;
-        } else {
-          assert(false && "Field already exists");
-        }
-      }
-      if (F.R.Start.offset > Ent.R.Start.offset) {
-        break;
-      }
-    }
-    Fields.insert(Fields.begin() + i, Ent);
-  }
-
-  void resolveInitialValue();
-  void addPaddings();
-  // clang::RecordDecl * createFieldsInDecl();
-  FieldEntry& derefAt(OffsetTy Offset);
-  bool canDerefAt(OffsetTy Offset);
+struct UnionInfo {
+  SimpleRange R;
+  std::vector<const retypd::CGEdge *> Members;
 };
 
+struct StructInfo {
+  std::vector<FieldEntry> Fields;
+};
+
+struct SimpleTypeInfo {
+  const retypd::CGEdge *Edge;
+};
+
+struct ArrayInfo {
+  const retypd::CGEdge *Edge;
+};
+
+struct TypeInfo {
+  OffsetTy Size = -1;
+  std::variant<SimpleTypeInfo, StructInfo, UnionInfo, ArrayInfo> Info;
+};
 
 } // namespace notdec
 

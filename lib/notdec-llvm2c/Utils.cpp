@@ -38,9 +38,14 @@ void printModule(llvm::Module &M, const char *path) {
 }
 
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
+  auto FileNameStr = FileName.str();
+  if (!FileName.endswith(".c") || !FileName.endswith(".cpp") || !FileName.endswith(".cc")) {
+    FileNameStr += ".c";
+  }
   auto AST = clang::tooling::buildASTFromCodeWithArgs(
-      "", {"-target", "wasm32-unknown-wasi", "-fparse-all-comments"}, FileName, "clang-tool",
-      std::make_shared<clang::PCHContainerOperations>());
+      "", {"-target", "wasm32-unknown-wasi", "-fparse-all-comments"}, FileNameStr,
+      "clang-tool", std::make_shared<clang::PCHContainerOperations>());
+  assert(AST != nullptr && "Failed to build AST");
   auto Int64Ty = AST->getASTContext().getIntTypeForBitwidth(64, true);
   auto Int64Name = clangObjToString(Int64Ty);
   assert(Int64Name != "long" && "long should not be 64 bit in wasm32");

@@ -4,6 +4,7 @@
 
 #include "Interface.h"
 #include "Interface/StructManager.h"
+#include "TypeManager.h"
 #include <clang/AST/DeclVisitor.h>
 #include <llvm/Support/raw_ostream.h>
 #include <optional>
@@ -22,7 +23,7 @@ class DeclPrinter : public DeclVisitor<DeclPrinter> {
   const clang::PrintingPolicy &Policy;
   unsigned Indentation;
   MyPrintingPolicy MyPolicy;
-  std::map<clang::Decl *, std::string> DeclComments;
+  std::shared_ptr<ClangTypeResult> CT;
 
   raw_ostream &Indent() { return Indent(Indentation); }
   raw_ostream &Indent(unsigned Indentation);
@@ -32,9 +33,9 @@ public:
   DeclPrinter(raw_ostream &Out, const PrintingPolicy &Policy,
               const ASTContext &Context, unsigned Indentation = 2,
               MyPrintingPolicy P2 = MyPrintingPolicy(),
-              std::map<clang::Decl *, std::string> DeclComments = {})
+              std::shared_ptr<ClangTypeResult> CT = nullptr)
       : Out(Out), Context(Context), Policy(Policy), Indentation(Indentation),
-        MyPolicy(P2), DeclComments(DeclComments) {}
+        MyPolicy(P2), CT(CT) {}
 
   void printDeclComments(Decl *D);
   void VisitDeclContext(DeclContext *DC, bool Indent = true);

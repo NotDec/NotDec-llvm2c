@@ -6,6 +6,8 @@
 
 namespace notdec::llvm2c {
 
+using namespace clang;
+
 static QualType GetBaseType(QualType T) {
   // FIXME: This should be on the Type class!
   QualType BaseType = T;
@@ -225,8 +227,9 @@ void DeclPrinter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
 }
 
 void DeclPrinter::printDeclComments(Decl *D) {
-  if (DeclComments.find(D) != DeclComments.end()) {
-    Out << " /* " << DeclComments[D] << " */ ";
+  std::string Comment = CT->getComment(D);
+  if (!Comment.empty()) {
+    Out << " /* " << Comment << " */ ";
   }
 }
 

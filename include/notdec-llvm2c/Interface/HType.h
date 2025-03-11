@@ -4,15 +4,161 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
 
-namespace notdec {
+#include "Range.h"
+#include "notdec-llvm2c/Interface/StructManager.h"
 
-class HTypeFactory;
+namespace notdec::ast {
+
+class HTypeContext;
+class TypedefType;
+class RecordType;
+class HType;
+
+/*
+TypedDecl Architecture:
+  - TypedDecl
+    - RecordDecl
+    - UnionDecl
+    - TypeDefDecl
+*/
+class TypedDecl {
+public:
+  enum TypedDeclKind { DK_Record, DK_Union, DK_Typedef };
+
+protected:
+  std::unique_ptr<HType> TypeForDecl;
+  TypedDecl(TypedDeclKind K, std::string Name) : Kind(K), Name(Name) {}
+
+public:
+  TypedDeclKind getKind() const { return Kind; }
+  HType *getTypeForDecl() const { return TypeForDecl.get(); }
+  const std::string &getName() const { return Name; }
+  const std::string &getComment() const { return Comment; }
+  void setComment(const std::string &Comment) { this->Comment = Comment; }
+  clang::Decl *getASTDecl() const { return ASTDecl; }
+  void setASTDecl(clang::Decl *D) { ASTDecl = D; }
+
+  template <typename T> T *getAs() const {
+    if (auto *T1 = llvm::dyn_cast<T>(this)) {
+      return const_cast<T *>(T1);
+    }
+    return nullptr;
+  }
+  void print(llvm::raw_fd_ostream &OS) const;
+
+private:
+  TypedDeclKind Kind;
+  std::string Name;
+  std::string Comment;
+  clang::Decl *ASTDecl = nullptr;
+};
+
+class FieldDecl {
+public:
+  SimpleRange R;
+  HType *Type;
+  std::string Name;
+  std::string Comment;
+  bool isPadding = false;
+  clang::FieldDecl *ASTDecl = nullptr;
+};
+
+class RecordDecl : public TypedDecl {
+protected:
+  // TODO With range info generated previously.
+  std::vector<FieldDecl> Fields;
+  std::shared_ptr<BytesManager> Bytes;
+
+  RecordDecl(std::string Name) : TypedDecl(DK_Record, Name) {}
+  friend class HTypeContext;
+
+public:
+  const std::vector<FieldDecl> &getFields() const { return Fields; }
+  void print(llvm::raw_fd_ostream &OS) const;
+  void setBytesManager(std::shared_ptr<BytesManager> Bytes) {
+    assert(this->Bytes == nullptr && "BytesManager already exists");
+    this->Bytes = Bytes;
+  }
+
+  // long getMaxOffset() {
+  //   long Max = 0;
+  //   for (auto &Ent : Fields) {
+  //     Max = std::max(Max, Ent.R.Start + Ent.R.Size);
+  //   }
+  //   return Max;
+  // }
+
+  // void addField(const FieldEntry &Ent) {
+  //   size_t i = 0;
+  //   for (; i < Fields.size(); i++) {
+  //     auto &F = Fields[i];
+  //     if (F.R.Start == Ent.R.Start) {
+  //       if (F.R.Size > Ent.R.Size) {
+  //         // keep the larger field
+  //         break;
+  //       } else if (F.R.Size < Ent.R.Size) {
+  //         // replace the field
+  //         Fields[i] = Ent;
+  //         break;
+  //       } else {
+  //         assert(false && "Field already exists");
+  //       }
+  //     }
+  //     if (F.R.Start > Ent.R.Start) {
+  //       break;
+  //     }
+  //   }
+  //   Fields.insert(Fields.begin() + i, Ent);
+  // }
+  void resolveInitialValue();
+  void addPaddings();
+
+  static bool classof(const TypedDecl *T) { return T->getKind() == DK_Record; }
+  void addField(FieldDecl Field) { Fields.push_back(Field); }
+
+  static RecordDecl *Create(HTypeContext &Ctx, const std::string &Name);
+};
+
+class UnionDecl : public TypedDecl {
+protected:
+  std::vector<FieldDecl> Members;
+
+  UnionDecl(std::string Name) : TypedDecl(DK_Union, Name) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const TypedDecl *T) { return T->getKind() == DK_Union; }
+  void addMember(FieldDecl Field) { Members.push_back(Field); }
+  void print(llvm::raw_fd_ostream &OS) const;
+
+  static UnionDecl *Create(HTypeContext &Ctx, const std::string &Name);
+};
+
+class TypedefDecl : public TypedDecl {
+protected:
+  HType *Type;
+
+  friend class HTypeContext;
+
+public:
+  TypedefDecl(std::string Name, HType *Type)
+      : TypedDecl(DK_Typedef, Name), Type(Type) {}
+
+  static bool classof(const TypedDecl *T) { return T->getKind() == DK_Typedef; }
+  HType *getType() const { return Type; }
+  void print(llvm::raw_fd_ostream &OS) const;
+
+  static TypedefDecl *Create(HTypeContext &Ctx, const std::string &Name,
+                             HType *Type);
+};
 
 /*
 Type Architecture:
@@ -21,24 +167,27 @@ Type Architecture:
     - FloatingType
     - PointerType
   - FunctionType
-  - CompoundType
-    - StructType
-    - ArrayType
+  - RecordType
+  - UnionType
+  - ArrayType
 */
 class HType {
 public:
   enum HTypeKind {
+    // Begin of SimpleType
     TK_Simple,
     TK_Integer,
     TK_Float,
     TK_Pointer,
-    // end of SimpleType
+    // End of SimpleType
     TK_Function,
 
-    TK_Compound,
-    TK_Struct,
-    TK_Array
-    // end of CompoundType
+    // Begin of CompoundType
+    TK_Record,
+    TK_Union,
+    TK_Array,
+    // End of CompoundType
+    TK_Typedef
   };
 
 protected:
@@ -47,6 +196,27 @@ protected:
 public:
   HTypeKind getKind() const { return Kind; }
   bool isConst() const { return IsConst; }
+
+  bool isPointerType() const { return Kind == TK_Pointer; }
+  bool isRecordType() const { return Kind == TK_Record; }
+  bool isUnionType() const { return Kind == TK_Union; }
+  bool isArrayType() const { return Kind == TK_Array; }
+  bool isFunctionType() const { return Kind == TK_Function; }
+  bool isTypedefType() const { return Kind == TK_Typedef; }
+
+  HType *getPointeeType() const;
+  TypedDecl *getAsRecordOrUnionDecl() const;
+  RecordDecl *getAsRecordDecl() const;
+  UnionDecl *getAsUnionDecl() const;
+  TypedefDecl *getAsTypedefDecl() const;
+  template <typename T> T *getAs() const {
+    if (auto *T1 = llvm::dyn_cast<T>(this)) {
+      return const_cast<T *>(T1);
+    }
+    return nullptr;
+  }
+
+  std::string getAsString() const;
 
 private:
   HTypeKind Kind;
@@ -71,15 +241,16 @@ private:
 // 整数类型
 class IntegerType : public SimpleType {
 protected:
-  bool IsUnsigned;
+  bool IsUnsigned = false;
 
   IntegerType(bool IsConst, unsigned BitSize, bool IsUnsigned)
       : SimpleType(TK_Integer, IsConst, BitSize), IsUnsigned(IsUnsigned) {}
-  friend class HTypeFactory;
+  friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_Integer; }
 
+  bool isSigned() const { return !IsUnsigned; }
   bool isUnsigned() const { return IsUnsigned; }
 };
 
@@ -88,7 +259,7 @@ class FloatingType : public SimpleType {
   FloatingType(bool IsConst, unsigned BitSize)
       : SimpleType(TK_Float, IsConst, BitSize) {}
 
-  friend class HTypeFactory;
+  friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_Float; }
@@ -100,7 +271,7 @@ class PointerType : public SimpleType {
 
   PointerType(bool IsConst, unsigned PointerSize, HType *Pointee)
       : SimpleType(TK_Pointer, PointerSize, IsConst), PointeeType(Pointee) {}
-  friend class HTypeFactory;
+  friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_Pointer; }
@@ -110,70 +281,199 @@ public:
 
 // 函数类型
 class FunctionType : public HType {
-  HType *ReturnType;
+  std::vector<HType *> ReturnType;
   std::vector<HType *> ParamTypes;
-  FunctionType(bool IsConst, HType *Return, const std::vector<HType *> &Params)
+  FunctionType(bool IsConst, const std::vector<HType *> &Return,
+               const std::vector<HType *> &Params)
       : HType(TK_Function, IsConst), ReturnType(Return), ParamTypes(Params) {}
-  friend class HTypeFactory;
+  friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_Function; }
-  HType *getReturnType() const { return ReturnType; }
+  const std::vector<HType *> &getReturnType() const { return ReturnType; }
   const std::vector<HType *> &getParamTypes() const { return ParamTypes; }
 };
 
-/* Factory class implementation */
-class HTypeFactory {
-  using IntegerKey = std::tuple<bool, unsigned, bool>;
-  static std::map<IntegerKey, std::unique_ptr<IntegerType>> integerTypes;
-
-  using FloatKey = std::tuple<bool, unsigned>;
-  static std::map<FloatKey, std::unique_ptr<FloatingType>> floatTypes;
-
-  using PointerKey = std::tuple<bool, unsigned, HType*>;
-  static std::map<PointerKey, std::unique_ptr<PointerType>> pointerTypes;
-
-  using FunctionKey = std::tuple<bool, HType*, std::vector<HType*>>;
-  static std::map<FunctionKey, std::unique_ptr<FunctionType>> functionTypes;
+class RecordType : public HType {
+  RecordDecl *Decl;
+  RecordType(bool IsConst, RecordDecl *Decl)
+      : HType(TK_Record, IsConst), Decl(Decl) {}
+  friend class HTypeContext;
 
 public:
-  static HType* getIntegerType(bool IsConst, unsigned BitSize, bool IsUnsigned) {
+  static bool classof(const HType *T) { return T->getKind() == TK_Record; }
+  RecordDecl *getDecl() const { return Decl; }
+};
+
+class UnionType : public HType {
+  UnionDecl *Decl;
+  UnionType(bool IsConst, UnionDecl *Decl)
+      : HType(TK_Union, IsConst), Decl(Decl) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_Union; }
+  UnionDecl *getDecl() const { return Decl; }
+};
+
+class ArrayType : public HType {
+  HType *ElementType;
+  std::optional<unsigned> NumElements;
+  ArrayType(bool IsConst, HType *Element, std::optional<unsigned> NumElements)
+      : HType(TK_Array, IsConst), ElementType(Element),
+        NumElements(NumElements) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_Array; }
+  HType *getElementType() const { return ElementType; }
+  std::optional<unsigned> getNumElements() const { return NumElements; }
+};
+
+class TypedefType : public HType {
+  TypedefDecl *Decl;
+  TypedefType(bool IsConst, TypedefDecl *Decl)
+      : HType(TK_Typedef, IsConst), Decl(Decl) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_Typedef; }
+  TypedefDecl *getDecl() const { return Decl; }
+};
+
+/* Factory class implementation */
+class HTypeContext {
+
+  // For struct/typedef decls.
+  std::map<std::string, std::unique_ptr<TypedDecl>> Decls;
+  // For struct types.
+  std::vector<std::unique_ptr<HType>> Types;
+  // factory methods
+  using IntegerKey = std::tuple<bool, unsigned, bool>;
+  std::map<IntegerKey, std::unique_ptr<IntegerType>> IntegerTypes;
+
+  using FloatKey = std::tuple<bool, unsigned>;
+  std::map<FloatKey, std::unique_ptr<FloatingType>> FloatTypes;
+
+  using PointerKey = std::tuple<bool, unsigned, HType *>;
+  std::map<PointerKey, std::unique_ptr<PointerType>> PointerTypes;
+
+  using ArrayKey = std::tuple<bool, HType *, std::optional<unsigned>>;
+  std::map<ArrayKey, std::unique_ptr<ArrayType>> ArrayTypes;
+
+  // using FunctionKey = std::tuple<bool, std::vector<HType*>,
+  // std::vector<HType*>>; static std::map<FunctionKey,
+  // std::unique_ptr<FunctionType>> functionTypes;
+
+protected:
+  friend class RecordDecl;
+  friend class UnionDecl;
+  friend class TypedefDecl;
+  void addDecl(const std::string &Name, std::unique_ptr<TypedDecl> Decl) {
+    assert(!Decls.count(Name));
+    Decls[Name] = std::move(Decl);
+  }
+
+public:
+  const std::map<std::string, std::unique_ptr<TypedDecl>> &getDecls() const {
+    return Decls;
+  }
+  TypedDecl *getDecl(const std::string &Name) {
+    auto It = Decls.find(Name);
+    if (It != Decls.end()) {
+      return It->second.get();
+    }
+    return nullptr;
+  }
+
+  // Type factory methods
+  HType *getIntegerType(bool IsConst, unsigned BitSize, bool IsUnsigned) {
     auto key = std::make_tuple(IsConst, BitSize, IsUnsigned);
-    auto& entry = integerTypes[key];
+    auto &entry = IntegerTypes[key];
     if (!entry) {
       entry.reset(new IntegerType(IsConst, BitSize, IsUnsigned));
     }
     return entry.get();
   }
+  HType *getBool() { return getIntegerType(false, 1, true); }
+  HType *getChar() { return getIntegerType(false, 8, false); }
 
-  static HType* getFloatType(bool IsConst, unsigned BitSize) {
+  HType *getFloatType(bool IsConst, unsigned BitSize) {
     auto key = std::make_tuple(IsConst, BitSize);
-    auto& entry = floatTypes[key];
+    auto &entry = FloatTypes[key];
     if (!entry) {
       entry.reset(new FloatingType(IsConst, BitSize));
     }
     return entry.get();
   }
 
-  static HType* getPointerType(bool IsConst, unsigned PtrSize, HType* Pointee) {
+  HType *getPointerType(bool IsConst, unsigned PtrSize, HType *Pointee) {
     auto key = std::make_tuple(IsConst, PtrSize, Pointee);
-    auto& entry = pointerTypes[key];
+    auto &entry = PointerTypes[key];
     if (!entry) {
       entry.reset(new PointerType(IsConst, PtrSize, Pointee));
     }
     return entry.get();
   }
 
-  static HType* getFunctionType(bool IsConst, HType* Ret, const std::vector<HType*>& Params) {
-    auto key = std::make_tuple(IsConst, Ret, Params);
-    auto& entry = functionTypes[key];
+  HType *getArrayType(bool IsConst, HType *Element,
+                      std::optional<unsigned> NumElements) {
+    auto key = std::make_tuple(IsConst, Element, NumElements);
+    auto &entry = ArrayTypes[key];
     if (!entry) {
-      entry.reset(new FunctionType(IsConst, Ret, Params));
+      entry.reset(new ArrayType(IsConst, Element, NumElements));
     }
     return entry.get();
   }
+
+  //  HType* getFunctionType(bool IsConst, const std::vector<HType*>& Ret,
+  // const std::vector<HType*>& Params) {
+  //   auto key = std::make_tuple(IsConst, Ret, Params);
+  //   auto& entry = functionTypes[key];
+  //   if (!entry) {
+  //     entry.reset(new FunctionType(IsConst, Ret, Params));
+  //   }
+  //   return entry.get();
+  // }
+
+  HType *getRecordType(bool IsConst, RecordDecl *Decl) {
+    if (Decl->TypeForDecl) {
+      return Decl->TypeForDecl.get();
+    }
+
+    Decl->TypeForDecl.reset(new RecordType(IsConst, Decl));
+    return Decl->TypeForDecl.get();
+  }
+
+  HType *getUnionType(bool IsConst, UnionDecl *Decl) {
+    if (Decl->TypeForDecl) {
+      return Decl->TypeForDecl.get();
+    }
+
+    Decl->TypeForDecl.reset(new UnionType(IsConst, Decl));
+    return Decl->TypeForDecl.get();
+  }
+
+  HType *getTypedefType(bool IsConst, TypedefDecl *Decl) {
+    if (Decl->Type) {
+      return Decl->Type;
+    }
+
+    Decl->TypeForDecl.reset(new TypedefType(IsConst, Decl));
+    return Decl->Type;
+  }
+
+  void printDecls(llvm::raw_fd_ostream &OS) {
+    for (auto &Ent : Decls) {
+      Ent.second->print(OS);
+      OS << "\n";
+    }
+  }
+
+  // static HTypeContext Instance;
+  // static HTypeContext &getInstance() { return Instance; }
 };
 
-} // namespace notdec
+} // namespace notdec::ast
 
 #endif

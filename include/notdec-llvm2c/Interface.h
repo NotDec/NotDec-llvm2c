@@ -21,8 +21,9 @@
 #include <variant>
 #include <vector>
 
-#include "Interface/StructManager.h"
 #include "Interface/ExtValuePtr.h"
+#include "Interface/StructManager.h"
+#include "notdec-llvm2c/Interface/HType.h"
 
 namespace notdec::llvm2c {
 
@@ -34,21 +35,28 @@ struct Options {
   StructuralAlgorithms algo;
 };
 
-struct HighTypes {
-  std::map<ExtValuePtr, clang::QualType> ValueTypes;
-  std::map<ExtValuePtr, clang::QualType> ValueTypesLowerBound;
-  std::map<clang::Decl *, std::string> DeclComments;
-  std::map<clang::Decl *, StructInfo> StructInfos;
-  std::set<clang::Decl*> AllDecls;
+using notdec::ast::HType;
+// using notdec::ast::HTypeContext;
 
-  std::unique_ptr<clang::ASTUnit> ASTUnit;
-  clang::QualType MemoryType;
+struct HTypeResult {
+  std::shared_ptr<ast::HTypeContext> HTCtx;
+  std::map<ExtValuePtr, HType *> ValueTypes;
+  std::map<ExtValuePtr, HType *> ValueTypesLowerBound;
+  // std::map<clang::Decl *, std::string> DeclComments;
+  // std::map<clang::Decl *, StructInfo> StructInfos;
+  // std::set<clang::Decl*> AllDecls;
 
-  HighTypes() = default;
-  HighTypes(HighTypes &&Other) = default;
-  HighTypes &operator=(HighTypes &&Other) = default;
+  HType *MemoryType;
+  ast::RecordDecl *MemoryDecl;
+
+  HTypeResult() = default;
+  HTypeResult(HTypeResult &&Other) = default;
+  HTypeResult &operator=(HTypeResult &&Other) = default;
   void dump() const {
-    auto PrintMap = [](const auto &Map) -> void {
+    llvm::errs() << "Current Type definitions:\n";
+    HTCtx->printDecls(llvm::errs());
+    llvm::errs() << "\n";
+    auto PrintMap = [](const std::map<ExtValuePtr, HType *> &Map) -> void {
       for (auto &VT : Map) {
         llvm::errs() << "  ";
         if (auto Val = std::get_if<llvm::Value *>(&VT.first)) {
@@ -63,7 +71,7 @@ struct HighTypes {
         } else if (auto IC = std::get_if<UConstant>(&VT.first)) {
           llvm::errs() << *IC->Val << " -> ";
         }
-        llvm::errs() << VT.second.getAsString() << "\n";
+        llvm::errs() << VT.second->getAsString() << "\n";
       }
     };
 
@@ -76,7 +84,7 @@ struct HighTypes {
 
 // main interface
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &os, Options opts,
-                     std::unique_ptr<HighTypes> HT = nullptr);
+                     std::unique_ptr<HTypeResult> HT = nullptr);
 
 void demoteSSA(llvm::Module &M);
 

@@ -1,8 +1,10 @@
 #include <cassert>
+#include <clang/Frontend/ASTUnit.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Use.h>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -50,6 +52,8 @@
 #include <vector>
 
 #include "ASTPrinter/DeclPrinter.h"
+#include "Interface/HType.h"
+#include "TypeManager.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/Goto.h"
@@ -352,10 +356,11 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
           auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
                               ->getValue()
                               .getSExtValue();
-          auto &Ent = StructInfos->at(Decl);
-          if (Ent.canDerefAt(IndexNum)) {
-            TargetField = llvm::cast<FieldDecl>(Ent.derefAt(IndexNum).Decl);
-          }
+          assert(false && "TODO");
+          // auto &Ent = StructInfos->at(Decl);
+          // if (Ent.canDerefAt(IndexNum)) {
+          //   TargetField = llvm::cast<FieldDecl>(Ent.derefAt(IndexNum).Decl);
+          // }
         }
       }
 
@@ -397,14 +402,15 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
 }
 
 clang::Expr *TypeBuilder::tryGepZero(clang::Expr *Val) {
-  if (HT && Val->getType()->isPointerType()) {
+  if (CT && Val->getType()->isPointerType()) {
     auto PointeeTy = Val->getType()->getPointeeType();
     if (PointeeTy->isStructureType() || PointeeTy->isArrayType()) {
+      assert(false && "TODO"); // fix struct infos.
       return handleGEP(Ctx, Val,
                        {nullptr, clang::IntegerLiteral::Create(
                                      Ctx, llvm::APInt(32, 0, false), Ctx.IntTy,
                                      clang::SourceLocation())},
-                       true, &HT->StructInfos);
+                       true, nullptr /*&HT->StructInfos*/);
     }
   }
   return nullptr;
@@ -731,7 +737,7 @@ clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
   }
 
   // try to case using gep
-  if (HT && Val->getType()->isPointerType()) {
+  if (CT && Val->getType()->isPointerType()) {
     clang::Expr *R = Val;
     while ((R = tryGepZero(R))) {
       if (isTypeCompatible(R->getType(), To)) {
@@ -1009,9 +1015,11 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
 }
 
 void CFGBuilder::visitBinaryOperator(llvm::BinaryOperator &I) {
-  auto binop = handleBinary(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), I,
-                            I.getOperand(0), I.getOperand(1),
-                            &FCtx.getSAContext().getHighTypes().StructInfos);
+  auto binop =
+      handleBinary(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), I,
+                   I.getOperand(0), I.getOperand(1),
+                   nullptr // &FCtx.getSAContext().getHighTypes().StructInfos
+      );
   assert(binop != nullptr && "CFGBuilder.visitBinaryOperator: binop is null?");
   addExprOrStmt(I, *binop);
   return;
@@ -1119,88 +1127,79 @@ clang::ASTContext &SAFuncContext::getASTContext() {
   return Ctx.getASTContext();
 }
 
+void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT) {
+  std::map<std::pair<llvm::Function *, std::string>,
+           std::pair<HType *, HType *>>
+      NameMap;
+  auto PointerSize = M.getDataLayout().getPointerSize();
+  // first find all phi and its address. move the type to name map.
+  for (llvm::Function &F : M) {
+    for (llvm::BasicBlock &BB : F) {
+      for (llvm::Instruction &I : BB) {
+        if (llvm::isa<llvm::PHINode>(&I)) {
+          llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
+          HType *T = nullptr;
+          HType *TU = nullptr;
+          if (HT.ValueTypes.count(&PN) == 0) {
+            T = HT.ValueTypes.at(&PN);
+            if (T != nullptr) {
+              T = HT.HTCtx->getPointerType(false, PointerSize, T);
+            }
+          }
+          HT.ValueTypes.erase(&PN);
+          if (HT.ValueTypesLowerBound.count(&PN) > 0) {
+            TU = HT.ValueTypesLowerBound.at(&PN);
+            if (TU != nullptr) {
+              TU = HT.HTCtx->getPointerType(false, PointerSize, TU);
+            }
+            HT.ValueTypesLowerBound.erase(&PN);
+          }
+          auto it =
+              NameMap.insert({{&F, PN.getName().str()}, std::make_pair(T, TU)});
+          assert(it.second && "decompileModule: duplicate phi name?");
+        }
+      }
+    }
+  }
+
+  // demote SSA using reg2mem
+  printModule(M, "llvm2c-before-demotessa.ll");
+  notdec::llvm2c::demoteSSA(M);
+  printModule(M, "llvm2c-after-demotessa.ll");
+
+  // find all phi alloca and phi reload, set type as previous.
+  for (llvm::Function &F : M) {
+    for (llvm::BasicBlock &BB : F) {
+      for (llvm::Instruction &I : BB) {
+        if (llvm::isa<llvm::AllocaInst>(&I)) {
+          llvm::AllocaInst &AI = llvm::cast<llvm::AllocaInst>(I);
+          if (HT.ValueTypes.count(&AI) == 0) {
+            auto N1 = AI.getName().str();
+            assert(N1.rfind(".reg2mem", N1.length() - 8) == (N1.length() - 8) &&
+                   "decompileModule: alloca not from reg2mem?");
+            auto N = N1.substr(0, N1.length() - 8);
+            AI.setName(N);
+            auto Ts = NameMap.at({&F, N});
+            if (Ts.first != nullptr) {
+              auto I1 = HT.ValueTypes.insert({&AI, Ts.first});
+              assert(I1.second && "decompileModule: duplicate alloca name?");
+            }
+            if (Ts.second != nullptr) {
+              auto I2 = HT.ValueTypesLowerBound.insert({&AI, Ts.second});
+              assert(I2.second && "decompileModule: duplicate alloca name?");
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 /// Decompile the module to c and print to a file.
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
-                     std::unique_ptr<HighTypes> HT) {
+                     std::unique_ptr<HTypeResult> HT) {
   if (!opts.noDemoteSSA) {
-    std::map<std::pair<llvm::Function *, std::string>,
-             std::pair<clang::QualType, clang::QualType>>
-        NameMap;
-    // first find all phi and its address. move the type to name map.
-    for (llvm::Function &F : M) {
-      for (llvm::BasicBlock &BB : F) {
-        for (llvm::Instruction &I : BB) {
-          if (llvm::isa<llvm::PHINode>(&I)) {
-            llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
-            clang::QualType T, TU;
-            if (HT->ValueTypes.count(&PN) == 0) {
-              T = HT->ValueTypes.at(&PN);
-              if (!T.isNull()) {
-                T = HT->ASTUnit->getASTContext().getPointerType(T);
-              }
-            }
-            HT->ValueTypes.erase(&PN);
-            if (HT->ValueTypesLowerBound.count(&PN) > 0) {
-              TU = HT->ValueTypesLowerBound.at(&PN);
-              if (!TU.isNull()) {
-                TU = HT->ASTUnit->getASTContext().getPointerType(TU);
-              }
-              HT->ValueTypesLowerBound.erase(&PN);
-            }
-            auto it = NameMap.insert(
-                {{&F, PN.getName().str()}, std::make_pair(T, TU)});
-            assert(it.second && "decompileModule: duplicate phi name?");
-          }
-        }
-      }
-    }
-
-    // demote SSA using reg2mem
-    printModule(M, "llvm2c-before-demotessa.ll");
-    notdec::llvm2c::demoteSSA(M);
-    printModule(M, "llvm2c-after-demotessa.ll");
-
-    // find all phi alloca and phi reload, set type as previous.
-    for (llvm::Function &F : M) {
-      // std::set<llvm::AllocaInst *> AllocaSet;
-      for (llvm::BasicBlock &BB : F) {
-        for (llvm::Instruction &I : BB) {
-          if (llvm::isa<llvm::AllocaInst>(&I)) {
-            llvm::AllocaInst &AI = llvm::cast<llvm::AllocaInst>(I);
-            if (HT->ValueTypes.count(&AI) == 0) {
-              auto N1 = AI.getName().str();
-              assert(N1.rfind(".reg2mem", N1.length() - 8) ==
-                         (N1.length() - 8) &&
-                     "decompileModule: alloca not from reg2mem?");
-              auto N = N1.substr(0, N1.length() - 8);
-              AI.setName(N);
-              auto Ts = NameMap.at({&F, N});
-              if (!Ts.first.isNull()) {
-                auto I1 = HT->ValueTypes.insert({&AI, Ts.first});
-                assert(I1.second && "decompileModule: duplicate alloca name?");
-              }
-              if (!Ts.second.isNull()) {
-                auto I2 = HT->ValueTypesLowerBound.insert({&AI, Ts.second});
-                assert(I2.second && "decompileModule: duplicate alloca name?");
-              }
-
-              // AllocaSet.insert(&AI);
-            }
-          }
-          // Not very necessary? Because we have set the type for alloca.
-          // if (llvm::isa<llvm::LoadInst>(&I)) {
-          //   llvm::LoadInst &LI = llvm::cast<llvm::LoadInst>(I);
-          //   if (llvm::isa<llvm::AllocaInst>(LI.getPointerOperand())) {
-          //     llvm::AllocaInst &AI =
-          //         *llvm::cast<llvm::AllocaInst>(LI.getPointerOperand());
-          //     if (AllocaSet.count(&AI) > 0) {
-
-          //     }
-          //   }
-          // }
-        }
-      }
-    }
+    demoteSSAFixHT(M, *HT);
   }
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
@@ -1208,28 +1207,17 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
   LLVM_DEBUG(llvm::dbgs()
              << "\n========= End IR before structural analysis =========\n");
 
-  // TODO remove debug print:
-  // printModule(M, "current.ll");
-  // if (HT != nullptr) {
-  //   HT->dump();
-  // }
+  // convert to shared ptr for easier usage
+  std::shared_ptr<HTypeResult> HTR = HT == nullptr ? nullptr : std::move(HT);
+  std::shared_ptr<ASTUnit> AST = buildAST(M.getName());
+  std::shared_ptr<ClangTypeResult> CT =
+      HTR == nullptr ? nullptr : std::make_shared<ClangTypeResult>(HTR, AST);
 
-  // Add all decls.
-  if (HT != nullptr) {
-    // Skip memory type for flattening.
-    RecordDecl *MDecl;
-    if (!HT->MemoryType.isNull()) {
-      MDecl = HT->MemoryType->getAs<clang::RecordType>()->getDecl();
-    }
-    for (auto *Decl : HT->AllDecls) {
-      if (Decl == MDecl) {
-        continue;
-      }
-      HT->ASTUnit->getASTContext().getTranslationUnitDecl()->addDecl(Decl);
-    }
+  if (CT != nullptr) {
+    CT->addDecls();
   }
 
-  SAContext Ctx(const_cast<llvm::Module &>(M), opts, HT);
+  SAContext Ctx(const_cast<llvm::Module &>(M), AST, opts, CT);
   Ctx.createDecls();
   for (const llvm::Function &F : M) {
     if (F.isDeclaration()) {
@@ -1243,7 +1231,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
   }
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
                  Ctx.getASTContext(), 0, MyPrintingPolicy(),
-                 Ctx.getHighTypes().DeclComments);
+                 CT);
   auto TD = Ctx.getASTContext().getTranslationUnitDecl();
   DP.Visit(TD);
 }
@@ -1326,7 +1314,7 @@ void SAContext::createDecls() {
 
   // create global variable decls
   for (llvm::GlobalVariable &GV : M.globals()) {
-    if (HT) {
+    if (CT) {
       if (GV.getName() == "__stack_pointer" ||
           GV.getName().startswith("__notdec_mem")) {
         continue;
@@ -1361,33 +1349,7 @@ void SAContext::createDecls() {
     }
   }
   // create Memory decl
-  auto *MDecl = HT->MemoryType->getAs<clang::RecordType>()->getDecl();
-
-  // getASTContext().getTranslationUnitDecl()->addDecl(MDecl);
-  // clang::IdentifierInfo *II = getIdentifierInfo("MEMORY");
-  // Memory = clang::VarDecl::Create(
-  //     getASTContext(), getASTContext().getTranslationUnitDecl(),
-  //     clang::SourceLocation(), clang::SourceLocation(), II, HT->MemoryType,
-  //     nullptr, clang::SC_None);
-  // getASTContext().getTranslationUnitDecl()->addDecl(Memory);
-
-  auto &SI = HT->StructInfos.at(MDecl);
-  // convert struct to vardecl.
-  for (auto &Field : SI.Fields) {
-    FieldDecl *FD = llvm::cast<FieldDecl>(Field.Decl);
-    auto Name = FD->getName();
-    Name.consume_front("field_");
-    clang::IdentifierInfo *II = getIdentifierInfo(("global_" + Name).str());
-    clang::VarDecl *VD = clang::VarDecl::Create(
-        getASTContext(), getASTContext().getTranslationUnitDecl(),
-        clang::SourceLocation(), clang::SourceLocation(), II, FD->getType(),
-        nullptr, clang::SC_None);
-    if (FD->hasInClassInitializer()) {
-      VD->setInit(FD->getInClassInitializer());
-    }
-    getASTContext().getTranslationUnitDecl()->addDecl(VD);
-    Field.Decl = VD;
-  }
+  CT->createMemoryDecls();
 }
 
 void SAFuncContext::run() {
@@ -1571,9 +1533,9 @@ clang::QualType TypeBuilder::visitFunctionType(
   bool InHighType = false;
   if (ActualFunc != nullptr && !ActualFunc->getReturnType()->isVoidTy()) {
     auto RetV = ReturnValue{.Func = ActualFunc};
-    if (HT != nullptr && HT->ValueTypes.count(RetV) > 0) {
+    if (CT != nullptr && CT->hasType(RetV)) {
       InHighType = true;
-      RetTy = HT->ValueTypes[RetV];
+      RetTy = CT->getType(RetV);
     }
   }
 
@@ -1657,8 +1619,8 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
   auto *V = std::get_if<llvm::Value *>(&Val);
 
   llvm::Function *F;
-  if (HT != nullptr && HT->ValueTypes.count(Val) > 0) {
-    Ret = HT->ValueTypes[Val];
+  if (CT != nullptr && CT->hasType(Val)) {
+    Ret = CT->getType(Val);
   } else if ((V != nullptr) &&
              (F = llvm::dyn_cast_or_null<llvm::Function>(*V))) {
     llvm::errs()
@@ -1737,14 +1699,14 @@ clang::Expr *ExprBuilder::getNull(clang::QualType Ty) {
 clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                                         long OpInd, clang::QualType Ty) {
   // Check HighTypes for possible type.
-  auto *HT = TB.HT;
-  if (HT != nullptr) {
+  auto CT = TB.CT;
+  if (CT != nullptr) {
     ExtValuePtr Val = &C;
     llvmValue2ExtVal(Val, User, OpInd);
-    if (HT->ValueTypes.count(Val) > 0) {
-      Ty = HT->ValueTypes[Val];
-    } else if (HT->ValueTypes.count(&C) > 0) {
-      Ty = HT->ValueTypes[&C];
+    if (CT->hasType(Val)) {
+      Ty = CT->getType(Val);
+    } else if (CT->hasType(&C)) {
+      Ty = CT->getType(&C);
     }
   }
   if (llvm::GlobalObject *GO = llvm::dyn_cast<llvm::GlobalObject>(&C)) {
@@ -1813,27 +1775,28 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
       if (Val.isNullValue()) {
         return getNull(Ty);
       }
-      // if type is pointer type, find global variable
-      auto *MDecl =
-          SCtx.getHighTypes().MemoryType->getAs<clang::RecordType>()->getDecl();
-      auto &SI = SCtx.getHighTypes().StructInfos.at(MDecl);
-      auto &Ent = SI.derefAt(Val.getZExtValue());
-      if (SCtx.Memory) {
-        // get member of global memory type.
-        auto *E = clang::MemberExpr::Create(
-            Ctx, makeDeclRefExpr(SCtx.Memory),
-            /*isarrow=*/false, clang::SourceLocation(),
-            clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Ent.Decl,
-            clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
-            clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
-            clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
-        return addrOf(Ctx, E);
-      } else {
-        assert(llvm::isa<VarDecl>(Ent.Decl) &&
-               "Globals in memory is not a VarDecl?");
-        // get global var
-        return addrOf(Ctx, makeDeclRefExpr(Ent.Decl));
-      }
+      assert(false && "TODO");
+      // // if type is pointer type, find global variable
+      // auto *MDecl =
+      //     SCtx.getHighTypes().MemoryType->getAs<clang::RecordType>()->getDecl();
+      // auto &SI = SCtx.getHighTypes().StructInfos.at(MDecl);
+      // auto &Ent = SI.derefAt(Val.getZExtValue());
+      // if (SCtx.Memory) {
+      //   // get member of global memory type.
+      //   auto *E = clang::MemberExpr::Create(
+      //       Ctx, makeDeclRefExpr(SCtx.Memory),
+      //       /*isarrow=*/false, clang::SourceLocation(),
+      //       clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Ent.Decl,
+      //       clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
+      //       clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
+      //       clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
+      //   return addrOf(Ctx, E);
+      // } else {
+      //   assert(llvm::isa<VarDecl>(Ent.Decl) &&
+      //          "Globals in memory is not a VarDecl?");
+      //   // get global var
+      //   return addrOf(Ctx, makeDeclRefExpr(Ent.Decl));
+      // }
     }
     if (!Ty->isIntegerType()) {
       return createCStyleCastExpr(

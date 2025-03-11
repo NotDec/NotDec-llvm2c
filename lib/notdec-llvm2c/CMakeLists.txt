@@ -8,6 +8,7 @@ add_library(notdec-llvm2c SHARED STATIC
     PostOrderCFGView.cpp
     Dominators.cpp
     CompoundConditionBuilder.cpp
+    TypeManager.cpp
     Interface/StructManager.cpp
     Interface/ExtValuePtr.cpp
     Interface/ValueNamer.cpp
