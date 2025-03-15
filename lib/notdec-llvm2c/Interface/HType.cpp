@@ -1,10 +1,15 @@
 #include "notdec-llvm2c/Interface/HType.h"
+#include "Interface/StructManager.h"
 #include <cassert>
 #include <llvm/Support/Casting.h>
 
 namespace notdec::ast {
 
 // HTypeContext HTypeContext::Instance;
+
+bool HType::isCharType() const{
+  return getKind() == TK_Integer && llvm::cast<IntegerType>(this)->getBitSize() == 8; 
+}
 
 TypedefDecl *TypedefDecl::Create(HTypeContext &Ctx, const std::string &Name,
                                  HType *Type) {
@@ -33,10 +38,15 @@ HType *HType::getPointeeType() const {
   return llvm::cast<PointerType>(this)->getPointeeType();
 }
 
+HType *HType::getArrayElementType() const {
+  assert(getKind() == TK_Array);
+  return llvm::cast<ArrayType>(this)->getElementType();
+}
+
 TypedDecl *HType::getAsRecordOrUnionDecl() const {
-  if(auto* R = getAsRecordDecl()) {
+  if (auto *R = getAsRecordDecl()) {
     return R;
-  } else if (auto* U = getAsUnionDecl()) {
+  } else if (auto *U = getAsUnionDecl()) {
     return U;
   }
   return nullptr;
@@ -98,7 +108,8 @@ void TypedDecl::print(llvm::raw_fd_ostream &OS) const {
 void RecordDecl::print(llvm::raw_fd_ostream &OS) const {
   OS << "struct " << getName() << " {\n";
   for (auto &Field : Fields) {
-    OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* " << Field.Comment << " */\n";
+    OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* "
+       << Field.Comment << " */\n";
   }
   OS << "}; /* " << getComment() << " */\n";
 }
@@ -106,118 +117,168 @@ void RecordDecl::print(llvm::raw_fd_ostream &OS) const {
 void UnionDecl::print(llvm::raw_fd_ostream &OS) const {
   OS << "union " << getName() << " {\n";
   for (auto &Field : Members) {
-    OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* " << Field.Comment << " */\n";
+    OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* "
+       << Field.Comment << " */\n";
   }
   OS << "}; /* " << getComment() << " */\n";
 }
 
 void TypedefDecl::print(llvm::raw_fd_ostream &OS) const {
-  OS << "typedef " << Type->getAsString() << " " << getName() << "; /* " << getComment() <<" */\n";
+  OS << "typedef " << Type->getAsString() << " " << getName() << "; /* "
+     << getComment() << " */\n";
+}
+
+const FieldDecl * RecordDecl::getFieldAt(OffsetTy Offset) const{
+  const ast::FieldDecl *Target = nullptr;
+  for (auto &Field : getFields()) {
+    auto End = Field.R.Size + Field.R.Start;
+    if (Field.R.Start == Offset) {
+      Target = &Field;
+      break;
+    }
+    if (Field.R.Start <= Offset && Offset < End) {
+      Target = &Field;
+      break;
+    }
+  }
+  return Target;
+}
+
+void RecordDecl::addPaddings() {
+  // add padding, expand array accordingly
+  for (size_t i = 0; i < Fields.size(); i++) {
+    auto &Ent = Fields[i];
+    if (Ent.isPadding) {
+      continue;
+    }
+    FieldDecl *Next = nullptr;
+    if (i + 1 < Fields.size()) {
+      Next = &Fields[i + 1];
+    }
+
+    FieldDecl *Prev = nullptr;
+    if (i > 0) {
+      Prev = &Fields[i - 1];
+    }
+
+    // if prev is array
+    if (Prev != nullptr && Prev->Type->isArrayType()) {
+      auto ElemTy = Prev->Type->getArrayElementType();
+      auto PrevEnd = Prev->R.Start + Prev->R.Size;
+      // if current ty is char
+      if (ElemTy == Ent.Type && Ent.Type->isCharType()) {
+        if (PrevEnd == Ent.R.Start) {
+          // merge to prev
+          Prev->R.Size += Ent.R.Size;
+          // erase Ent
+          Fields.erase(Fields.begin() + i);
+          i--;
+          continue;
+        }
+      }
+    }
+
+    // only if has next field, add padding or expand array
+    if (i + 1 < Fields.size()) {
+      auto &Next = Fields[i + 1];
+      auto NextStart = Next.R.Start;
+      auto CurEnd = Ent.R.Start + Ent.R.Size;
+      bool isArray = Ent.Type->isArrayType();
+      if (CurEnd < NextStart) {
+        if (isArray) {
+          // expand the array size if possible
+          Ent.R.Size = NextStart - Ent.R.Start;
+          // TODO handle padding using std::floor
+          // auto ElemSize = Ent.Type->getArrayElementType()->getSize();
+        } else {
+          // add padding
+          addField(FieldDecl{
+              .R = SimpleRange{.Start = CurEnd, .Size = NextStart - CurEnd},
+              .isPadding = true});
+        }
+      }
+    }
+  }
 }
 
 // void RecordDecl::addPaddings() {
+// TODO
+
 // for (size_t i = 0; i < Fields.size(); i++) {
-//   auto &Ent = Fields[i];
-//   if (i + 1 < Fields.size()) {
-//     auto &Next = Fields[i + 1];
-//     auto NextOffset = Next.R.Start;
-//     auto CurEnd = Ent.R.Start + Ent.R.Size;
-//     bool isArray = Ent.Decl == nullptr ? false :
-//     Ent.Decl->getType()->isArrayType(); if (CurEnd < NextOffset) {
-//       if (Ent.R.Start.access.size() > 0 || isArray) {
-//         // expand the array size
-//         Ent.R.Size = NextOffset - Ent.R.Start;
-//       } else {
-//         // add padding
-//         Fields.insert(
-//             Fields.begin() + i + 1,
-//             FieldEntry{.R = Range{.Start = IndexTy{.offset = CurEnd},
-//                                   .Size = NextOffset - CurEnd},
-//                        .isPadding = true});
+
+//   // add padding, expand array accordingly
+//   FieldEntry *Next = nullptr;
+//   if (i + 1 < Info.Fields.size()) {
+//     Next = &Info.Fields[i + 1];
+//   }
+
+//   // expand the array size to fill up the padding
+//   auto ArraySize = Ent.R.Size;
+//   // expand the array size to fill up the padding
+//   // set to Ent.R.Size later if this is really an array.
+//   if (Next != nullptr && Ent.R.Start + Ent.R.Size < Next->R.Start) {
+//     ArraySize = Next->R.Start - Ent.R.Start;
+//   }
+
+//   auto Count = ArraySize / Ent.R.Start.access.at(0).Size;
+//   // create array type
+//   Ty = Ctx.getConstantArrayType(
+//       Ty, llvm::APInt(32, Count), nullptr,
+//       Count == 0 ? clang::ArrayType::Star : clang::ArrayType::Normal, 0);
+
+//   // set to Ent.R.Size if this is really an array.
+//   if (Ty->isArrayType()) {
+//     Ent.R.Size = ArraySize;
+//   }
+
+//   // if prev is array
+//   if (Prev != nullptr && Prev->Decl != nullptr &&
+//       Prev->Decl->getType()->isArrayType()) {
+//     auto ElemTy = Prev->Decl->getType()->getArrayElementTypeNoTypeQual();
+//     // if current ty is char
+//     if (ElemTy == Ty.getTypePtr() && Ty->isCharType()) {
+//       if (Prev->R.Start + Prev->R.Size == Ent.R.Start) {
+//         // merge to prev
+//         Prev->R.Size += Ent.R.Size;
+//         // Update array Size
+//         Prev->Decl->setType(Ctx.getConstantArrayType(
+//             Ty, llvm::APInt(32, Prev->R.Size),
+//             clang::IntegerLiteral::Create(Ctx, llvm::APInt(32,
+//             Prev->R.Size),
+//                                           Ctx.IntTy,
+//                                           clang::SourceLocation()),
+//             clang::ArrayType::Normal, 0));
+//         Info.Fields.erase(Info.Fields.begin() + i);
+//         i--;
+//         continue;
 //       }
+//       // merge to prev
+//     }
+//   }
+
+//   // add padding?
+//   auto End = Ent.R.Start + Ent.R.Size;
+//   if (Next != nullptr && End < Next->R.Start) {
+//     auto PaddingSize = Next->R.Start - End;
+//     if (PaddingSize != 0) {
+//       Ty = Ctx.getConstantArrayType(
+//           Ctx.CharTy, llvm::APInt(32, PaddingSize),
+//           clang::IntegerLiteral::Create(Ctx, llvm::APInt(32, PaddingSize),
+//                                         Ctx.IntTy,
+//                                         clang::SourceLocation()),
+//           clang::ArrayType::Normal, 0);
+
+//       auto *FII = &Ctx.Idents.get(ValueNamer::getName("padding_"));
+//       clang::FieldDecl *Field = clang::FieldDecl::Create(
+//           Ctx, Decl, clang::SourceLocation(), clang::SourceLocation(), FII,
+//           Ty, nullptr, nullptr, false, clang::ICIS_CopyInit);
+
+//       Parent.DeclComments[Field] = "at offset: " + std::to_string(End);
+//       Decl->addDecl(Field);
 //     }
 //   }
 // }
 // }
-
-void RecordDecl::addPaddings() {
-  // TODO
-
-  // for (size_t i = 0; i < Fields.size(); i++) {
-
-  //   // add padding, expand array accordingly
-  //   FieldEntry *Next = nullptr;
-  //   if (i + 1 < Info.Fields.size()) {
-  //     Next = &Info.Fields[i + 1];
-  //   }
-
-  //   // expand the array size to fill up the padding
-  //   auto ArraySize = Ent.R.Size;
-  //   // expand the array size to fill up the padding
-  //   // set to Ent.R.Size later if this is really an array.
-  //   if (Next != nullptr && Ent.R.Start + Ent.R.Size < Next->R.Start) {
-  //     ArraySize = Next->R.Start - Ent.R.Start;
-  //   }
-
-  //   auto Count = ArraySize / Ent.R.Start.access.at(0).Size;
-  //   // create array type
-  //   Ty = Ctx.getConstantArrayType(
-  //       Ty, llvm::APInt(32, Count), nullptr,
-  //       Count == 0 ? clang::ArrayType::Star : clang::ArrayType::Normal, 0);
-
-  //   // set to Ent.R.Size if this is really an array.
-  //   if (Ty->isArrayType()) {
-  //     Ent.R.Size = ArraySize;
-  //   }
-
-  //   // if prev is array
-  //   if (Prev != nullptr && Prev->Decl != nullptr &&
-  //       Prev->Decl->getType()->isArrayType()) {
-  //     auto ElemTy = Prev->Decl->getType()->getArrayElementTypeNoTypeQual();
-  //     // if current ty is char
-  //     if (ElemTy == Ty.getTypePtr() && Ty->isCharType()) {
-  //       if (Prev->R.Start + Prev->R.Size == Ent.R.Start) {
-  //         // merge to prev
-  //         Prev->R.Size += Ent.R.Size;
-  //         // Update array Size
-  //         Prev->Decl->setType(Ctx.getConstantArrayType(
-  //             Ty, llvm::APInt(32, Prev->R.Size),
-  //             clang::IntegerLiteral::Create(Ctx, llvm::APInt(32,
-  //             Prev->R.Size),
-  //                                           Ctx.IntTy,
-  //                                           clang::SourceLocation()),
-  //             clang::ArrayType::Normal, 0));
-  //         Info.Fields.erase(Info.Fields.begin() + i);
-  //         i--;
-  //         continue;
-  //       }
-  //       // merge to prev
-  //     }
-  //   }
-
-  //   // add padding?
-  //   auto End = Ent.R.Start + Ent.R.Size;
-  //   if (Next != nullptr && End < Next->R.Start) {
-  //     auto PaddingSize = Next->R.Start - End;
-  //     if (PaddingSize != 0) {
-  //       Ty = Ctx.getConstantArrayType(
-  //           Ctx.CharTy, llvm::APInt(32, PaddingSize),
-  //           clang::IntegerLiteral::Create(Ctx, llvm::APInt(32, PaddingSize),
-  //                                         Ctx.IntTy,
-  //                                         clang::SourceLocation()),
-  //           clang::ArrayType::Normal, 0);
-
-  //       auto *FII = &Ctx.Idents.get(ValueNamer::getName("padding_"));
-  //       clang::FieldDecl *Field = clang::FieldDecl::Create(
-  //           Ctx, Decl, clang::SourceLocation(), clang::SourceLocation(), FII,
-  //           Ty, nullptr, nullptr, false, clang::ICIS_CopyInit);
-
-  //       Parent.DeclComments[Field] = "at offset: " + std::to_string(End);
-  //       Decl->addDecl(Field);
-  //     }
-  //   }
-  // }
-}
 
 void RecordDecl::resolveInitialValue() {
   // for (size_t i = 0; i < Fields.size(); i++) {

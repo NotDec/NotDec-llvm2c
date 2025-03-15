@@ -6,6 +6,7 @@
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/Type.h>
 #include <clang/Frontend/ASTUnit.h>
+#include <cstdint>
 
 #include "Interface.h"
 #include "Interface/HType.h"
@@ -17,24 +18,28 @@ class ClangTypeResult {
   std::shared_ptr<HTypeResult> Result;
   std::shared_ptr<clang::ASTUnit> AST;
   clang::ASTContext &Ctx;
-  bool expandMemory = true;
   bool expandStack = false;
   bool createNonFreeStandingStruct = false;
+  
+  // if not expandMemory, MemoryVar stores memory var with ElaboratedType;
+  // if expandMemory, find globals in ast::FieldDecl's ASTDecl.
+  bool expandMemory = true;
+  clang::VarDecl* MemoryVar = nullptr;
 
   std::map<HType *, clang::QualType> TypeMap;
+  // map from clang struct/union/typedef decl to ast decl.
   std::map<clang::Decl *, ast::TypedDecl *> DeclMap;
-  std::map<clang::FieldDecl *, ast::FieldDecl *> FieldDeclMap;
+  // map from field decl to ast field decl. For globals, may map VarDecl to ast FieldDecl
+  std::map<clang::Decl *, const ast::FieldDecl *> FieldDeclMap;
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
   clang::QualType convertType(HType *T);
-
 
   // map from struct/union decl to its users
   std::map<ast::TypedDecl *, std::set<ast::TypedDecl *>> DeclUsage;
   std::map<ast::TypedDecl *, std::set<ExtValuePtr>> ValueUsage;
 public:
   void calcUseRelation();
-
 
 public:
   ClangTypeResult(std::shared_ptr<HTypeResult> Result,
@@ -44,7 +49,11 @@ public:
   bool hasType(ExtValuePtr Val, bool isUpperBound = false);
   clang::QualType getType(ExtValuePtr Val, bool isUpperBound = false);
 
-  void addDecls();
+  clang::RecordDecl *convertUnion(ast::UnionDecl *UD);
+  clang::RecordDecl* convertStruct(ast::RecordDecl *RD);
+
+  void declareDecls();
+  void defineDecls();
   // returns true if this type can be embedded.
   bool isNonFreeStanding(ast::TypedDecl *Decl) {
     if (Decl == Result->MemoryDecl) {
@@ -61,6 +70,12 @@ public:
   }
   void createMemoryDecls();
 
+  clang::Expr *handlePtrAdd(clang::Expr *Val, clang::Expr *Index);
+  // If the add cannot be handled properly, return nullptr.
+  clang::Expr *tryHandlePtrAdd(clang::Expr *Val, clang::Expr *Index);
+  std::vector<clang::Expr *> tryAddZero(clang::Expr *Val);
+  clang::Expr* getGlobal(int64_t Offset);
+
   std::string getComment(clang::Decl *Decl) {
     auto It = DeclMap.find(Decl);
     if (It != DeclMap.end()) {
@@ -69,6 +84,8 @@ public:
     return "";
   }
 };
+
+std::optional<int64_t> getIntValue(clang::Expr *Index);
 
 } // namespace notdec::llvm2c
 

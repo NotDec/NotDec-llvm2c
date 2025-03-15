@@ -128,8 +128,8 @@ class TypeBuilder {
   // Map from llvm struct type to clang RecordDecl type.
   std::map<llvm::Type *, clang::Decl *> typeMap;
   llvm::StringSet<> &Names;
-
-public:
+  
+  public:
   std::shared_ptr<ClangTypeResult> CT;
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
               std::shared_ptr<ClangTypeResult> CT)
@@ -144,7 +144,9 @@ public:
   clang::QualType visitStructType(llvm::StructType &Ty);
   clang::QualType visitType(llvm::Type &Ty);
 
-  clang::Expr *tryGepZero(clang::Expr *Val);
+  std::vector<clang::Expr *> tryGepZero(clang::Expr *Val);
+  clang::Expr *ptrAdd(clang::Expr *Val, clang::Expr *Index);
+
   clang::Expr *checkCast(clang::Expr *Val, clang::QualType To);
   bool isTypeCompatible(clang::QualType From, clang::QualType To) {
     return notdec::llvm2c::isTypeCompatible(Ctx, From, To);

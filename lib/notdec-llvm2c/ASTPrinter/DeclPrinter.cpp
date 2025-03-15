@@ -359,7 +359,7 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
     Proto += "(";
     if (FT) {
       llvm::raw_string_ostream POut(Proto);
-      DeclPrinter ParamPrinter(POut, SubPolicy, Context, Indentation);
+      DeclPrinter ParamPrinter(POut, SubPolicy, Context, Indentation, MyPolicy, CT);
       for (unsigned i = 0, e = D->getNumParams(); i != e; ++i) {
         if (i)
           POut << ", ";

@@ -5,6 +5,10 @@
 #include <sstream>
 namespace notdec {
 
+bool inline startswith(std::string str, const char *prefix) {
+  return str.rfind(prefix, 0) == 0;
+}
+
 inline bool hasUser(const llvm::Value *Val, const llvm::User *User) {
   for (auto U : Val->users()) {
     if (U == User) {

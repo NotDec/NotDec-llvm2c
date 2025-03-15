@@ -68,7 +68,9 @@ public:
   std::string Name;
   std::string Comment;
   bool isPadding = false;
-  clang::FieldDecl *ASTDecl = nullptr;
+  clang::Decl *ASTDecl = nullptr;
+
+  void setASTDecl(clang::Decl *D) const { const_cast<FieldDecl*>(this)->ASTDecl = D; }
 };
 
 class RecordDecl : public TypedDecl {
@@ -82,6 +84,7 @@ protected:
 
 public:
   const std::vector<FieldDecl> &getFields() const { return Fields; }
+  const ast::FieldDecl * getFieldAt(OffsetTy Off) const;
   void print(llvm::raw_fd_ostream &OS) const;
   void setBytesManager(std::shared_ptr<BytesManager> Bytes) {
     assert(this->Bytes == nullptr && "BytesManager already exists");
@@ -96,33 +99,46 @@ public:
   //   return Max;
   // }
 
-  // void addField(const FieldEntry &Ent) {
-  //   size_t i = 0;
-  //   for (; i < Fields.size(); i++) {
-  //     auto &F = Fields[i];
-  //     if (F.R.Start == Ent.R.Start) {
-  //       if (F.R.Size > Ent.R.Size) {
-  //         // keep the larger field
-  //         break;
-  //       } else if (F.R.Size < Ent.R.Size) {
-  //         // replace the field
-  //         Fields[i] = Ent;
-  //         break;
-  //       } else {
-  //         assert(false && "Field already exists");
-  //       }
-  //     }
-  //     if (F.R.Start > Ent.R.Start) {
-  //       break;
-  //     }
-  //   }
-  //   Fields.insert(Fields.begin() + i, Ent);
-  // }
+
   void resolveInitialValue();
   void addPaddings();
 
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Record; }
-  void addField(FieldDecl Field) { Fields.push_back(Field); }
+  // void addField(FieldDecl Field) { Fields.push_back(Field); }
+  void addField(FieldDecl Ent) {
+    if (Ent.R.Size == 0) {
+      assert(false && "TODO support zero sized field?");
+    }
+    if (Fields.empty()) {
+      Fields.push_back(Ent);
+      return;
+    }
+    auto EntStart = Ent.R.Start;
+    auto EntEnd = EntStart + Ent.R.Size;
+    // check insert begin
+    if (EntEnd <= Fields.at(0).R.Start) {
+      Fields.insert(Fields.begin(), Ent);
+      return;
+    }
+    for (size_t i = 0; i < Fields.size(); i++) {
+      auto &F = Fields[i];
+      auto CurStart = F.R.Start;
+      auto CurEnd = CurStart + F.R.Size;
+      auto NextStart = std::numeric_limits<decltype(CurEnd)>::max();
+      if (i + 1 < Fields.size()) {
+        NextStart = Fields[i + 1].R.Start;
+      }
+      if (CurEnd <= EntStart && EntEnd <= NextStart) {
+        Fields.insert(Fields.begin() + i + 1, Ent);
+        return;
+      }
+      // check for overlap
+      if (CurStart <= EntStart && EntStart < CurEnd) {
+        assert(false && "Field cannot overlap!");
+      }
+    }
+    assert(false && "Field not inserted?");
+  }
 
   static RecordDecl *Create(HTypeContext &Ctx, const std::string &Name);
 };
@@ -136,6 +152,7 @@ protected:
 
 public:
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Union; }
+  const std::vector<FieldDecl> &getMembers() const { return Members; }
   void addMember(FieldDecl Field) { Members.push_back(Field); }
   void print(llvm::raw_fd_ostream &OS) const;
 
@@ -203,8 +220,10 @@ public:
   bool isArrayType() const { return Kind == TK_Array; }
   bool isFunctionType() const { return Kind == TK_Function; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
+  bool isCharType() const;
 
   HType *getPointeeType() const;
+  HType* getArrayElementType() const;
   TypedDecl *getAsRecordOrUnionDecl() const;
   RecordDecl *getAsRecordDecl() const;
   UnionDecl *getAsUnionDecl() const;

@@ -39,12 +39,14 @@ void printModule(llvm::Module &M, const char *path) {
 
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
   auto FileNameStr = FileName.str();
-  if (!FileName.endswith(".c") || !FileName.endswith(".cpp") || !FileName.endswith(".cc")) {
+  if (!FileName.endswith(".c") || !FileName.endswith(".cpp") ||
+      !FileName.endswith(".cc")) {
     FileNameStr += ".c";
   }
   auto AST = clang::tooling::buildASTFromCodeWithArgs(
-      "", {"-target", "wasm32-unknown-wasi", "-fparse-all-comments"}, FileNameStr,
-      "clang-tool", std::make_shared<clang::PCHContainerOperations>());
+      "", {"-target", "wasm32-unknown-wasi", "-fparse-all-comments"},
+      FileNameStr, "clang-tool",
+      std::make_shared<clang::PCHContainerOperations>());
   assert(AST != nullptr && "Failed to build AST");
   auto Int64Ty = AST->getASTContext().getIntTypeForBitwidth(64, true);
   auto Int64Name = clangObjToString(Int64Ty);
@@ -394,6 +396,87 @@ std::string llvmObjToString(const llvm::Module *t) {
   else
     ss << "nullptr";
   return ss.str();
+}
+
+clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
+                              clang::FieldDecl *Field) {
+  // check if the val is deref, if so, then remove it and use arrow expr.
+  bool useArrow = false;
+  if (auto DerefInner = getDerefInner(Base)) {
+    Base = DerefInner;
+    useArrow = true;
+  }
+  return clang::MemberExpr::Create(
+      Ctx, Base, useArrow, clang::SourceLocation(),
+      clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Field,
+      clang::DeclAccessPair::make(Field, Field->getAccess()),
+      clang::DeclarationNameInfo(), nullptr, Field->getType(), clang::VK_LValue,
+      clang::OK_Ordinary, clang::NOUR_None);
+}
+
+clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
+  // eliminate addrOf + deref
+  clang::Expr *ENoCast = E;
+  if (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
+    ENoCast = Cast->getSubExpr();
+  }
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_Deref) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
+  }
+  // eliminate addrOf + array subscript 0.
+  if (auto ArraySub = llvm::dyn_cast<clang::ArraySubscriptExpr>(E)) {
+    if (auto Index =
+            llvm::dyn_cast<clang::IntegerLiteral>(ArraySub->getIdx())) {
+      if (Index->getValue() == 0) {
+        return llvm::cast<clang::ArraySubscriptExpr>(E)->getBase();
+      }
+    }
+  }
+  return createUnaryOperator(Ctx, E, clang::UO_AddrOf,
+                             Ctx.getPointerType(E->getType()),
+                             clang::VK_LValue);
+}
+
+clang::Expr *getDerefInner(clang::Expr *E) {
+  // eliminate deref + addrOf
+  clang::Expr *ENoCast = E;
+  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
+    ENoCast = Cast->getSubExpr();
+  }
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_AddrOf) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
+  }
+  return nullptr;
+}
+
+clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
+  // eliminate deref + addrOf
+  clang::Expr *ENoCast = E;
+  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
+    ENoCast = Cast->getSubExpr();
+  }
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_AddrOf) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
+  }
+  clang::QualType Ty = E->getType();
+  if (Ty->isPointerType()) {
+    Ty = Ty->getPointeeType();
+  } else if (Ty->isArrayType()) {
+    Ty = Ty->castAsArrayTypeUnsafe()->getElementType();
+  } else {
+    llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
+                 << "ERROR: CFGBuilder.deref: unexpected type: ";
+    Ty.dump();
+    llvm::errs() << "\n";
+    // std::abort();
+  }
+  return createUnaryOperator(Ctx, E, clang::UO_Deref, Ty, clang::VK_LValue);
 }
 
 } // namespace notdec::llvm2c

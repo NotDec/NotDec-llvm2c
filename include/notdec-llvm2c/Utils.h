@@ -268,6 +268,13 @@ inline clang::CStyleCastExpr *createCStyleCastExpr(clang::ASTContext &Ctx,
       clang::SourceLocation(), clang::SourceLocation());
 }
 
+clang::Expr *getDerefInner(clang::Expr *E);
+clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E);
+
+clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E);
+clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
+                              clang::FieldDecl *Field);
+
 // dump LLVM object to string
 template <typename T> std::string llvmObjToString(const T *t) {
   std::string str;

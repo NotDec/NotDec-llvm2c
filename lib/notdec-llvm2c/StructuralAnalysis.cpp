@@ -202,57 +202,6 @@ bool isMustViaBlock(llvm::BasicBlock &bb) {
   return false;
 }
 
-clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
-  // eliminate addrOf + deref
-  clang::Expr *ENoCast = E;
-  if (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
-    ENoCast = Cast->getSubExpr();
-  }
-  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
-      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
-          clang::UO_Deref) {
-    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
-  }
-  // eliminate addrOf + array subscript 0.
-  if (auto ArraySub = llvm::dyn_cast<clang::ArraySubscriptExpr>(E)) {
-    if (auto Index =
-            llvm::dyn_cast<clang::IntegerLiteral>(ArraySub->getIdx())) {
-      if (Index->getValue() == 0) {
-        return llvm::cast<clang::ArraySubscriptExpr>(E)->getBase();
-      }
-    }
-  }
-  return createUnaryOperator(Ctx, E, clang::UO_AddrOf,
-                             Ctx.getPointerType(E->getType()),
-                             clang::VK_LValue);
-}
-
-clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
-  // eliminate deref + addrOf
-  clang::Expr *ENoCast = E;
-  if (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
-    ENoCast = Cast->getSubExpr();
-  }
-  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
-      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
-          clang::UO_AddrOf) {
-    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
-  }
-  clang::QualType Ty = E->getType();
-  if (Ty->isPointerType()) {
-    Ty = Ty->getPointeeType();
-  } else if (Ty->isArrayType()) {
-    Ty = Ty->castAsArrayTypeUnsafe()->getElementType();
-  } else {
-    llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                 << "ERROR: CFGBuilder.deref: unexpected type: ";
-    Ty.dump();
-    llvm::errs() << "\n";
-    // std::abort();
-  }
-  return createUnaryOperator(Ctx, E, clang::UO_Deref, Ty, clang::VK_LValue);
-}
-
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   // check if the instruction is in the entry block.
   if (isMustViaBlock(*I.getParent())) {
@@ -282,10 +231,8 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   }
 }
 
-// isOffset: the indexes is byte offset or field index.
 clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
-                       llvm::ArrayRef<clang::Expr *> Indexes, bool isByteOffset,
-                       std::map<clang::Decl *, StructInfo> *StructInfos) {
+                       llvm::ArrayRef<clang::Expr *> Indexes) {
   const clang::Type *Ty = Val->getType().getTypePtr();
   for (unsigned i = 0; i < Indexes.size(); i++) {
     clang::Expr *Index = Indexes[i];
@@ -297,35 +244,9 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
         Val = deref(Ctx, Val);
         continue;
       }
-      if (!isByteOffset) {
-        Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add,
-                                   Val->getType(), clang::VK_LValue);
-        Val = deref(Ctx, Val);
-      } else {
-        // divide the offset by the size of the type.
-        auto Size = Ctx.getTypeSizeInChars(Ty).getQuantity();
-        // if it is constant, then we can pre-calculate the offset.
-        if (auto IntegerLiteral =
-                llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
-          auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
-                              ->getValue()
-                              .getSExtValue();
-          if (IndexNum % Size == 0) {
-            Index = clang::IntegerLiteral::Create(
-                Ctx, llvm::APInt(32, IndexNum / Size, false), Ctx.IntTy,
-                clang::SourceLocation());
-            Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add,
-                                       Val->getType(), clang::VK_LValue);
-            Val = deref(Ctx, Val);
-          } else {
-            // fall back to byte-sized offset add.
-            assert(false && "TODO: unimplemented");
-          }
-        } else {
-          // Or we need to create division of sizeof(Ty).
-          assert(false && "TODO: unimplemented");
-        }
-      }
+      Val = createBinaryOperator(Ctx, Val, Index, clang::BO_Add, Val->getType(),
+                                 clang::VK_LValue);
+      Val = deref(Ctx, Val);
     } else if (auto ArrayTy = Ty->getAsArrayTypeUnsafe()) {
       // 2. array indexing
       Ty = ArrayTy->getElementType().getTypePtr();
@@ -336,33 +257,14 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
       // 3. field reference
       auto Decl = RecordTy->getDecl();
       clang::FieldDecl *TargetField = nullptr;
-      // if index is from gep instruction
-      if (!isByteOffset) {
-        auto Field = Decl->field_begin();
-        assert(llvm::isa<clang::IntegerLiteral>(Index) &&
-               "Gep index is not constant int!");
-        auto IndexNum =
-            llvm::cast<clang::IntegerLiteral>(Index)->getValue().getZExtValue();
-        std::advance(Field, IndexNum);
-        TargetField = *Field;
-      } else {
-        // TODO find the field at the offset.
-        // look for the offset annotation
-        if (auto Cast = llvm::dyn_cast<clang::CastExpr>(Index)) {
-          Index = Cast->getSubExpr();
-        }
-        if (auto IntegerLiteral =
-                llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
-          auto IndexNum = llvm::cast<clang::IntegerLiteral>(Index)
-                              ->getValue()
-                              .getSExtValue();
-          assert(false && "TODO");
-          // auto &Ent = StructInfos->at(Decl);
-          // if (Ent.canDerefAt(IndexNum)) {
-          //   TargetField = llvm::cast<FieldDecl>(Ent.derefAt(IndexNum).Decl);
-          // }
-        }
-      }
+
+      auto Field = Decl->field_begin();
+      assert(llvm::isa<clang::IntegerLiteral>(Index) &&
+             "Gep index is not constant int!");
+      auto IndexNum =
+          llvm::cast<clang::IntegerLiteral>(Index)->getValue().getZExtValue();
+      std::advance(Field, IndexNum);
+      TargetField = *Field;
 
       if (TargetField == nullptr) {
         // Check if the offset is contained within a field.
@@ -373,21 +275,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
         // assert(false);
         return nullptr;
       }
-      // check if the val is deref, if so, then remove it and use arrow expr.
-      bool useArrow = false;
-      if (llvm::isa<clang::UnaryOperator>(Val) &&
-          llvm::cast<clang::UnaryOperator>(Val)->getOpcode() ==
-              clang::UO_Deref) {
-        Val = llvm::cast<clang::UnaryOperator>(Val)->getSubExpr();
-        useArrow = true;
-      }
-      Ty = TargetField->getType().getTypePtr();
-      Val = clang::MemberExpr::Create(
-          Ctx, Val, useArrow, clang::SourceLocation(),
-          clang::NestedNameSpecifierLoc(), clang::SourceLocation(), TargetField,
-          clang::DeclAccessPair::make(TargetField, TargetField->getAccess()),
-          clang::DeclarationNameInfo(), nullptr, TargetField->getType(),
-          clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
+      Val = createMemberExpr(Ctx, Val, TargetField);
     } else {
       llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                    << "UnImplemented: handleGEP cannot "
@@ -401,19 +289,12 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
   return addrOf(Ctx, Val);
 }
 
-clang::Expr *TypeBuilder::tryGepZero(clang::Expr *Val) {
-  if (CT && Val->getType()->isPointerType()) {
-    auto PointeeTy = Val->getType()->getPointeeType();
-    if (PointeeTy->isStructureType() || PointeeTy->isArrayType()) {
-      assert(false && "TODO"); // fix struct infos.
-      return handleGEP(Ctx, Val,
-                       {nullptr, clang::IntegerLiteral::Create(
-                                     Ctx, llvm::APInt(32, 0, false), Ctx.IntTy,
-                                     clang::SourceLocation())},
-                       true, nullptr /*&HT->StructInfos*/);
-    }
-  }
-  return nullptr;
+clang::Expr *TypeBuilder::ptrAdd(clang::Expr *Val, clang::Expr *Index) {
+  return CT->handlePtrAdd(Val, Index);
+}
+
+std::vector<clang::Expr *> TypeBuilder::tryGepZero(clang::Expr *Val) {
+  return CT->tryAddZero(Val);
 }
 
 clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
@@ -425,7 +306,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
     clang::Expr *Index = EB.visitValue(LIndex, &I, i + 1);
     Indices.push_back(Index);
   }
-  return handleGEP(Ctx, Val, Indices, false, nullptr);
+  return handleGEP(Ctx, Val, Indices);
 }
 
 void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
@@ -739,7 +620,7 @@ clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
   // try to case using gep
   if (CT && Val->getType()->isPointerType()) {
     clang::Expr *R = Val;
-    while ((R = tryGepZero(R))) {
+    for (auto R : tryGepZero(R)) {
       if (isTypeCompatible(R->getType(), To)) {
         return R;
       }
@@ -985,7 +866,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
     }
     if ((lhs->getType()->isPointerType() || lhs->getType()->isArrayType()) &&
         rhs->getType()->isIntegerType()) {
-      return handleGEP(Ctx, lhs, {nullptr, rhs}, true, StructInfos);
+      return TB.ptrAdd(lhs, rhs);
     }
   }
 
@@ -1214,11 +1095,16 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
       HTR == nullptr ? nullptr : std::make_shared<ClangTypeResult>(HTR, AST);
 
   if (CT != nullptr) {
-    CT->addDecls();
+    CT->declareDecls();
   }
 
   SAContext Ctx(const_cast<llvm::Module &>(M), AST, opts, CT);
   Ctx.createDecls();
+
+  if (CT != nullptr) {
+    CT->defineDecls();
+  }
+
   for (const llvm::Function &F : M) {
     if (F.isDeclaration()) {
       continue;
@@ -1230,8 +1116,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
-                 Ctx.getASTContext(), 0, MyPrintingPolicy(),
-                 CT);
+                 Ctx.getASTContext(), 0, MyPrintingPolicy(), CT);
   auto TD = Ctx.getASTContext().getTranslationUnitDecl();
   DP.Visit(TD);
 }
@@ -1348,8 +1233,6 @@ void SAContext::createDecls() {
           EB.visitInitializer(GV.getInitializer(), &GV, 0, VD->getType()));
     }
   }
-  // create Memory decl
-  CT->createMemoryDecls();
 }
 
 void SAFuncContext::run() {
@@ -1775,28 +1658,15 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
       if (Val.isNullValue()) {
         return getNull(Ty);
       }
-      assert(false && "TODO");
-      // // if type is pointer type, find global variable
-      // auto *MDecl =
-      //     SCtx.getHighTypes().MemoryType->getAs<clang::RecordType>()->getDecl();
-      // auto &SI = SCtx.getHighTypes().StructInfos.at(MDecl);
-      // auto &Ent = SI.derefAt(Val.getZExtValue());
-      // if (SCtx.Memory) {
-      //   // get member of global memory type.
-      //   auto *E = clang::MemberExpr::Create(
-      //       Ctx, makeDeclRefExpr(SCtx.Memory),
-      //       /*isarrow=*/false, clang::SourceLocation(),
-      //       clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Ent.Decl,
-      //       clang::DeclAccessPair::make(Ent.Decl, Ent.Decl->getAccess()),
-      //       clang::DeclarationNameInfo(), nullptr, Ent.Decl->getType(),
-      //       clang::VK_LValue, clang::OK_Ordinary, clang::NOUR_None);
-      //   return addrOf(Ctx, E);
-      // } else {
-      //   assert(llvm::isa<VarDecl>(Ent.Decl) &&
-      //          "Globals in memory is not a VarDecl?");
-      //   // get global var
-      //   return addrOf(Ctx, makeDeclRefExpr(Ent.Decl));
-      // }
+      // try to get global variable
+      if (auto Ret = TB.CT->getGlobal(Val.getZExtValue())) {
+        return Ret;
+      } else {
+        return createCStyleCastExpr(
+          Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
+          clang::IntegerLiteral::Create(Ctx, Val, TB.visitType(*CI->getType()),
+                                        clang::SourceLocation()));
+      }
     }
     if (!Ty->isIntegerType()) {
       return createCStyleCastExpr(
