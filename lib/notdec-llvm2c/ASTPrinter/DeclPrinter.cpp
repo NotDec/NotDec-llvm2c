@@ -217,7 +217,8 @@ void DeclPrinter::ProcessDeclGroup(SmallVectorImpl<Decl *> &Decls) {
       SubPolicy.SuppressSpecifiers = true;
     }
 
-    Visit(const_cast<Decl *>(*Begin));
+    DeclPrinter SubPrinter(Out, SubPolicy, Context, Indentation, MyPolicy, CT);
+    SubPrinter.Visit(const_cast<Decl *>(*Begin));
   }
   Out << ";\n";
   Decls.clear();

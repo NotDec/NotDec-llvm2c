@@ -24,7 +24,7 @@ class ClangTypeResult {
 
   // if not expandMemory, MemoryVar stores memory var with ElaboratedType;
   // if expandMemory, find globals in ast::FieldDecl's ASTDecl.
-  bool expandMemory = true;
+  bool expandMemory = false;
   clang::VarDecl *MemoryVar = nullptr;
 
   std::map<HType *, clang::QualType> TypeMap;
@@ -54,7 +54,7 @@ public:
   clang::QualType getType(ExtValuePtr Val, bool isUpperBound = false);
 
   clang::RecordDecl *convertUnion(ast::UnionDecl *UD);
-  clang::RecordDecl *convertStruct(ast::RecordDecl *RD);
+  clang::RecordDecl *convertStruct(ast::RecordDecl *RD, bool isMemory=false);
 
   void declareDecls();
   void defineDecls();

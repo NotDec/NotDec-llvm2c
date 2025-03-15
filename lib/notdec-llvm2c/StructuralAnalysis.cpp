@@ -1175,7 +1175,7 @@ void SAContext::createDecls() {
   for (llvm::Function &F : M) {
     getValueNamer().clearFuncCount();
     llvm::SmallVector<clang::ParmVarDecl *, 16> Params;
-    // llvm::errs() << "Function: " << F.getName() << "\n";
+    llvm::errs() << "SAContext: Declare Function: " << F.getName() << "\n";
     // create function decl
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getFuncName(F));
@@ -1255,9 +1255,8 @@ void SAFuncContext::run() {
   clang::FunctionProtoType::ExtProtoInfo EPI;
   EPI.Variadic = Func.isVarArg();
   FD = clang::FunctionDecl::Create(
-      getASTContext(), TUD,
-      clang::SourceLocation(), clang::SourceLocation(), II, PrevFD->getType(),
-      nullptr, SAContext::getStorageClass(Func));
+      getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
+      II, PrevFD->getType(), nullptr, SAContext::getStorageClass(Func));
   FD->setPreviousDeclaration(PrevFD);
 
   // We do not need to create ParamDecl because we handle it in the entry
@@ -1422,7 +1421,7 @@ clang::QualType TypeBuilder::visitFunctionType(
     auto RetV = ReturnValue{.Func = ActualFunc};
     if (CT != nullptr && CT->hasType(RetV)) {
       InHighType = true;
-      RetTy = CT->getType(RetV);
+      RetTy = getTypeL(RetV, nullptr, -1);
     }
   }
 
@@ -1448,8 +1447,8 @@ clang::RecordDecl *TypeBuilder::createRecordDecl(llvm::StructType &Ty,
   auto TUD = CT->getASTManager()->getGlobalDefinitions();
   clang::RecordDecl *prev = nullptr;
   clang::RecordDecl *decl = clang::RecordDecl::Create(
-      Ctx, clang::TagDecl::TagKind::TTK_Struct, TUD,
-      clang::SourceLocation(), clang::SourceLocation(), II, prev);
+      Ctx, clang::TagDecl::TagKind::TTK_Struct, TUD, clang::SourceLocation(),
+      clang::SourceLocation(), II, prev);
   // Set free standing so that unnamed struct can be combined:
   // (`struct {int x;} a,b`)
   // This also requires that the var decl uses a ElaboratedType whose owned

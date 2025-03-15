@@ -143,8 +143,11 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   return Ret;
 }
 
-clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD) {
+clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD, bool isMemory) {
   auto *TUD = AM->getTypeDefinitions();
+  if (isMemory) {
+    TUD = AM->getGlobalDefinitions();
+  }
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
@@ -261,14 +264,12 @@ void ClangTypeResult::createMemoryDecls() {
     }
   } else {
     // create non-freestanding memory type.
-    auto *CDecl = convertStruct(MDecl);
+    auto *CDecl = convertStruct(MDecl, true);
     MDecl->setASTDecl(CDecl);
     CDecl->setFreeStanding(false);
     auto ElabTy = Ctx.getElaboratedType(clang::ETK_Struct, nullptr,
                                         Ctx.getRecordType(CDecl), CDecl);
 
-    // TODO add to TranslationUnitDecl or not??
-    TUD->addDecl(CDecl);
     DeclMap[CDecl] = MDecl;
 
     auto *II = &Ctx.Idents.get("MEMORY");
