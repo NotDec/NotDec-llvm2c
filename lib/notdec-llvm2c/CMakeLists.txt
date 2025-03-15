@@ -1,5 +1,6 @@
 include(AddLLVM)
 add_library(notdec-llvm2c SHARED STATIC
+    ASTManager.cpp
     StructuralAnalysis.cpp
     Phoenix.cpp
     CFG.cpp

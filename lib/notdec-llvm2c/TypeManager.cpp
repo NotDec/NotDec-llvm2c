@@ -29,13 +29,14 @@ clang::QualType ClangTypeResult::getType(ExtValuePtr Val, bool isUpperBound) {
 }
 
 clang::RecordDecl *createRecordDecl(clang::ASTContext &Ctx,
+                                    TranslationUnitDecl *TUD,
                                     clang::TagDecl::TagKind Kind,
                                     llvm::StringRef Name) {
   auto *II = &Ctx.Idents.get(Name);
   // Create a Struct type for it.
-  clang::RecordDecl *decl = clang::RecordDecl::Create(
-      Ctx, Kind, Ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-      clang::SourceLocation(), II, nullptr);
+  clang::RecordDecl *decl =
+      clang::RecordDecl::Create(Ctx, Kind, TUD, clang::SourceLocation(),
+                                clang::SourceLocation(), II, nullptr);
   return decl;
 }
 
@@ -125,7 +126,8 @@ void ClangTypeResult::calcUseRelation() {
 }
 
 clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
-  auto Ret = createRecordDecl(Ctx, clang::TTK_Union, UD->getName());
+  auto *TUD = AM->getTypeDefinitions();
+  auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
   Ret->startDefinition();
   for (auto &Member : UD->getMembers()) {
     auto QT = convertType(Member.Type);
@@ -137,11 +139,13 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
     FieldDeclMap[FD] = &Member;
   }
   Ret->completeDefinition();
+  TUD->addDecl(Ret);
   return Ret;
 }
 
 clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD) {
-  auto Ret = createRecordDecl(Ctx, clang::TTK_Struct, RD->getName());
+  auto *TUD = AM->getTypeDefinitions();
+  auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
     auto QT = convertType(Field.Type);
@@ -154,6 +158,7 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD) {
     FieldDeclMap[FD] = &Field;
   }
   Ret->completeDefinition();
+  TUD->addDecl(Ret);
   return Ret;
 }
 
@@ -186,7 +191,6 @@ void ClangTypeResult::defineDecls() {
     // replaced with definition.
     Decl->setASTDecl(ASTDecl);
     DeclMap[ASTDecl] = Decl;
-    Ctx.getTranslationUnitDecl()->addDecl(ASTDecl);
   }
 
   // Create the Memory types
@@ -199,6 +203,7 @@ void ClangTypeResult::declareDecls() {
   //   calcUseRelation();
   // }
 
+  auto *TUD = AM->getTypeDeclarations();
   // Declare all decls but memory
   for (auto &Ent : Result->HTCtx->getDecls()) {
     auto *Decl = Ent.second.get();
@@ -207,17 +212,18 @@ void ClangTypeResult::declareDecls() {
     }
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
-      auto *CDecl = createRecordDecl(Ctx, clang::TTK_Struct, RD->getName());
+      auto *CDecl =
+          createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
       ASTDecl = CDecl;
     } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
-      auto *CDecl = createRecordDecl(Ctx, clang::TTK_Union, RD->getName());
+      auto *CDecl = createRecordDecl(Ctx, TUD, clang::TTK_Union, RD->getName());
       ASTDecl = CDecl;
     } else if (auto *TD = llvm::dyn_cast<ast::TypedefDecl>(Decl)) {
       clang::TypeSourceInfo *TInfo =
           Ctx.getTrivialTypeSourceInfo(convertType(TD->getType()));
       auto *CDecl = clang::TypedefDecl::Create(
-          Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-          clang::SourceLocation(), &Ctx.Idents.get(TD->getName()), TInfo);
+          Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(),
+          &Ctx.Idents.get(TD->getName()), TInfo);
       ASTDecl = CDecl;
     } else {
       assert(false && "Unknown Decl type");
@@ -225,12 +231,13 @@ void ClangTypeResult::declareDecls() {
 
     // declaration in this field will be replaced with definition later.
     Decl->setASTDecl(ASTDecl);
-    Ctx.getTranslationUnitDecl()->addDecl(ASTDecl);
+    TUD->addDecl(ASTDecl);
   }
 }
 
 void ClangTypeResult::createMemoryDecls() {
   auto *MDecl = Result->MemoryDecl;
+  auto *TUD = AM->getGlobalDefinitions();
 
   if (expandMemory) {
     // split the memory type into individual var decls.
@@ -242,14 +249,13 @@ void ClangTypeResult::createMemoryDecls() {
       }
       clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
       clang::VarDecl *VD = clang::VarDecl::Create(
-          Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-          clang::SourceLocation(), II, convertType(Field.Type), nullptr,
-          clang::SC_None);
-      
-      // handle initializer
-      VD->setInit();
+          Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
+          convertType(Field.Type), nullptr, clang::SC_None);
 
-      Ctx.getTranslationUnitDecl()->addDecl(VD);
+      // handle initializer
+      // VD->setInit();
+
+      TUD->addDecl(VD);
       Field.setASTDecl(VD);
       FieldDeclMap[VD] = &Field;
     }
@@ -262,14 +268,14 @@ void ClangTypeResult::createMemoryDecls() {
                                         Ctx.getRecordType(CDecl), CDecl);
 
     // TODO add to TranslationUnitDecl or not??
-    Ctx.getTranslationUnitDecl()->addDecl(CDecl);
+    TUD->addDecl(CDecl);
     DeclMap[CDecl] = MDecl;
 
     auto *II = &Ctx.Idents.get("MEMORY");
-    MemoryVar = clang::VarDecl::Create(
-        Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-        clang::SourceLocation(), II, ElabTy, nullptr, clang::SC_None);
-    Ctx.getTranslationUnitDecl()->addDecl(MemoryVar);
+    MemoryVar = clang::VarDecl::Create(Ctx, TUD, clang::SourceLocation(),
+                                       clang::SourceLocation(), II, ElabTy,
+                                       nullptr, clang::SC_None);
+    TUD->addDecl(MemoryVar);
     DeclMap[MemoryVar] = MDecl;
   }
 }
@@ -301,13 +307,13 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
             << "Error: Unsupported Record DeclKind for pointer arithmetic: "
             << Decl->getKindName() << "\n";
       }
-    } else if(auto ArrayTy = PointeeTy->getAsArrayTypeUnsafe()) {
+    } else if (auto ArrayTy = PointeeTy->getAsArrayTypeUnsafe()) {
       auto ElemTy = ArrayTy->getElementType();
       auto Index = clang::IntegerLiteral::Create(
           Ctx, llvm::APInt(32, 0, false), Ctx.IntTy, clang::SourceLocation());
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
-        deref(Ctx, Val), Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
-        clang::SourceLocation());
+          deref(Ctx, Val), Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
+          clang::SourceLocation());
       auto R = addrOf(Ctx, AS);
       Result.push_back(R);
       return addZero(R);
@@ -410,8 +416,8 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
         auto ASTDecl = DeclMap.at(Decl)->getAs<ast::RecordDecl>();
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(*OffsetNum);
         if (Target == nullptr) {
-          llvm::errs() << "Error: failed to get field at offset: "
-                       << *OffsetNum << "\n";
+          llvm::errs() << "Error: failed to get field at offset: " << *OffsetNum
+                       << "\n";
           return nullptr;
         }
         assert(Target->ASTDecl != nullptr && "Field not declared?");

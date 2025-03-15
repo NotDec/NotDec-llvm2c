@@ -8,6 +8,7 @@
 #include <clang/Frontend/ASTUnit.h>
 #include <cstdint>
 
+#include "ASTManager.h"
 #include "Interface.h"
 #include "Interface/HType.h"
 
@@ -16,20 +17,21 @@ namespace notdec::llvm2c {
 // 1) Covert HType to Clang type. 2) maintain additional infos for Clang Decls.
 class ClangTypeResult {
   std::shared_ptr<HTypeResult> Result;
-  std::shared_ptr<clang::ASTUnit> AST;
+  std::shared_ptr<ASTManager> AM;
   clang::ASTContext &Ctx;
   bool expandStack = false;
   bool createNonFreeStandingStruct = false;
-  
+
   // if not expandMemory, MemoryVar stores memory var with ElaboratedType;
   // if expandMemory, find globals in ast::FieldDecl's ASTDecl.
   bool expandMemory = true;
-  clang::VarDecl* MemoryVar = nullptr;
+  clang::VarDecl *MemoryVar = nullptr;
 
   std::map<HType *, clang::QualType> TypeMap;
   // map from clang struct/union/typedef decl to ast decl.
   std::map<clang::Decl *, ast::TypedDecl *> DeclMap;
-  // map from field decl to ast field decl. For globals, may map VarDecl to ast FieldDecl
+  // map from field decl to ast field decl. For globals, may map VarDecl to ast
+  // FieldDecl
   std::map<clang::Decl *, const ast::FieldDecl *> FieldDeclMap;
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
@@ -38,19 +40,21 @@ class ClangTypeResult {
   // map from struct/union decl to its users
   std::map<ast::TypedDecl *, std::set<ast::TypedDecl *>> DeclUsage;
   std::map<ast::TypedDecl *, std::set<ExtValuePtr>> ValueUsage;
+
 public:
   void calcUseRelation();
 
 public:
   ClangTypeResult(std::shared_ptr<HTypeResult> Result,
-                  std::shared_ptr<clang::ASTUnit> AST)
-      : Result(Result), AST(AST), Ctx(AST->getASTContext()) {}
+                  std::shared_ptr<ASTManager> AM)
+      : Result(Result), AM(AM), Ctx(AM->getASTContext()) {}
 
+  std::shared_ptr<ASTManager> getASTManager() { return AM; }
   bool hasType(ExtValuePtr Val, bool isUpperBound = false);
   clang::QualType getType(ExtValuePtr Val, bool isUpperBound = false);
 
   clang::RecordDecl *convertUnion(ast::UnionDecl *UD);
-  clang::RecordDecl* convertStruct(ast::RecordDecl *RD);
+  clang::RecordDecl *convertStruct(ast::RecordDecl *RD);
 
   void declareDecls();
   void defineDecls();
@@ -74,7 +78,7 @@ public:
   // If the add cannot be handled properly, return nullptr.
   clang::Expr *tryHandlePtrAdd(clang::Expr *Val, clang::Expr *Index);
   std::vector<clang::Expr *> tryAddZero(clang::Expr *Val);
-  clang::Expr* getGlobal(int64_t Offset);
+  clang::Expr *getGlobal(int64_t Offset);
 
   std::string getComment(clang::Decl *Decl) {
     auto It = DeclMap.find(Decl);

@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
 
   std::string inSuffix = getSuffix(inputFilename);
   llvm::LLVMContext Ctx;
-  std::unique_ptr<Module> module;
+  std::unique_ptr<llvm::Module> module;
   if (inSuffix.size() == 0) {
     std::cout << "no extension for input file. exiting." << std::endl;
     return 0;

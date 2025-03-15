@@ -34,6 +34,7 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include "ASTManager.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Interface.h"
 #include "notdec-llvm2c/TypeManager.h"
@@ -128,8 +129,8 @@ class TypeBuilder {
   // Map from llvm struct type to clang RecordDecl type.
   std::map<llvm::Type *, clang::Decl *> typeMap;
   llvm::StringSet<> &Names;
-  
-  public:
+
+public:
   std::shared_ptr<ClangTypeResult> CT;
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
               std::shared_ptr<ClangTypeResult> CT)
@@ -336,7 +337,7 @@ class SAContext {
 protected:
   llvm::Module &M;
   // Clang AST should be placed first, so that it is initialized first.
-  std::shared_ptr<clang::ASTUnit> ASTunit;
+  std::shared_ptr<ASTManager> AM;
   std::shared_ptr<ClangTypeResult> CT;
 
   Options opts;
@@ -356,9 +357,9 @@ public:
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
-  SAContext(llvm::Module &mod, std::shared_ptr<clang::ASTUnit> AST,
-            Options opts, std::shared_ptr<ClangTypeResult> CT)
-      : M(mod), ASTunit(AST), CT(CT), opts(opts),
+  SAContext(llvm::Module &mod, std::shared_ptr<ASTManager> AM, Options opts,
+            std::shared_ptr<ClangTypeResult> CT)
+      : M(mod), AM(AM), CT(CT), opts(opts),
         Names(std::make_unique<llvm::StringSet<>>()),
         TB(getASTContext(), VN, *Names, CT), EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
@@ -366,7 +367,8 @@ public:
   }
   void createDecls();
 
-  clang::ASTContext &getASTContext() { return ASTunit->getASTContext(); }
+  ASTManager& getASTManager() { return *AM; }
+  clang::ASTContext &getASTContext() { return AM->getASTContext(); }
   ValueNamer &getValueNamer() { return VN; }
   TypeBuilder &getTypeBuilder() { return TB; }
 

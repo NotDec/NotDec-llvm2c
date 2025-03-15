@@ -2,15 +2,15 @@
 #ifndef _NOTDEC_DECLPRINTER_H_
 #define _NOTDEC_DECLPRINTER_H_
 
-#include "Interface.h"
-#include "Interface/StructManager.h"
-#include "TypeManager.h"
+#include "notdec-llvm2c/Interface/StructManager.h"
 #include <clang/AST/DeclVisitor.h>
 #include <llvm/Support/raw_ostream.h>
 #include <optional>
 
 namespace notdec::llvm2c {
+
 using namespace clang;
+class ClangTypeResult;
 
 struct MyPrintingPolicy {
   bool AllowGroupedDecl = true; // TODO

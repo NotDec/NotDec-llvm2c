@@ -51,6 +51,7 @@
 #include <variant>
 #include <vector>
 
+#include "ASTManager.h"
 #include "ASTPrinter/DeclPrinter.h"
 #include "Interface/HType.h"
 #include "TypeManager.h"
@@ -1091,14 +1092,15 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
   // convert to shared ptr for easier usage
   std::shared_ptr<HTypeResult> HTR = HT == nullptr ? nullptr : std::move(HT);
   std::shared_ptr<ASTUnit> AST = buildAST(M.getName());
+  std::shared_ptr<ASTManager> AM = std::make_shared<ASTManager>(OS, AST);
   std::shared_ptr<ClangTypeResult> CT =
-      HTR == nullptr ? nullptr : std::make_shared<ClangTypeResult>(HTR, AST);
+      HTR == nullptr ? nullptr : std::make_shared<ClangTypeResult>(HTR, AM);
 
   if (CT != nullptr) {
     CT->declareDecls();
   }
 
-  SAContext Ctx(const_cast<llvm::Module &>(M), AST, opts, CT);
+  SAContext Ctx(const_cast<llvm::Module &>(M), AM, opts, CT);
   Ctx.createDecls();
 
   if (CT != nullptr) {
@@ -1115,10 +1117,11 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
+
+  // Print the AST
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
                  Ctx.getASTContext(), 0, MyPrintingPolicy(), CT);
-  auto TD = Ctx.getASTContext().getTranslationUnitDecl();
-  DP.Visit(TD);
+  AM->print(DP);
 }
 
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb) {
@@ -1167,6 +1170,7 @@ void SAContext::createDecls() {
   //                       clang::SourceRange(), clang::CommentOptions(),
   //                       false));
 
+  auto *TUD = AM->getFunctionDeclarations();
   // create function decls
   for (llvm::Function &F : M) {
     getValueNamer().clearFuncCount();
@@ -1178,9 +1182,8 @@ void SAContext::createDecls() {
     clang::FunctionProtoType::ExtProtoInfo EPI;
     EPI.Variadic = F.isVarArg();
     clang::FunctionDecl *FD = clang::FunctionDecl::Create(
-        getASTContext(), getASTContext().getTranslationUnitDecl(),
-        clang::SourceLocation(), clang::SourceLocation(), II,
-        TB.getFunctionType(F, EPI), nullptr, getStorageClass(F));
+        getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
+        II, TB.getFunctionType(F, EPI), nullptr, getStorageClass(F));
 
     // create function parameters
     for (llvm::Argument &Arg : F.args()) {
@@ -1193,10 +1196,11 @@ void SAContext::createDecls() {
     }
     FD->setParams(Params);
 
-    getASTContext().getTranslationUnitDecl()->addDecl(FD);
+    TUD->addDecl(FD);
     globalDecls.insert(std::make_pair(&F, FD));
   }
 
+  TUD = AM->getGlobalDefinitions();
   // create global variable decls
   for (llvm::GlobalVariable &GV : M.globals()) {
     if (CT) {
@@ -1212,11 +1216,10 @@ void SAContext::createDecls() {
       Ty = Ty.withConst();
     }
     clang::VarDecl *VD = clang::VarDecl::Create(
-        getASTContext(), getASTContext().getTranslationUnitDecl(),
-        clang::SourceLocation(), clang::SourceLocation(), II, Ty, nullptr,
-        getStorageClass(GV));
+        getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
+        II, Ty, nullptr, getStorageClass(GV));
 
-    getASTContext().getTranslationUnitDecl()->addDecl(VD);
+    TUD->addDecl(VD);
     globalDecls.insert(std::make_pair(&GV, VD));
   }
 
@@ -1244,6 +1247,7 @@ void SAFuncContext::run() {
                               "created by `SAContext::createDecls`?");
   // 1. build the CFGBlocks
   CFGBuilder Builder(*this);
+  auto *TUD = Ctx.getASTManager().getFunctionDefinitions();
 
   // create function decl again, and set the previous declaration.
   clang::IdentifierInfo *II =
@@ -1251,7 +1255,7 @@ void SAFuncContext::run() {
   clang::FunctionProtoType::ExtProtoInfo EPI;
   EPI.Variadic = Func.isVarArg();
   FD = clang::FunctionDecl::Create(
-      getASTContext(), getASTContext().getTranslationUnitDecl(),
+      getASTContext(), TUD,
       clang::SourceLocation(), clang::SourceLocation(), II, PrevFD->getType(),
       nullptr, SAContext::getStorageClass(Func));
   FD->setPreviousDeclaration(PrevFD);
@@ -1346,7 +1350,7 @@ void SAFuncContext::run() {
   auto CS = clang::CompoundStmt::Create(
       getASTContext(), Stmts, clang::SourceLocation(), clang::SourceLocation());
   FD->setBody(CS);
-  getASTContext().getTranslationUnitDecl()->addDecl(FD);
+  TUD->addDecl(FD);
 }
 
 clang::Expr *ExprBuilder::createCompoundLiteralExpr(llvm::Value *Val,
@@ -1441,9 +1445,10 @@ clang::RecordDecl *TypeBuilder::createRecordDecl(llvm::StructType &Ty,
     II = getIdentifierInfo(VN->getStructName(Ty));
   }
 
+  auto TUD = CT->getASTManager()->getGlobalDefinitions();
   clang::RecordDecl *prev = nullptr;
   clang::RecordDecl *decl = clang::RecordDecl::Create(
-      Ctx, clang::TagDecl::TagKind::TTK_Struct, Ctx.getTranslationUnitDecl(),
+      Ctx, clang::TagDecl::TagKind::TTK_Struct, TUD,
       clang::SourceLocation(), clang::SourceLocation(), II, prev);
   // Set free standing so that unnamed struct can be combined:
   // (`struct {int x;} a,b`)
@@ -1467,7 +1472,7 @@ clang::RecordDecl *TypeBuilder::createRecordDecl(llvm::StructType &Ty,
     }
     decl->completeDefinition();
   }
-  Ctx.getTranslationUnitDecl()->addDecl(decl);
+  TUD->addDecl(decl);
   return decl;
 }
 
@@ -1662,9 +1667,10 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
       if (auto Ret = TB.CT->getGlobal(Val.getZExtValue())) {
         return Ret;
       } else {
-        return createCStyleCastExpr(
-          Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
-          clang::IntegerLiteral::Create(Ctx, Val, TB.visitType(*CI->getType()),
+        return createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,
+                                    clang::CK_BitCast,
+                                    clang::IntegerLiteral::Create(
+                                        Ctx, Val, TB.visitType(*CI->getType()),
                                         clang::SourceLocation()));
       }
     }

@@ -1,5 +1,6 @@
 
 #include "notdec-llvm2c/ASTPrinter/DeclPrinter.h"
+#include "notdec-llvm2c/TypeManager.h"
 #include "ASTPrinter/StmtPrinter.h"
 #include <clang/AST/Attr.h>
 #include <clang/AST/PrettyPrinter.h>
