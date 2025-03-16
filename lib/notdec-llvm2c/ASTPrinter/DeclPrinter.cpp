@@ -4,6 +4,8 @@
 #include "ASTPrinter/StmtPrinter.h"
 #include <clang/AST/Attr.h>
 #include <clang/AST/PrettyPrinter.h>
+#include <clang/AST/Type.h>
+#include <llvm/Support/Casting.h>
 
 namespace notdec::llvm2c {
 
@@ -95,6 +97,21 @@ void DeclPrinter::prettyPrintPragmas(Decl *D) {
 }
 
 void DeclPrinter::printDeclType(QualType T, StringRef DeclName, bool Pack) {
+  // To have DeclComments for elaborated types
+  if (Policy.IncludeTagDefinition && llvm::isa<ElaboratedType>(T)) {
+    auto *ET = llvm::cast<ElaboratedType>(T);
+    if (auto *TD = ET->getOwnedTagDecl()) {
+      // https://github.com/llvm/llvm-project/blob/3bfae7816bdb5b09930f073f1eb99f72015d9f78/clang/lib/AST/TypePrinter.cpp#L1503
+      PrintingPolicy SubPolicy = Policy;
+      SubPolicy.IncludeTagDefinition = false;
+      DeclPrinter SubPrinter(Out, SubPolicy, Context, Indentation, MyPolicy, CT);
+      SubPrinter.Visit(TD);
+      Out << (Pack ? "..." : "") + DeclName;
+      Out << ' ';
+      return;
+    }
+  }
+
   // Normally, a PackExpansionType is written as T[3]... (for instance, as a
   // template argument), but if it is the type of a declaration, the ellipsis
   // is placed before the name being declared.

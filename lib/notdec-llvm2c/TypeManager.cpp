@@ -143,7 +143,8 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   return Ret;
 }
 
-clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD, bool isMemory) {
+clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
+                                                  bool isMemory) {
   auto *TUD = AM->getTypeDefinitions();
   if (isMemory) {
     TUD = AM->getGlobalDefinitions();
@@ -364,13 +365,15 @@ clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
 // TODO: How to handle Union with multiple possible solutions?
 clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
                                               clang::Expr *Index) {
+  assert(Base->getType()->isPointerType() &&
+         "tryHandlePtrAdd: Base is not a pointer type");
   clang::QualType ValQTy = Base->getType();
   const clang::Type *ValTy = Base->getType().getTypePtr();
 
   // 1. pointer arithmetic is only allowed in the beginning, and only once.
   std::optional<int64_t> OffsetNum = getIntValue(Index);
   if (ValTy->isPointerType()) {
-    auto ElemTy = ValTy->getPointeeType();
+    auto ElemTy = Ctx.getCanonicalType(ValTy->getPointeeType().getTypePtr());
     auto ElemSize = Ctx.getTypeSizeInChars(ElemTy).getQuantity();
     if (OffsetNum && *OffsetNum > ElemSize) {
       // try to divide the index by ElemSize.
@@ -395,7 +398,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
   while (Index != nullptr) {
     ValQTy = Base->getType();
     const clang::Type *ValTy = ValQTy.getTypePtr();
-    auto PointeeTy = ValTy->getPointeeOrArrayElementType();
+    auto PointeeTy = Ctx.getCanonicalType(ValTy->getPointeeOrArrayElementType());
     auto DerefBase = deref(Ctx, Base);
     // try to get the constant offset.
     OffsetNum = getIntValue(Index);
@@ -417,6 +420,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
         auto ASTDecl = DeclMap.at(Decl)->getAs<ast::RecordDecl>();
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(*OffsetNum);
         if (Target == nullptr) {
+          Decl->dump();
           llvm::errs() << "Error: failed to get field at offset: " << *OffsetNum
                        << "\n";
           return nullptr;
@@ -497,12 +501,14 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
 
 clang::Expr *ClangTypeResult::handlePtrAdd(clang::Expr *Val,
                                            clang::Expr *Index) {
+  assert(Val->getType()->isPointerType() &&
+         "handlePtrAdd: Val is not a pointer type");
   auto Result = tryHandlePtrAdd(Val, Index);
   if (Result != nullptr) {
     return Result;
   }
   // create cast to void* and add.
-  auto CharPtrTy = Ctx.getPointerType(Ctx.Char8Ty);
+  auto CharPtrTy = Ctx.getPointerType(Ctx.CharTy);
   auto Casted = createCStyleCastExpr(Ctx, CharPtrTy, clang::VK_LValue,
                                      clang::CK_BitCast, Val);
   auto Add = createBinaryOperator(Ctx, Casted, Index, clang::BO_Add, CharPtrTy,
@@ -513,7 +519,7 @@ clang::Expr *ClangTypeResult::handlePtrAdd(clang::Expr *Val,
 clang::Expr *ClangTypeResult::getGlobal(int64_t Offset) {
   if (!expandMemory) {
     return handlePtrAdd(
-        makeDeclRefExpr(MemoryVar),
+        addrOf(Ctx, makeDeclRefExpr(MemoryVar)),
         clang::IntegerLiteral::Create(Ctx, llvm::APInt(32, Offset, false),
                                       Ctx.IntTy, clang::SourceLocation()));
   } else {

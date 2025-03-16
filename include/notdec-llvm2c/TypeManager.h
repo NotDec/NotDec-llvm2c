@@ -85,6 +85,10 @@ public:
     if (It != DeclMap.end()) {
       return It->second->getComment();
     }
+    auto It2 = FieldDeclMap.find(Decl);
+    if (It2 != FieldDeclMap.end()) {
+      return It2->second->Comment;
+    }
     return "";
   }
 };
