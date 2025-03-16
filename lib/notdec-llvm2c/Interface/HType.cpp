@@ -7,6 +7,19 @@ namespace notdec::ast {
 
 // HTypeContext HTypeContext::Instance;
 
+SimpleRange getRange(const TypedDecl* Decl) {
+  if (auto *RD = llvm::dyn_cast<RecordDecl>(Decl)) {
+    return RD->getRange();
+  }
+  if (auto *UD = llvm::dyn_cast<UnionDecl>(Decl)) {
+    return UD->getRange();
+  }
+  if (auto *TD = llvm::dyn_cast<TypedefDecl>(Decl)) {
+    assert(false && "Cannot get range for typedef type");
+  }
+  assert(false && "Unknown Decl type");
+}
+
 bool HType::isCharType() const{
   return getKind() == TK_Integer && llvm::cast<IntegerType>(this)->getBitSize() == 8; 
 }

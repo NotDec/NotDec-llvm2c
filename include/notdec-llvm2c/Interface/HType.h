@@ -2,6 +2,7 @@
 #define _NOTDEC_INTERFACE_HTCONTEXT_H_
 
 #include <cassert>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -91,14 +92,16 @@ public:
     this->Bytes = Bytes;
   }
 
-  // long getMaxOffset() {
-  //   long Max = 0;
-  //   for (auto &Ent : Fields) {
-  //     Max = std::max(Max, Ent.R.Start + Ent.R.Size);
-  //   }
-  //   return Max;
-  // }
-
+  SimpleRange getRange() const {
+    assert(!Fields.empty() && "getRange: Empty fields?");
+    int64_t Max = std::numeric_limits<decltype(Max)>::min();
+    int64_t Min = std::numeric_limits<decltype(Min)>::max();
+    for (auto &Ent : Fields) {
+      Max = std::max(Max, Ent.R.Start + Ent.R.Size);
+      Min = std::min(Min, Ent.R.Start);
+    }
+    return SimpleRange{.Start = Min, .Size = Max - Min};
+  }
 
   void resolveInitialValue();
   void addPaddings();
@@ -157,6 +160,17 @@ public:
   void print(llvm::raw_fd_ostream &OS) const;
 
   static UnionDecl *Create(HTypeContext &Ctx, const std::string &Name);
+
+  SimpleRange getRange() const {
+    assert(!Members.empty() && "getRange: Empty Members?");
+    int64_t Max = std::numeric_limits<decltype(Max)>::min();
+    int64_t Min = std::numeric_limits<decltype(Min)>::max();
+    for (auto &Ent : Members) {
+      Max = std::max(Max, Ent.R.Start + Ent.R.Size);
+      Min = std::min(Min, Ent.R.Start);
+    }
+    return SimpleRange{.Start = Min, .Size = Max - Min};
+  }
 };
 
 class TypedefDecl : public TypedDecl {
@@ -176,6 +190,8 @@ public:
   static TypedefDecl *Create(HTypeContext &Ctx, const std::string &Name,
                              HType *Type);
 };
+
+SimpleRange getRange(const TypedDecl* Decl);
 
 /*
 Type Architecture:

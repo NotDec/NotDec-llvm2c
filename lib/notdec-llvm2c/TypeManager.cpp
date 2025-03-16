@@ -12,6 +12,28 @@
 
 namespace notdec::llvm2c {
 
+clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty) {
+  unsigned Quals = Ty.getQualifiers().getFastQualifiers();
+  if (Ty->isArrayType()) {
+    return clang::QualType(Ty->getArrayElementTypeNoTypeQual(), Quals);
+  }
+  if (Ty->isPointerType()) {
+    return clang::QualType(
+        Ctx.getPointerType(removeArrayType(Ctx, Ty->getPointeeType()))
+            .getTypePtr(),
+        Quals);
+  }
+  return Ty;
+}
+
+clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty) {
+  if (Ty->isArrayType()) {
+    return Ty;
+  } else {
+    return removeArrayType(Ctx, Ty);
+  }
+}
+
 bool ClangTypeResult::hasType(ExtValuePtr Val, bool isUpperBound) {
   if (!isUpperBound) {
     return Result->ValueTypesLowerBound.count(Val) > 0;
@@ -49,6 +71,9 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
   // convert logic without cache
   auto doConvert = [&](HType *T) -> clang::QualType {
     if (auto *IT = llvm::dyn_cast<ast::IntegerType>(T)) {
+      if (IT->getBitSize() == 1) {
+        return Ctx.BoolTy;
+      }
       if (IT->getBitSize() == 8) {
         return Ctx.CharTy;
       }
@@ -89,6 +114,7 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
   };
 
   auto Ret = doConvert(T);
+  assert(!Ret.isNull() && "convertType: Ret is null?");
   TypeMap[T] = Ret;
   return Ret;
 }
@@ -130,7 +156,7 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
   Ret->startDefinition();
   for (auto &Member : UD->getMembers()) {
-    auto QT = convertType(Member.Type);
+    auto QT = convertTypeL(Member.Type);
     auto *II = &Ctx.Idents.get(Member.Name);
     auto *FD = clang::FieldDecl::Create(
         Ctx, Ret, clang::SourceLocation(), clang::SourceLocation(), II, QT,
@@ -152,7 +178,7 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
-    auto QT = convertType(Field.Type);
+    auto QT = convertTypeL(Field.Type);
     auto *II = &Ctx.Idents.get(Field.Name);
     auto *FD = clang::FieldDecl::Create(
         Ctx, Ret, clang::SourceLocation(), clang::SourceLocation(), II, QT,
@@ -254,7 +280,7 @@ void ClangTypeResult::createMemoryDecls() {
       clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
       clang::VarDecl *VD = clang::VarDecl::Create(
           Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
-          convertType(Field.Type), nullptr, clang::SC_None);
+          convertTypeL(Field.Type), nullptr, clang::SC_None);
 
       // handle initializer
       // VD->setInit();
@@ -362,6 +388,21 @@ clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
   return nullptr;
 }
 
+llvm::Expected<int64_t>
+ClangTypeResult::getTypeSizeInChars(const clang::Type *Ty) {
+  if (llvm::isa<clang::RecordType>(Ty)) {
+    auto ASTDecl = DeclMap.at(Ty->getAsRecordDecl());
+    auto Range = ast::getRange(ASTDecl);
+    if (Range.Start < 0) {
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "Invalid start offset for a valid size: %d", Range.Start);
+    }
+    return Range.Start + Range.Size;
+  }
+  return Ctx.getTypeSizeInChars(Ty).getQuantity();
+}
+
 // TODO: How to handle Union with multiple possible solutions?
 clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
                                               clang::Expr *Index) {
@@ -374,11 +415,11 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
   std::optional<int64_t> OffsetNum = getIntValue(Index);
   if (ValTy->isPointerType()) {
     auto ElemTy = Ctx.getCanonicalType(ValTy->getPointeeType().getTypePtr());
-    auto ElemSize = Ctx.getTypeSizeInChars(ElemTy).getQuantity();
-    if (OffsetNum && *OffsetNum > ElemSize) {
+    auto ElemSize = llvm::expectedToOptional(getTypeSizeInChars(ElemTy));
+    if (ElemSize && OffsetNum && *OffsetNum > *ElemSize) {
       // try to divide the index by ElemSize.
-      auto NewIndex = *OffsetNum / ElemSize;
-      auto RemainIndex = *OffsetNum % ElemSize;
+      auto NewIndex = *OffsetNum / *ElemSize;
+      auto RemainIndex = *OffsetNum % *ElemSize;
       auto NewIndexExpr = clang::IntegerLiteral::Create(
           Ctx, llvm::APInt(32, NewIndex, false), Index->getType(),
           clang::SourceLocation());
@@ -398,7 +439,8 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
   while (Index != nullptr) {
     ValQTy = Base->getType();
     const clang::Type *ValTy = ValQTy.getTypePtr();
-    auto PointeeTy = Ctx.getCanonicalType(ValTy->getPointeeOrArrayElementType());
+    auto PointeeTy =
+        Ctx.getCanonicalType(ValTy->getPointeeOrArrayElementType());
     auto DerefBase = deref(Ctx, Base);
     // try to get the constant offset.
     OffsetNum = getIntValue(Index);
@@ -452,20 +494,25 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
       // Array type: try to divide by size and convert to array indexing?
       auto ElemTy = ArrayTy->getElementType();
       // divide the offset by the size of the type.
-      auto ElemSize = Ctx.getTypeSizeInChars(ElemTy).getQuantity();
+      auto ElemSize = getTypeSizeInChars(ElemTy);
+      if (auto Err = ElemSize.takeError()) {
+        llvm::errs() << "Failed to get ArrayElem Size "
+                     << toString(std::move(Err)) << "\n";
+        std::abort();
+      }
 
       clang::Expr *CurrentIndex = nullptr;
       // TODO Remaining Offset?
       // clang::Expr *RestIndex = nullptr;
-      if (ElemSize > 1) {
+      if (*ElemSize > 1) {
         // try to divide the index by ElemSize.
-        CurrentIndex = tryDivideBySize(Ctx, Index, ElemSize);
+        CurrentIndex = tryDivideBySize(Ctx, Index, *ElemSize);
         if (!CurrentIndex) {
           // failed to create array subscript
           ValTy->dump();
           llvm::errs()
               << "Error: failed to create array subscript, cannnot divide by"
-              << ElemSize << ":\n";
+              << *ElemSize << ":\n";
           Index->dump();
           return nullptr;
         }

@@ -14,6 +14,10 @@
 
 namespace notdec::llvm2c {
 
+// remove all array types within.
+clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty);
+clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty);
+
 // 1) Covert HType to Clang type. 2) maintain additional infos for Clang Decls.
 class ClangTypeResult {
   std::shared_ptr<HTypeResult> Result;
@@ -36,6 +40,9 @@ class ClangTypeResult {
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
   clang::QualType convertType(HType *T);
+  clang::QualType convertTypeL(HType *T) {
+    return toLValueType(Ctx, convertType(T));
+  }
 
   // map from struct/union decl to its users
   std::map<ast::TypedDecl *, std::set<ast::TypedDecl *>> DeclUsage;
@@ -54,7 +61,7 @@ public:
   clang::QualType getType(ExtValuePtr Val, bool isUpperBound = false);
 
   clang::RecordDecl *convertUnion(ast::UnionDecl *UD);
-  clang::RecordDecl *convertStruct(ast::RecordDecl *RD, bool isMemory=false);
+  clang::RecordDecl *convertStruct(ast::RecordDecl *RD, bool isMemory = false);
 
   void declareDecls();
   void defineDecls();
@@ -74,6 +81,10 @@ public:
   }
   void createMemoryDecls();
 
+  llvm::Expected<int64_t> getTypeSizeInChars(const clang::Type *Ty);
+  llvm::Expected<int64_t> getTypeSizeInChars(QualType Ty) {
+    return getTypeSizeInChars(Ty.getTypePtr());
+  }
   clang::Expr *handlePtrAdd(clang::Expr *Val, clang::Expr *Index);
   // If the add cannot be handled properly, return nullptr.
   clang::Expr *tryHandlePtrAdd(clang::Expr *Val, clang::Expr *Index);

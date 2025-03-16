@@ -108,14 +108,17 @@ void DeclPrinter::printDeclType(QualType T, StringRef DeclName, bool Pack) {
   }
   // Use our TypePrinter to print the type
   // T.print(Out, Policy, (Pack ? "..." : "") + DeclName, Indentation);
-  Twine PlaceHolder = Pack ? "..." : "";
+  Twine PlaceHolder = Pack ? "..." : "" + DeclName;
+
+  SmallString<128> PHBuf;
+  StringRef PH = PlaceHolder.toStringRef(PHBuf);
 
   if (Policy.PrintCanonicalTypes)
     T = T.getCanonicalType();
   auto ty = T.split();
 
   TypePrinter(Policy, Indentation, MyPolicy, CT)
-      .print(ty.Ty, ty.Quals, Out, Pack ? "..." : "");
+      .print(ty.Ty, ty.Quals, Out, PH);
 }
 
 void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {

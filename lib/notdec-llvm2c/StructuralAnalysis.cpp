@@ -154,27 +154,6 @@ clang::Expr *createCCast(clang::ASTContext &Ctx, ExprBuilder &EB,
   return expr;
 }
 
-clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty) {
-  unsigned Quals = Ty.getQualifiers().getFastQualifiers();
-  if (Ty->isArrayType()) {
-    return clang::QualType(Ty->getArrayElementTypeNoTypeQual(), Quals);
-  }
-  if (Ty->isPointerType()) {
-    return clang::QualType(
-        Ctx.getPointerType(removeArrayType(Ctx, Ty->getPointeeType()))
-            .getTypePtr(),
-        Quals);
-  }
-  return Ty;
-}
-
-clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty) {
-  if (Ty->isArrayType()) {
-    return Ty;
-  } else {
-    return removeArrayType(Ctx, Ty);
-  }
-}
 
 clang::Stmt *getStmt(CFGElement e) {
   if (auto stmt = e.getAs<CFGStmt>()) {
@@ -1508,6 +1487,7 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
   llvm::Function *F;
   if (CT != nullptr && CT->hasType(Val)) {
     Ret = CT->getType(Val);
+    assert(!Ret.isNull() && "TypeBuilder.getType: Ret is null?");
   } else if ((V != nullptr) &&
              (F = llvm::dyn_cast_or_null<llvm::Function>(*V))) {
     llvm::errs()
