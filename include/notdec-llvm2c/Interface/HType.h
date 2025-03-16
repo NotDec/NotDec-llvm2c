@@ -36,11 +36,13 @@ public:
 
 protected:
   std::unique_ptr<HType> TypeForDecl;
+  std::unique_ptr<HType> TypeForDeclConst;
   TypedDecl(TypedDeclKind K, std::string Name) : Kind(K), Name(Name) {}
 
 public:
   TypedDeclKind getKind() const { return Kind; }
   HType *getTypeForDecl() const { return TypeForDecl.get(); }
+  HType *getTypeForDeclConst() const { return TypeForDeclConst.get(); }
   const std::string &getName() const { return Name; }
   const std::string &getComment() const { return Comment; }
   void setComment(const std::string &Comment) { this->Comment = Comment; }
@@ -71,7 +73,9 @@ public:
   bool isPadding = false;
   clang::Decl *ASTDecl = nullptr;
 
-  void setASTDecl(clang::Decl *D) const { const_cast<FieldDecl*>(this)->ASTDecl = D; }
+  void setASTDecl(clang::Decl *D) const {
+    const_cast<FieldDecl *>(this)->ASTDecl = D;
+  }
 };
 
 class RecordDecl : public TypedDecl {
@@ -85,7 +89,7 @@ protected:
 
 public:
   const std::vector<FieldDecl> &getFields() const { return Fields; }
-  const ast::FieldDecl * getFieldAt(OffsetTy Off) const;
+  const ast::FieldDecl *getFieldAt(OffsetTy Off) const;
   void print(llvm::raw_fd_ostream &OS) const;
   void setBytesManager(std::shared_ptr<BytesManager> Bytes) {
     assert(this->Bytes == nullptr && "BytesManager already exists");
@@ -191,7 +195,7 @@ public:
                              HType *Type);
 };
 
-SimpleRange getRange(const TypedDecl* Decl);
+SimpleRange getRange(const TypedDecl *Decl);
 
 /*
 Type Architecture:
@@ -202,6 +206,7 @@ Type Architecture:
   - FunctionType
   - RecordType
   - UnionType
+  - TypedefType
   - ArrayType
 */
 class HType {
@@ -224,11 +229,14 @@ public:
   };
 
 protected:
-  HType(HTypeKind K, bool IsConst) : Kind(K), IsConst(IsConst) {}
+  HType(HTypeKind K, HType *Canon, bool IsConst)
+      : Kind(K), CanonicalType(Canon == nullptr ? this : Canon),
+        IsConst(IsConst) {}
 
 public:
   HTypeKind getKind() const { return Kind; }
   bool isConst() const { return IsConst; }
+  HType *getCanonicalType() const { return CanonicalType; }
 
   bool isPointerType() const { return Kind == TK_Pointer; }
   bool isRecordType() const { return Kind == TK_Record; }
@@ -239,7 +247,7 @@ public:
   bool isCharType() const;
 
   HType *getPointeeType() const;
-  HType* getArrayElementType() const;
+  HType *getArrayElementType() const;
   TypedDecl *getAsRecordOrUnionDecl() const;
   RecordDecl *getAsRecordDecl() const;
   UnionDecl *getAsUnionDecl() const;
@@ -255,13 +263,15 @@ public:
 
 private:
   HTypeKind Kind;
+  // points to the type without qualifier and typedef
+  HType *CanonicalType = nullptr;
   bool IsConst;
 };
 
 class SimpleType : public HType {
 protected:
-  SimpleType(HTypeKind K, bool IsConst, unsigned BitSize)
-      : HType(K, IsConst), BitSize(BitSize) {}
+  SimpleType(HTypeKind K, HType *Canon, bool IsConst, unsigned BitSize)
+      : HType(K, Canon, IsConst), BitSize(BitSize) {}
 
 public:
   static bool classof(const HType *T) {
@@ -278,8 +288,9 @@ class IntegerType : public SimpleType {
 protected:
   bool IsUnsigned = false;
 
-  IntegerType(bool IsConst, unsigned BitSize, bool IsUnsigned)
-      : SimpleType(TK_Integer, IsConst, BitSize), IsUnsigned(IsUnsigned) {}
+  IntegerType(bool IsConst, HType *Canon, unsigned BitSize, bool IsUnsigned)
+      : SimpleType(TK_Integer, Canon, IsConst, BitSize),
+        IsUnsigned(IsUnsigned) {}
   friend class HTypeContext;
 
 public:
@@ -291,8 +302,8 @@ public:
 
 // 浮点类型
 class FloatingType : public SimpleType {
-  FloatingType(bool IsConst, unsigned BitSize)
-      : SimpleType(TK_Float, IsConst, BitSize) {}
+  FloatingType(bool IsConst, HType *Canon, unsigned BitSize)
+      : SimpleType(TK_Float, Canon, IsConst, BitSize) {}
 
   friend class HTypeContext;
 
@@ -304,8 +315,9 @@ public:
 class PointerType : public SimpleType {
   HType *PointeeType;
 
-  PointerType(bool IsConst, unsigned PointerSize, HType *Pointee)
-      : SimpleType(TK_Pointer, PointerSize, IsConst), PointeeType(Pointee) {}
+  PointerType(bool IsConst, HType *Canon, unsigned PointerSize, HType *Pointee)
+      : SimpleType(TK_Pointer, Canon, PointerSize, IsConst),
+        PointeeType(Pointee) {}
   friend class HTypeContext;
 
 public:
@@ -318,9 +330,10 @@ public:
 class FunctionType : public HType {
   std::vector<HType *> ReturnType;
   std::vector<HType *> ParamTypes;
-  FunctionType(bool IsConst, const std::vector<HType *> &Return,
+  FunctionType(bool IsConst, HType *Canon, const std::vector<HType *> &Return,
                const std::vector<HType *> &Params)
-      : HType(TK_Function, IsConst), ReturnType(Return), ParamTypes(Params) {}
+      : HType(TK_Function, Canon, IsConst), ReturnType(Return),
+        ParamTypes(Params) {}
   friend class HTypeContext;
 
 public:
@@ -331,8 +344,8 @@ public:
 
 class RecordType : public HType {
   RecordDecl *Decl;
-  RecordType(bool IsConst, RecordDecl *Decl)
-      : HType(TK_Record, IsConst), Decl(Decl) {}
+  RecordType(bool IsConst, HType *Canon, RecordDecl *Decl)
+      : HType(TK_Record, Canon, IsConst), Decl(Decl) {}
   friend class HTypeContext;
 
 public:
@@ -342,8 +355,8 @@ public:
 
 class UnionType : public HType {
   UnionDecl *Decl;
-  UnionType(bool IsConst, UnionDecl *Decl)
-      : HType(TK_Union, IsConst), Decl(Decl) {}
+  UnionType(bool IsConst, HType *Canon, UnionDecl *Decl)
+      : HType(TK_Union, Canon, IsConst), Decl(Decl) {}
   friend class HTypeContext;
 
 public:
@@ -354,8 +367,9 @@ public:
 class ArrayType : public HType {
   HType *ElementType;
   std::optional<unsigned> NumElements;
-  ArrayType(bool IsConst, HType *Element, std::optional<unsigned> NumElements)
-      : HType(TK_Array, IsConst), ElementType(Element),
+  ArrayType(bool IsConst, HType *Canon, HType *Element,
+            std::optional<unsigned> NumElements)
+      : HType(TK_Array, Canon, IsConst), ElementType(Element),
         NumElements(NumElements) {}
   friend class HTypeContext;
 
@@ -368,7 +382,8 @@ public:
 class TypedefType : public HType {
   TypedefDecl *Decl;
   TypedefType(bool IsConst, TypedefDecl *Decl)
-      : HType(TK_Typedef, IsConst), Decl(Decl) {}
+      : HType(TK_Typedef, Decl->getType()->getCanonicalType(), IsConst),
+        Decl(Decl) {}
   friend class HTypeContext;
 
 public:
@@ -426,7 +441,11 @@ public:
     auto key = std::make_tuple(IsConst, BitSize, IsUnsigned);
     auto &entry = IntegerTypes[key];
     if (!entry) {
-      entry.reset(new IntegerType(IsConst, BitSize, IsUnsigned));
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getIntegerType(false, BitSize, IsUnsigned);
+      }
+      entry.reset(new IntegerType(IsConst, Canon, BitSize, IsUnsigned));
     }
     return entry.get();
   }
@@ -437,7 +456,11 @@ public:
     auto key = std::make_tuple(IsConst, BitSize);
     auto &entry = FloatTypes[key];
     if (!entry) {
-      entry.reset(new FloatingType(IsConst, BitSize));
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getFloatType(false, BitSize);
+      }
+      entry.reset(new FloatingType(IsConst, Canon, BitSize));
     }
     return entry.get();
   }
@@ -446,7 +469,14 @@ public:
     auto key = std::make_tuple(IsConst, PtrSize, Pointee);
     auto &entry = PointerTypes[key];
     if (!entry) {
-      entry.reset(new PointerType(IsConst, PtrSize, Pointee));
+      HType *Canon = nullptr;
+      if (key != std::make_tuple(false, PtrSize,
+                                 Pointee == nullptr
+                                     ? nullptr
+                                     : Pointee->getCanonicalType())) {
+        Canon = getPointerType(false, PtrSize, Pointee->getCanonicalType());
+      }
+      entry.reset(new PointerType(IsConst, Canon, PtrSize, Pointee));
     }
     return entry.get();
   }
@@ -456,7 +486,12 @@ public:
     auto key = std::make_tuple(IsConst, Element, NumElements);
     auto &entry = ArrayTypes[key];
     if (!entry) {
-      entry.reset(new ArrayType(IsConst, Element, NumElements));
+      HType *Canon = nullptr;
+      if (key !=
+          std::make_tuple(false, Element->getCanonicalType(), NumElements)) {
+        Canon = getArrayType(false, Element->getCanonicalType(), NumElements);
+      }
+      entry.reset(new ArrayType(IsConst, Canon, Element, NumElements));
     }
     return entry.get();
   }
@@ -472,30 +507,44 @@ public:
   // }
 
   HType *getRecordType(bool IsConst, RecordDecl *Decl) {
-    if (Decl->TypeForDecl) {
-      return Decl->TypeForDecl.get();
+    if (!Decl->TypeForDecl) {
+      Decl->TypeForDecl.reset(new RecordType(false, nullptr, Decl));
+      Decl->TypeForDeclConst.reset(
+          new RecordType(true, Decl->TypeForDecl.get(), Decl));
     }
 
-    Decl->TypeForDecl.reset(new RecordType(IsConst, Decl));
-    return Decl->TypeForDecl.get();
+    if (!IsConst) {
+      return Decl->TypeForDecl.get();
+    } else {
+      return Decl->TypeForDeclConst.get();
+    }
   }
 
   HType *getUnionType(bool IsConst, UnionDecl *Decl) {
-    if (Decl->TypeForDecl) {
-      return Decl->TypeForDecl.get();
+    if (!Decl->TypeForDecl) {
+      Decl->TypeForDecl.reset(new UnionType(false, nullptr, Decl));
+      Decl->TypeForDeclConst.reset(
+          new UnionType(true, Decl->TypeForDecl.get(), Decl));
     }
 
-    Decl->TypeForDecl.reset(new UnionType(IsConst, Decl));
-    return Decl->TypeForDecl.get();
+    if (!IsConst) {
+      return Decl->TypeForDecl.get();
+    } else {
+      return Decl->TypeForDeclConst.get();
+    }
   }
 
   HType *getTypedefType(bool IsConst, TypedefDecl *Decl) {
-    if (Decl->Type) {
-      return Decl->Type;
+    if (!Decl->TypeForDecl) {
+      Decl->TypeForDecl.reset(new TypedefType(false, Decl));
+      Decl->TypeForDeclConst.reset(new TypedefType(true, Decl));
     }
 
-    Decl->TypeForDecl.reset(new TypedefType(IsConst, Decl));
-    return Decl->Type;
+    if (!IsConst) {
+      return Decl->TypeForDecl.get();
+    } else {
+      return Decl->TypeForDeclConst.get();
+    }
   }
 
   void printDecls(llvm::raw_fd_ostream &OS) {

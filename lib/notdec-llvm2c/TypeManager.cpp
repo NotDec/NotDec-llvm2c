@@ -108,6 +108,9 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
     } else if (auto *UT = llvm::dyn_cast<ast::UnionType>(T)) {
       return Ctx.getRecordType(
           llvm::cast<clang::RecordDecl>(getDecl(UT->getDecl())));
+    } else if (auto *TT = llvm::dyn_cast<ast::TypedefType>(T)) {
+      return Ctx.getTypedefType(
+          llvm::cast<clang::TypedefDecl>(getDecl(TT->getDecl())));
     } else {
       assert(false && "convertDecl: Unhandled type");
     }

@@ -7,7 +7,7 @@ namespace notdec::ast {
 
 // HTypeContext HTypeContext::Instance;
 
-SimpleRange getRange(const TypedDecl* Decl) {
+SimpleRange getRange(const TypedDecl *Decl) {
   if (auto *RD = llvm::dyn_cast<RecordDecl>(Decl)) {
     return RD->getRange();
   }
@@ -20,8 +20,9 @@ SimpleRange getRange(const TypedDecl* Decl) {
   assert(false && "Unknown Decl type");
 }
 
-bool HType::isCharType() const{
-  return getKind() == TK_Integer && llvm::cast<IntegerType>(this)->getBitSize() == 8; 
+bool HType::isCharType() const {
+  return getKind() == TK_Integer &&
+         llvm::cast<IntegerType>(this)->getBitSize() == 8;
 }
 
 TypedefDecl *TypedefDecl::Create(HTypeContext &Ctx, const std::string &Name,
@@ -98,7 +99,9 @@ std::string HType::getAsString() const {
            (hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
   }
   case TK_Typedef:
-    assert(false && "TODO");
+    return "typedef " +
+           llvm::cast<TypedefType>(this)->getDecl()->getType()->getAsString() +
+           " " + llvm::cast<TypedefType>(this)->getDecl()->getName();
   default:
     assert(false && "Unknown HType");
   }
@@ -141,7 +144,7 @@ void TypedefDecl::print(llvm::raw_fd_ostream &OS) const {
      << getComment() << " */\n";
 }
 
-const FieldDecl * RecordDecl::getFieldAt(OffsetTy Offset) const{
+const FieldDecl *RecordDecl::getFieldAt(OffsetTy Offset) const {
   const ast::FieldDecl *Target = nullptr;
   for (auto &Field : getFields()) {
     auto End = Field.R.Size + Field.R.Start;
@@ -164,10 +167,10 @@ void RecordDecl::addPaddings() {
     if (Ent.isPadding) {
       continue;
     }
-    FieldDecl *Next = nullptr;
-    if (i + 1 < Fields.size()) {
-      Next = &Fields[i + 1];
-    }
+    // FieldDecl *Next = nullptr;
+    // if (i + 1 < Fields.size()) {
+    //   Next = &Fields[i + 1];
+    // }
 
     FieldDecl *Prev = nullptr;
     if (i > 0) {
