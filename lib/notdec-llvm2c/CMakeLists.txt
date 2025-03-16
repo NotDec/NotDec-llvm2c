@@ -17,6 +17,7 @@ add_library(notdec-llvm2c SHARED STATIC
     Range.cpp
     ASTPrinter/StmtPrinter.cpp
     ASTPrinter/DeclPrinter.cpp
+    ASTPrinter/TypePrinter.cpp
 )
 
 target_link_libraries(notdec-llvm2c

@@ -1,7 +1,9 @@
 
 #include "notdec-llvm2c/ASTPrinter/DeclPrinter.h"
-#include "notdec-llvm2c/TypeManager.h"
 #include "ASTPrinter/StmtPrinter.h"
+#include "ASTPrinter/TypePrinter.h"
+#include "notdec-llvm2c/TypeManager.h"
+
 #include <clang/AST/Attr.h>
 #include <clang/AST/PrettyPrinter.h>
 #include <clang/AST/Type.h>
@@ -97,21 +99,6 @@ void DeclPrinter::prettyPrintPragmas(Decl *D) {
 }
 
 void DeclPrinter::printDeclType(QualType T, StringRef DeclName, bool Pack) {
-  // To have DeclComments for elaborated types
-  if (Policy.IncludeTagDefinition && llvm::isa<ElaboratedType>(T)) {
-    auto *ET = llvm::cast<ElaboratedType>(T);
-    if (auto *TD = ET->getOwnedTagDecl()) {
-      // https://github.com/llvm/llvm-project/blob/3bfae7816bdb5b09930f073f1eb99f72015d9f78/clang/lib/AST/TypePrinter.cpp#L1503
-      PrintingPolicy SubPolicy = Policy;
-      SubPolicy.IncludeTagDefinition = false;
-      DeclPrinter SubPrinter(Out, SubPolicy, Context, Indentation, MyPolicy, CT);
-      SubPrinter.Visit(TD);
-      Out << (Pack ? "..." : "") + DeclName;
-      Out << ' ';
-      return;
-    }
-  }
-
   // Normally, a PackExpansionType is written as T[3]... (for instance, as a
   // template argument), but if it is the type of a declaration, the ellipsis
   // is placed before the name being declared.
@@ -119,7 +106,16 @@ void DeclPrinter::printDeclType(QualType T, StringRef DeclName, bool Pack) {
     Pack = true;
     T = PET->getPattern();
   }
-  T.print(Out, Policy, (Pack ? "..." : "") + DeclName, Indentation);
+  // Use our TypePrinter to print the type
+  // T.print(Out, Policy, (Pack ? "..." : "") + DeclName, Indentation);
+  Twine PlaceHolder = Pack ? "..." : "";
+
+  if (Policy.PrintCanonicalTypes)
+    T = T.getCanonicalType();
+  auto ty = T.split();
+
+  TypePrinter(Policy, Indentation, MyPolicy, CT)
+      .print(ty.Ty, ty.Quals, Out, Pack ? "..." : "");
 }
 
 void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
@@ -246,9 +242,11 @@ void DeclPrinter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
 }
 
 void DeclPrinter::printDeclComments(Decl *D) {
-  std::string Comment = CT->getComment(D);
-  if (!Comment.empty()) {
-    Out << " /* " << Comment << " */ ";
+  if (CT) {
+    std::string Comment = CT->getComment(D);
+    if (!Comment.empty()) {
+      Out << " /* " << Comment << " */ ";
+    }
   }
 }
 
@@ -292,7 +290,7 @@ void DeclPrinter::VisitRecordDecl(RecordDecl *D) {
 
   if (D->getIdentifier())
     Out << ' ' << *D;
-  
+
   printDeclComments(D);
   if (D->isCompleteDefinition()) {
     Out << " {\n";
@@ -378,7 +376,8 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
     Proto += "(";
     if (FT) {
       llvm::raw_string_ostream POut(Proto);
-      DeclPrinter ParamPrinter(POut, SubPolicy, Context, Indentation, MyPolicy, CT);
+      DeclPrinter ParamPrinter(POut, SubPolicy, Context, Indentation, MyPolicy,
+                               CT);
       for (unsigned i = 0, e = D->getNumParams(); i != e; ++i) {
         if (i)
           POut << ", ";
@@ -484,7 +483,8 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
       }
 
       if (D->getBody()) {
-        StmtPrinter P(Out, nullptr, Policy, Indentation, "\n", &Context, MyPolicy);
+        StmtPrinter P(Out, nullptr, Policy, Indentation, "\n", &Context,
+                      MyPolicy);
         P.PrintControlledStmt(const_cast<Stmt *>(D->getBody()));
       }
     } else {

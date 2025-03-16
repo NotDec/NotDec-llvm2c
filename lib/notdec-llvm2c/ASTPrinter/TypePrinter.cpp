@@ -1,4 +1,5 @@
 #include "notdec-llvm2c/ASTPrinter/TypePrinter.h"
+#include "ASTPrinter/DeclPrinter.h"
 
 #include "llvm/Support/SaveAndRestore.h"
 #include <clang/AST/ASTContext.h>
@@ -1337,7 +1338,10 @@ void TypePrinter::printElaboratedBefore(const ElaboratedType *T,
            "OwnedTagDecl expected to be a declaration for the type");
     PrintingPolicy SubPolicy = Policy;
     SubPolicy.IncludeTagDefinition = false;
-    OwnedTagDecl->print(OS, SubPolicy, Indentation);
+    // OwnedTagDecl->print(OS, SubPolicy, Indentation);
+    DeclPrinter Printer(OS, SubPolicy, OwnedTagDecl->getASTContext(),
+                        Indentation, MyPolicy, CT);
+    Printer.Visit(OwnedTagDecl);
     spaceBeforePlaceHolder(OS);
     return;
   }

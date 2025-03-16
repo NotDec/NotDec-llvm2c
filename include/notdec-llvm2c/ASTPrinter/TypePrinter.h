@@ -1,11 +1,13 @@
 #ifndef _NOTDEC_TYPEPRINTER_H_
 #define _NOTDEC_TYPEPRINTER_H_
 
+#include "ASTPrinter/DeclPrinter.h"
 #include <clang/AST/DeclarationName.h>
 #include <clang/AST/PrettyPrinter.h>
 #include <clang/AST/Type.h>
 namespace notdec::llvm2c {
 using namespace clang;
+class ClangTypeResult;
 
 /// RAII object that enables printing of the ARC __strong lifetime
 /// qualifier.
@@ -60,10 +62,14 @@ class TypePrinter {
   unsigned Indentation;
   bool HasEmptyPlaceHolder = false;
   bool InsideCCAttribute = false;
+  MyPrintingPolicy MyPolicy;
+  std::shared_ptr<ClangTypeResult> CT;
 
 public:
-  explicit TypePrinter(const PrintingPolicy &Policy, unsigned Indentation = 0)
-      : Policy(Policy), Indentation(Indentation) {}
+  explicit TypePrinter(const PrintingPolicy &Policy, unsigned Indentation = 0,
+                       MyPrintingPolicy P2 = MyPrintingPolicy(),
+                       std::shared_ptr<ClangTypeResult> CT = nullptr)
+      : Policy(Policy), Indentation(Indentation), MyPolicy(P2), CT(CT) {}
 
   void print(const Type *ty, Qualifiers qs, raw_ostream &OS,
              StringRef PlaceHolder);
