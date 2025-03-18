@@ -13,6 +13,99 @@
 
 namespace notdec {
 
+std::optional<std::string> BytesManager::getRange(SimpleRange R) {
+  if (R.Size < 0) {
+    return std::nullopt;
+  }
+
+  OffsetTy reqStart = R.Start;
+  OffsetTy reqEnd = R.Start + R.Size;
+
+  // Handle size 0 case
+  if (R.Size == 0) {
+    for (const auto &entry : Bytes) {
+      OffsetTy elemStart = entry.first.Start;
+      OffsetTy elemEnd = elemStart + entry.first.Size;
+      if (elemStart > reqStart) {
+        break;
+      }
+      if (elemEnd > reqStart) {
+        return std::string();
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::string result;
+  OffsetTy currentPos = reqStart;
+
+  for (const auto &entry : Bytes) {
+    const auto &elemRange = entry.first;
+    OffsetTy elemStart = elemRange.Start;
+    OffsetTy elemEnd = elemStart + elemRange.Size;
+
+    // Since elements are sorted by Start, break early if possible
+    if (elemStart >= reqEnd) {
+      break;
+    }
+
+    // Skip elements that end before currentPos
+    if (elemEnd <= currentPos) {
+      continue;
+    }
+
+    // Check for a gap between currentPos and this element's start
+    if (elemStart > currentPos) {
+      llvm::errs() << "BytesManager::getRange: a gap!\n";
+      return std::nullopt;
+    }
+
+    // Calculate the overlapping part for this element
+    OffsetTy overlapEnd = std::min(elemEnd, reqEnd);
+    OffsetTy dataOffset = currentPos - elemStart;
+    OffsetTy dataLength = overlapEnd - currentPos;
+
+    // Append the corresponding substring
+    result.append(entry.second.substr(dataOffset, dataLength));
+
+    // Move current position forward
+    currentPos = overlapEnd;
+
+    // Early exit if we've covered the entire range
+    if (currentPos >= reqEnd) {
+      break;
+    }
+  }
+
+  // Check if the entire range was covered
+  if (currentPos >= reqEnd) {
+    return result;
+  } else {
+    return std::nullopt;
+  }
+}
+
+BytesManager BytesManager::getSubBytes(int64_t Start, int64_t End) {
+  BytesManager BM;
+  for (auto &Ent : Bytes) {
+    assert(Ent.first.Size == Ent.second.size());
+    auto EntEnd = Ent.first.Start + Ent.first.Size;
+    auto innerStart = std::max(Start, Ent.first.Start);
+    auto innerEnd = std::min(End, EntEnd);
+    if (innerStart >= innerEnd) {
+      continue;
+    }
+    auto Offset = innerStart - Ent.first.Start;
+    auto Size = innerEnd - innerStart;
+    auto Data = Ent.second.substr(Offset, Size);
+
+    BM.Bytes.push_back({SimpleRange{.Start = innerStart - Start,
+                                    .Size = innerEnd - innerStart},
+                        Data});
+  }
+  return BM;
+}
+
 std::shared_ptr<BytesManager> BytesManager::create(llvm::Module &M) {
   std::shared_ptr<BytesManager> BM = std::make_shared<BytesManager>();
   for (auto &G : M.getGlobalList()) {
@@ -29,7 +122,7 @@ std::shared_ptr<BytesManager> BytesManager::create(llvm::Module &M) {
         BM->Bytes.push_back(
             {SimpleRange{.Start = Offset,
                          .Size = static_cast<OffsetTy>(Data.size())},
-             Data});
+             Data.str()});
       }
     }
   }
@@ -43,14 +136,17 @@ llvm::StringRef decodeCStr1(llvm::StringRef Bytes, int64_t Offset) {
   while (Ptr < End && *Ptr != '\0') {
     Ptr++;
   }
+  if (*Ptr == '\0') {
+    Ptr++;
+  }
   return llvm::StringRef(Start, Ptr - Start);
 }
 
-llvm::StringRef BytesManager::decodeCStr(int64_t Offset) {
+std::string BytesManager::decodeCStr(int64_t Offset) {
   for (auto &Ent : Bytes) {
     if (Ent.first.containsOffset(Offset)) {
       auto innerOffset = Offset - Ent.first.Start;
-      return decodeCStr1(Ent.second, innerOffset);
+      return decodeCStr1(Ent.second, innerOffset).str();
     }
   }
   return "";

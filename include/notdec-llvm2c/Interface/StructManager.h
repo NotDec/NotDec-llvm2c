@@ -6,6 +6,7 @@
 #include <clang/AST/Decl.h>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -48,9 +49,16 @@ struct FieldEntry {
 };
 
 struct BytesManager {
-  std::vector<std::pair<SimpleRange, llvm::StringRef>> Bytes;
+  std::vector<std::pair<SimpleRange, std::string>> Bytes;
   static std::shared_ptr<BytesManager> create(llvm::Module &M);
-  llvm::StringRef decodeCStr(int64_t Offset);
+  static std::shared_ptr<BytesManager> fromOneString(std::string Data) {
+    auto BM = std::make_shared<BytesManager>();
+    BM->Bytes.push_back({SimpleRange{.Start = 0, .Size = static_cast<OffsetTy>(Data.size())}, Data});
+    return BM;
+  }
+  std::string decodeCStr(int64_t Offset);
+  std::optional<std::string> getRange(SimpleRange R);
+  BytesManager getSubBytes(int64_t Start, int64_t End);
 };
 
 struct UnionInfo {

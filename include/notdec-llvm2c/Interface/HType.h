@@ -47,7 +47,10 @@ public:
   const std::string &getComment() const { return Comment; }
   void setComment(const std::string &Comment) { this->Comment = Comment; }
   clang::Decl *getASTDecl() const { return ASTDecl; }
-  void setASTDecl(clang::Decl *D) { ASTDecl = D; }
+  void setASTDecl(clang::Decl *D) {
+    assert(D != nullptr && "setASTDecl: nullptr?");
+    ASTDecl = D;
+  }
 
   template <typename T> T *getAs() const {
     if (auto *T1 = llvm::dyn_cast<T>(this)) {
@@ -74,6 +77,7 @@ public:
   clang::Decl *ASTDecl = nullptr;
 
   void setASTDecl(clang::Decl *D) const {
+    assert(D != nullptr && "setASTDecl: nullptr?");
     const_cast<FieldDecl *>(this)->ASTDecl = D;
   }
 };
@@ -95,6 +99,7 @@ public:
     assert(this->Bytes == nullptr && "BytesManager already exists");
     this->Bytes = Bytes;
   }
+  std::shared_ptr<BytesManager> getBytesManager() { return Bytes; }
 
   SimpleRange getRange() const {
     assert(!Fields.empty() && "getRange: Empty fields?");

@@ -1522,7 +1522,7 @@ void StmtPrinter::VisitDesignatedInitExpr(DesignatedInitExpr *Node) {
   bool NeedsEquals = true;
   for (const DesignatedInitExpr::Designator &D : Node->designators()) {
     if (D.isFieldDesignator()) {
-      if (D.getDotLoc().isInvalid()) {
+      if (Node->usesGNUSyntax()) {
         if (IdentifierInfo *II = D.getFieldName()) {
           OS << II->getName() << ":";
           NeedsEquals = false;

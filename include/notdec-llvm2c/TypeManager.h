@@ -91,6 +91,11 @@ public:
   std::vector<clang::Expr *> tryAddZero(clang::Expr *Val);
   clang::Expr *getGlobal(int64_t Offset);
 
+  // For array type, we may modify decl's type
+  clang::Expr *decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
+                                 BytesManager &Bytes);
+  void increaseArraySize(ValueDecl *Decl, int64_t Size);
+
   std::string getComment(clang::Decl *Decl) {
     auto It = DeclMap.find(Decl);
     if (It != DeclMap.end()) {

@@ -1,5 +1,6 @@
 #include "notdec-llvm2c/TypeManager.h"
 #include "Interface/HType.h"
+#include "Interface/StructManager.h"
 #include "StructuralAnalysis.h"
 #include "Utils.h"
 #include <cassert>
@@ -7,8 +8,16 @@
 #include <clang/AST/Expr.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/Specifiers.h>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/raw_ostream.h>
 #include <optional>
+#include <variant>
+#include <vector>
 
 namespace notdec::llvm2c {
 
@@ -268,25 +277,192 @@ void ClangTypeResult::declareDecls() {
   }
 }
 
+llvm::APInt stringToAPInt(const std::string &bytes,
+                          llvm::support::endianness endian) {
+  const char *ptr = bytes.data();
+  size_t len = bytes.size();
+  size_t remaining = len;
+  std::vector<uint64_t> Data;
+
+  // 处理完整的8字节块
+  while (remaining >= sizeof(uint64_t)) {
+    uint64_t word = llvm::support::endian::readNext<uint64_t, 1>(ptr, endian);
+    Data.push_back(word);
+    remaining -= sizeof(uint64_t);
+  }
+
+  // 处理剩余字节（不足8字节的情况）
+  if (remaining > 0) {
+    std::array<uint8_t, sizeof(uint64_t)> buffer = {0};
+    std::memcpy(buffer.data(), ptr, remaining);
+    uint64_t word = llvm::support::endian::read<uint64_t, 1>(
+        reinterpret_cast<const char *>(buffer.data()), endian);
+    Data.push_back(word);
+  }
+
+  unsigned numBits = bytes.size() * 8;
+  return llvm::APInt(numBits, llvm::makeArrayRef(Data.data(), Data.size()));
+}
+
+void ClangTypeResult::increaseArraySize(ValueDecl *Decl, int64_t Size) {
+  auto AT = llvm::cast<clang::ConstantArrayType>(Decl->getType());
+  auto OldSize = AT->getSize().getZExtValue();
+  if (OldSize >= Size) {
+    return;
+  }
+  auto NewAT =
+      Ctx.getConstantArrayType(AT->getElementType(), llvm::APInt(32, Size),
+                               nullptr, clang::ArrayType::Normal, 0);
+  Decl->setType(NewAT);
+}
+
+clang::Expr *
+ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
+                                   BytesManager &Bytes) {
+  ValueDecl *Decl = nullptr;
+  clang::QualType Ty;
+  if (auto Declp = std::get_if<ValueDecl *>(&DeclOrTy)) {
+    Decl = *Declp;
+    Ty = Decl->getType();
+  } else {
+    Ty = std::get<QualType>(DeclOrTy);
+  }
+
+  if (Ty->isIntegerType()) {
+    auto BitSize = Ctx.getTypeSize(Ty);
+    assert(BitSize > 0);
+    auto Bs = Bytes.getRange(
+        SimpleRange{.Start = 0, .Size = static_cast<OffsetTy>(BitSize / 8)});
+    if (!Bs) {
+      return nullptr;
+    }
+    auto Val = stringToAPInt(*Bs, llvm::support::endianness::little);
+    return clang::IntegerLiteral::Create(Ctx, Val, Ty, clang::SourceLocation());
+  } else if (Ty->isPointerType()) {
+    auto BitSize = Ctx.getTypeSize(Ty);
+    assert(BitSize > 0);
+    auto Bs = Bytes.getRange(
+        SimpleRange{.Start = 0, .Size = static_cast<OffsetTy>(BitSize / 8)});
+    if (!Bs) {
+      return nullptr;
+    }
+    auto Val = stringToAPInt(*Bs, llvm::support::endianness::little);
+    return getGlobal(Val.getSExtValue());
+  } else if (Ty->isRecordType()) {
+    auto *RD = Ty->getAsRecordDecl();
+    auto ASTDecl = DeclMap.at(RD)->getAs<ast::RecordDecl>();
+    llvm::SmallVector<clang::Expr *> Inits;
+    auto &FS = ASTDecl->getFields();
+    for (size_t i = 0; i < FS.size(); i++) {
+      auto &Field = FS[i];
+      auto VD = llvm::cast<clang::ValueDecl>(Field.ASTDecl);
+      llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
+      llvm::SmallVector<clang::Expr *> IndexExprs;
+      Designators.push_back(DesignatedInitExpr::Designator(
+          VD->getIdentifier(), clang::SourceLocation(),
+          clang::SourceLocation()));
+
+      OffsetTy EndOff = std::numeric_limits<OffsetTy>::max();
+      if (i + 1 < FS.size()) {
+        EndOff = FS[i + 1].R.Start;
+      }
+
+      auto Bs = Bytes.getRange(SimpleRange{.Start = Field.R.Start, .Size = EndOff - Field.R.Start});
+      if (!Bs) {
+        continue;
+      }
+      auto BM1 = BytesManager::fromOneString(*Bs);
+      auto Init = decodeInitializer(VD, *BM1);
+      auto DIE = clang::DesignatedInitExpr::Create(
+          Ctx, Designators, IndexExprs, clang::SourceLocation(), false, Init);
+      Inits.push_back(DIE);
+    }
+    return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), Inits,
+                                         clang::SourceLocation());
+  } else if (Ty->isArrayType()) {
+    assert(llvm::isa<clang::ConstantArrayType>(Ty.getTypePtr()) &&
+           "Not ConstantArrayType?");
+    auto *AT = llvm::cast<clang::ConstantArrayType>(Ty.getTypePtr());
+    auto ElemTy = AT->getElementType();
+    if (ElemTy->isCharType()) {
+      auto Str = Bytes.decodeCStr(0);
+      if (!Str.empty()) {
+        auto SSize = Str.size();
+        if (Decl) {
+          increaseArraySize(Decl, SSize);
+        }
+        if (Str.back() == '\0') {
+          SSize -= 1;
+          Str.pop_back();
+        }
+        return clang::StringLiteral::Create(
+            Ctx, Str, clang::StringLiteral::Ascii, false,
+            Ctx.getStringLiteralArrayType(ElemTy, SSize),
+            clang::SourceLocation());
+      }
+    }
+    auto ElemSize = getTypeSizeInChars(ElemTy);
+    if (auto Err = ElemSize.takeError()) {
+      llvm::errs()
+          << "ClangTypeResult::decodeInitializer: Failed to get element size: "
+          << Err << "\n";
+      std::abort();
+    }
+    llvm::SmallVector<clang::Expr *> Inits;
+    for (unsigned Off = 0; true; Off += *ElemSize) {
+      auto Bs =
+          Bytes.getRange(SimpleRange{.Start = Off, .Size = Off + *ElemSize});
+      if (!Bs) {
+        break;
+      }
+      auto BM1 = BytesManager::fromOneString(*Bs);
+      auto Init = decodeInitializer(ElemTy, *BM1);
+      Inits.push_back(Init);
+    }
+    if (Inits.size() == 0) {
+      return nullptr;
+    }
+    if (Decl) {
+      increaseArraySize(Decl, Inits.size());
+    }
+    return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), Inits,
+                                         clang::SourceLocation());
+  } else {
+    assert(false && "Unsupported type for initializer");
+  }
+}
+
 void ClangTypeResult::createMemoryDecls() {
   auto *MDecl = Result->MemoryDecl;
   auto *TUD = AM->getGlobalDefinitions();
 
   if (expandMemory) {
     // split the memory type into individual var decls.
-    for (auto &Field : MDecl->getFields()) {
+    auto &FS = MDecl->getFields();
+    for (size_t i = 0; i < FS.size(); i++) {
+      auto &Field = FS[i];
       auto Name = Field.Name;
       if (startswith(Name, "field_")) {
         Name = Name.substr(strlen("field_"));
         Name = "global_" + Name;
       }
       clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
+      auto CType = convertTypeL(Field.Type);
       clang::VarDecl *VD = clang::VarDecl::Create(
-          Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
-          convertTypeL(Field.Type), nullptr, clang::SC_None);
+          Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II, CType,
+          nullptr, clang::SC_None);
 
       // handle initializer
-      // VD->setInit();
+      if (MDecl->getBytesManager()) {
+        auto EndRange = std::numeric_limits<int64_t>::max();
+        if (i + 1 < FS.size()) {
+          EndRange = FS[i + 1].R.Start;
+        }
+        auto SubBytes =
+            MDecl->getBytesManager()->getSubBytes(Field.R.Start, EndRange);
+        clang::Expr *Init = decodeInitializer(VD, SubBytes);
+        VD->setInit(Init);
+      }
 
       TUD->addDecl(VD);
       Field.setASTDecl(VD);
@@ -306,6 +482,11 @@ void ClangTypeResult::createMemoryDecls() {
     MemoryVar = clang::VarDecl::Create(Ctx, TUD, clang::SourceLocation(),
                                        clang::SourceLocation(), II, ElabTy,
                                        nullptr, clang::SC_None);
+    if (MDecl->getBytesManager()) {
+      clang::Expr *Init =
+          decodeInitializer(MemoryVar, *MDecl->getBytesManager());
+      MemoryVar->setInit(Init);
+    }
     TUD->addDecl(MemoryVar);
     DeclMap[MemoryVar] = MDecl;
   }
