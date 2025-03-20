@@ -112,7 +112,6 @@ public:
     return SimpleRange{.Start = Min, .Size = Max - Min};
   }
 
-  void resolveInitialValue();
   void addPaddings();
 
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Record; }

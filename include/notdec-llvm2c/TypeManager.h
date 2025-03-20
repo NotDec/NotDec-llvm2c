@@ -28,7 +28,7 @@ class ClangTypeResult {
 
   // if not expandMemory, MemoryVar stores memory var with ElaboratedType;
   // if expandMemory, find globals in ast::FieldDecl's ASTDecl.
-  bool expandMemory = false;
+  bool expandMemory = true;
   clang::VarDecl *MemoryVar = nullptr;
 
   std::map<HType *, clang::QualType> TypeMap;

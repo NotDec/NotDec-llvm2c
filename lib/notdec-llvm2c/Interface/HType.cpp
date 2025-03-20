@@ -296,36 +296,4 @@ void RecordDecl::addPaddings() {
 // }
 // }
 
-void RecordDecl::resolveInitialValue() {
-  // for (size_t i = 0; i < Fields.size(); i++) {
-  //   auto &Ent = Fields[i];
-  //   if (Ent.isPadding) {
-  //     continue;
-  //   }
-  //   if (Ent.Decl == nullptr) {
-  //     continue;
-  //   }
-  //   auto QT = Ent.Decl->getType();
-  //   if (QT->isArrayType() &&
-  //       QT->getAsArrayTypeUnsafe()->getElementType()->isCharType()) {
-  //     auto Offset = Ent.R.Start;
-  //     auto CStr = Bytes->decodeCStr(Offset);
-  //     if (CStr.size() > 0) {
-  //       llvm::cast<clang::FieldDecl>(Ent.Decl)->setInClassInitializer(
-  //           clang::StringLiteral::Create(Decl->getASTContext(), CStr,
-  //                                        clang::StringLiteral::Ascii, false,
-  //                                        QT, clang::SourceLocation()));
-  //       // shrink the array size if the entry is too large.
-  //       // expand if there is enough space.
-  //       auto NewSize = CStr.size() + 1;
-  //       if (Ent.R.Size > NewSize || (i + 1 == Fields.size()) ||
-  //           (i + 1 < Fields.size() &&
-  //            Fields[i + 1].R.Start - Ent.R.Start > NewSize)) {
-  //         updateFieldSize(i, NewSize);
-  //       }
-  //     }
-  //   }
-  // }
-}
-
 } // namespace notdec::ast
