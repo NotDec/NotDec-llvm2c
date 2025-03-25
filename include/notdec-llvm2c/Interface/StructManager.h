@@ -79,7 +79,7 @@ struct ArrayInfo {
 };
 
 struct TypeInfo {
-  OffsetTy Size = -1;
+  std::optional<OffsetTy> Size = std::nullopt;
   std::variant<SimpleTypeInfo, StructInfo, UnionInfo, ArrayInfo> Info;
 };
 

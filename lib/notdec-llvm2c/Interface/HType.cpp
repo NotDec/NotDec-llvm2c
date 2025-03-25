@@ -167,10 +167,6 @@ void RecordDecl::addPaddings() {
     if (Ent.isPadding) {
       continue;
     }
-    // FieldDecl *Next = nullptr;
-    // if (i + 1 < Fields.size()) {
-    //   Next = &Fields[i + 1];
-    // }
 
     FieldDecl *Prev = nullptr;
     if (i > 0) {
