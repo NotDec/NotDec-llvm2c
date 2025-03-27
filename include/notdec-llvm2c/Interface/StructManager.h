@@ -39,6 +39,9 @@ struct SimpleRange {
     }
     return Start <= Offset && Offset < Start + Size;
   }
+  OffsetTy end() const {
+    return Start + Size;
+  }
 };
 
 struct FieldEntry {
@@ -71,11 +74,13 @@ struct StructInfo {
 };
 
 struct SimpleTypeInfo {
-  const retypd::CGEdge *Edge;
+  const retypd::CGEdge *Edge = nullptr;
 };
 
 struct ArrayInfo {
-  const retypd::CGEdge *Edge;
+  const retypd::CGEdge *Edge = nullptr;
+  // force the element size
+  std::optional<OffsetTy> ElemSize = std::nullopt;
 };
 
 struct TypeInfo {

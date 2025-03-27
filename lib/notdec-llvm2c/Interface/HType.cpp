@@ -20,6 +20,20 @@ SimpleRange getRange(const TypedDecl *Decl) {
   assert(false && "Unknown Decl type");
 }
 
+HType *ArrayType::withSize(HTypeContext &Ctx,
+                           std::optional<unsigned> NumElements) {
+  return Ctx.getArrayType(isConst(), ElementType, NumElements);
+}
+
+bool HType::isCharArrayType() const {
+  if (isArrayType()) {
+    if (llvm::cast<ArrayType>(this)->getElementType()->isCharType()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool HType::isCharType() const {
   return getKind() == TK_Integer &&
          llvm::cast<IntegerType>(this)->getBitSize() == 8;
@@ -158,59 +172,6 @@ const FieldDecl *RecordDecl::getFieldAt(OffsetTy Offset) const {
     }
   }
   return Target;
-}
-
-void RecordDecl::addPaddings() {
-  // add padding, expand array accordingly
-  for (size_t i = 0; i < Fields.size(); i++) {
-    auto &Ent = Fields[i];
-    if (Ent.isPadding) {
-      continue;
-    }
-
-    FieldDecl *Prev = nullptr;
-    if (i > 0) {
-      Prev = &Fields[i - 1];
-    }
-
-    // if prev is array
-    if (Prev != nullptr && Prev->Type->isArrayType()) {
-      auto ElemTy = Prev->Type->getArrayElementType();
-      auto PrevEnd = Prev->R.Start + Prev->R.Size;
-      // if current ty is char
-      if (ElemTy == Ent.Type && Ent.Type->isCharType()) {
-        if (PrevEnd == Ent.R.Start) {
-          // merge to prev
-          Prev->R.Size += Ent.R.Size;
-          // erase Ent
-          Fields.erase(Fields.begin() + i);
-          i--;
-          continue;
-        }
-      }
-    }
-
-    // only if has next field, add padding or expand array
-    if (i + 1 < Fields.size()) {
-      auto &Next = Fields[i + 1];
-      auto NextStart = Next.R.Start;
-      auto CurEnd = Ent.R.Start + Ent.R.Size;
-      bool isArray = Ent.Type->isArrayType();
-      if (CurEnd < NextStart) {
-        if (isArray) {
-          // expand the array size if possible
-          Ent.R.Size = NextStart - Ent.R.Start;
-          // TODO handle padding using std::floor
-          // auto ElemSize = Ent.Type->getArrayElementType()->getSize();
-        } else {
-          // add padding
-          addField(FieldDecl{
-              .R = SimpleRange{.Start = CurEnd, .Size = NextStart - CurEnd},
-              .isPadding = true});
-        }
-      }
-    }
-  }
 }
 
 // void RecordDecl::addPaddings() {

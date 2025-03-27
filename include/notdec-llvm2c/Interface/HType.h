@@ -2,6 +2,7 @@
 #define _NOTDEC_INTERFACE_HTCONTEXT_H_
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -92,6 +93,7 @@ protected:
   friend class HTypeContext;
 
 public:
+  std::vector<FieldDecl> &getFields() { return Fields; }
   const std::vector<FieldDecl> &getFields() const { return Fields; }
   const ast::FieldDecl *getFieldAt(OffsetTy Off) const;
   void print(llvm::raw_fd_ostream &OS) const;
@@ -111,8 +113,6 @@ public:
     }
     return SimpleRange{.Start = Min, .Size = Max - Min};
   }
-
-  void addPaddings();
 
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Record; }
   // void addField(FieldDecl Field) { Fields.push_back(Field); }
@@ -149,6 +149,17 @@ public:
       }
     }
     assert(false && "Field not inserted?");
+  }
+  std::optional<size_t> getLastNonPaddingInd() {
+    std::optional<size_t> Ret = std::nullopt;
+    for (size_t I = Fields.size(); I > 0; I--) {
+      auto Ind = I - 1;
+      if (!Fields.at(Ind).isPadding) {
+        Ret = Ind;
+        break;
+      }
+    }
+    return Ret;
   }
 
   static RecordDecl *Create(HTypeContext &Ctx, const std::string &Name);
@@ -249,6 +260,7 @@ public:
   bool isFunctionType() const { return Kind == TK_Function; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
   bool isCharType() const;
+  bool isCharArrayType() const;
 
   HType *getPointeeType() const;
   HType *getArrayElementType() const;
@@ -381,6 +393,8 @@ public:
   static bool classof(const HType *T) { return T->getKind() == TK_Array; }
   HType *getElementType() const { return ElementType; }
   std::optional<unsigned> getNumElements() const { return NumElements; }
+
+  HType* withSize(HTypeContext& Ctx, std::optional<unsigned> NumElements);
 };
 
 class TypedefType : public HType {
