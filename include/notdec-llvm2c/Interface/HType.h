@@ -413,9 +413,7 @@ public:
 class HTypeContext {
 
   // For struct/typedef decls.
-  std::map<std::string, std::unique_ptr<TypedDecl>> Decls;
-  // For struct types.
-  std::vector<std::unique_ptr<HType>> Types;
+  std::map<std::string, std::shared_ptr<TypedDecl>> Decls;
   // factory methods
   using IntegerKey = std::tuple<bool, unsigned, bool>;
   std::map<IntegerKey, std::unique_ptr<IntegerType>> IntegerTypes;
@@ -437,13 +435,13 @@ protected:
   friend class RecordDecl;
   friend class UnionDecl;
   friend class TypedefDecl;
-  void addDecl(const std::string &Name, std::unique_ptr<TypedDecl> Decl) {
+  void addDecl(const std::string &Name, std::shared_ptr<TypedDecl> Decl) {
     assert(!Decls.count(Name));
-    Decls[Name] = std::move(Decl);
+    Decls[Name] = Decl;
   }
 
 public:
-  const std::map<std::string, std::unique_ptr<TypedDecl>> &getDecls() const {
+  const std::map<std::string, std::shared_ptr<TypedDecl>> &getDecls() const {
     return Decls;
   }
   TypedDecl *getDecl(const std::string &Name) {

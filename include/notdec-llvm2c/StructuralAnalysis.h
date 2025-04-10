@@ -320,6 +320,9 @@ public:
   ValueNamer &getValueNamer();
   bool isExpr(ExtValuePtr V) { return ExprMap.count(V) > 0; }
   clang::Expr *getExpr(ExtValuePtr V) { return ExprMap.at(V); }
+  CFGBlock * getEntryBlock() {
+    return ll2cfg.at(&Func.getEntryBlock());
+  }
   CFGBlock *&getBlock(llvm::BasicBlock &bb) { return ll2cfg.at(&bb); }
   CFGBlock *createBlock(llvm::BasicBlock &bb) {
     CFG::iterator b = getCFG().createBlock();

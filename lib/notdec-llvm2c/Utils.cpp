@@ -26,6 +26,10 @@
 
 namespace notdec::llvm2c {
 
+std::string join(std::string path, std::string elem) {
+  return path.back() == '/' ? path + elem : path + "/" + elem;
+}
+
 void printModule(llvm::Module &M, const char *path) {
   std::error_code EC;
   llvm::raw_fd_ostream os(path, EC);
@@ -84,6 +88,74 @@ void demoteSSA(llvm::Module &M) {
 // Pass
 // ===============
 
+/*
+In InstCombinerImpl::mergeStoreIntoSuccessor
+
+*/
+
+llvm::Value *PhiHaveAddress(llvm::PHINode *P) {
+  if (auto SI = llvm::dyn_cast<llvm::StoreInst>(P->getNextNode())) {
+    if (SI->getValueOperand() == P) {
+      auto Ret = SI->getPointerOperand();
+      SI->eraseFromParent();
+      return Ret;
+    }
+  }
+  return nullptr;
+}
+
+/// DemotePHIToStack - This function takes a virtual register computed by a PHI
+/// node and replaces it with a slot in the stack frame allocated via alloca.
+/// The PHI node is deleted. It returns the pointer to the alloca inserted.
+llvm::Value *DemotePHIToStack2(llvm::PHINode *P,
+                                    llvm::Instruction *AllocaPoint) {
+  using namespace llvm;
+  if (P->use_empty()) {
+    P->eraseFromParent();
+    return nullptr;
+  }
+
+  const DataLayout &DL = P->getModule()->getDataLayout();
+
+  // Create a stack slot to hold the value.
+  Value *Slot;
+  if ((Slot = PhiHaveAddress(P))) {
+  } else if (AllocaPoint) {
+    Slot = new AllocaInst(P->getType(), DL.getAllocaAddrSpace(), nullptr,
+                          P->getName() + ".reg2mem", AllocaPoint);
+  } else {
+    Function *F = P->getParent()->getParent();
+    Slot =
+        new AllocaInst(P->getType(), DL.getAllocaAddrSpace(), nullptr,
+                       P->getName() + ".reg2mem", &F->getEntryBlock().front());
+  }
+
+  // Iterate over each operand inserting a store in each predecessor.
+  for (unsigned i = 0, e = P->getNumIncomingValues(); i < e; ++i) {
+    if (InvokeInst *II = dyn_cast<InvokeInst>(P->getIncomingValue(i))) {
+      assert(II->getParent() != P->getIncomingBlock(i) &&
+             "Invoke edge not supported yet");
+      (void)II;
+    }
+    new StoreInst(P->getIncomingValue(i), Slot,
+                  P->getIncomingBlock(i)->getTerminator());
+  }
+
+  // Insert a load in place of the PHI and replace all uses.
+  BasicBlock::iterator InsertPt = P->getIterator();
+
+  for (; isa<PHINode>(InsertPt) || InsertPt->isEHPad(); ++InsertPt)
+    /* empty */; // Don't insert before PHI nodes or landingpad instrs.
+
+  Value *V =
+      new LoadInst(P->getType(), Slot, P->getName() + ".reload", &*InsertPt);
+  P->replaceAllUsesWith(V);
+
+  // Delete PHI.
+  P->eraseFromParent();
+  return Slot;
+}
+
 llvm::PreservedAnalyses DemotePhiPass::run(llvm::Function &F,
                                            llvm::FunctionAnalysisManager &) {
   using namespace llvm;
@@ -113,7 +185,7 @@ llvm::PreservedAnalyses DemotePhiPass::run(llvm::Function &F,
 
   // Demote phi nodes
   for (Instruction *I : WorkList)
-    DemotePHIToStack(cast<PHINode>(I), AllocaInsertionPoint);
+    DemotePHIToStack2(cast<PHINode>(I), AllocaInsertionPoint);
   return llvm::PreservedAnalyses::none();
 }
 

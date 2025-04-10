@@ -15,6 +15,7 @@
 
 namespace notdec::llvm2c {
 
+std::string join(std::string path, std::string elem);
 void printModule(llvm::Module &M, const char *path);
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName);
 

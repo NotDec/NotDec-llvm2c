@@ -163,6 +163,18 @@ std::unique_ptr<std::set<CFGBlock *>> getLoopNodes(CFGBlock *Block,
   return ret;
 }
 
+clang::Expr* Phoenix::createBlockCondExpr(CFGBlock* Block, clang::Expr* Cond) {
+  if (Block->size() == 0) {
+    return Cond;
+  }
+  if (Block->size() < StmtExprThreshold) {
+    auto CS = llvm::cast<CompoundStmt>(makeCompoundStmt(Block, Cond));
+    auto Ret = new (Ctx) StmtExpr(CS, Cond->getType(), clang::SourceLocation(), clang::SourceLocation(), 0);
+    return Ret;
+  }
+  return nullptr;
+}
+
 bool Phoenix::ReduceCyclic(CFGBlock *Block) {
   bool changed = false;
   std::unique_ptr<std::set<CFGBlock *>> loopNodes = getLoopNodes(Block, Dom);
@@ -219,11 +231,11 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
         cond = invertCond(cond);
       }
       clang::Stmt *whil;
-      if (Block->size() == 0) {
+      if (auto CondStmtExpr = createBlockCondExpr(Block, cond)) {
         // S is the only body block
         auto body = makeCompoundStmt(S);
         whil = clang::WhileStmt::Create(
-            Ctx, nullptr, cond, body, clang::SourceLocation(),
+            Ctx, nullptr, CondStmtExpr, body, clang::SourceLocation(),
             clang::SourceLocation(), clang::SourceLocation());
       } else {
         // Wrap in a big while true, and use break to leave

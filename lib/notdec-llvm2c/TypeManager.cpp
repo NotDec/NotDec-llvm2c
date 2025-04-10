@@ -6,8 +6,10 @@
 #include <cassert>
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
+#include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/Specifiers.h>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -548,6 +550,28 @@ std::optional<int64_t> getIntValue(clang::Expr *Index) {
   return OffsetNum;
 }
 
+std::optional<int> isPowerOfTwo(int n) {
+  if (n <= 0 || (n & (n - 1)) != 0) {
+      return std::nullopt;
+  }
+  int count = 0;
+  while (n > 1) {
+      n >>= 1;
+      ++count;
+  }
+  return count;
+}
+
+int myPow(int x, unsigned int p)
+{
+  if (p == 0) return 1;
+  if (p == 1) return x;
+  
+  int tmp = myPow(x, p/2);
+  if (p%2 == 0) return tmp * tmp;
+  else return x * tmp * tmp;
+}
+
 clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
                              int Size) {
   if (auto IntVal = getIntValue(Index)) {
@@ -562,6 +586,16 @@ clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
     if (BO->getOpcode() == clang::BO_Mul) {
       if (auto IntVal = getIntValue(BO->getRHS())) {
         if (*IntVal == Size) {
+          return BO->getLHS();
+        } else if (*IntVal % Size == 0) {
+          assert(false && "todo");
+        }
+      }
+    }
+    if (BO->getOpcode() == clang::BO_Shl) {
+      if (auto IntVal = getIntValue(BO->getRHS())) {
+        auto Mul = myPow(2, *IntVal);
+        if (Mul == Size) {
           return BO->getLHS();
         } else if (*IntVal % Size == 0) {
           assert(false && "todo");
@@ -600,6 +634,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
   if (ValTy->isPointerType()) {
     auto ElemTy = Ctx.getCanonicalType(ValTy->getPointeeType().getTypePtr());
     auto ElemSize = llvm::expectedToOptional(getTypeSizeInChars(ElemTy));
+    // TODO if it is multiple of OffsetNum, try divide Index by ElemSize
     if (ElemSize && OffsetNum && *OffsetNum > *ElemSize) {
       // try to divide the index by ElemSize.
       auto NewIndex = *OffsetNum / *ElemSize;
@@ -707,7 +742,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
 
       // Create array indexing?
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
-          deref(Ctx, Base), Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
+          deref(Ctx, Base), CurrentIndex, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
           clang::SourceLocation());
 
       Base = addrOf(Ctx, AS);

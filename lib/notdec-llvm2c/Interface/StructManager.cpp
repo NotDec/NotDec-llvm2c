@@ -119,10 +119,10 @@ std::shared_ptr<BytesManager> BytesManager::create(llvm::Module &M) {
       auto *Init = G.getInitializer();
       if (auto *C = llvm::dyn_cast<llvm::ConstantDataArray>(Init)) {
         auto Data = C->getRawDataValues();
-        BM->Bytes.push_back(
-            {SimpleRange{.Start = Offset,
-                         .Size = static_cast<OffsetTy>(Data.size())},
-             Data.str()});
+        BM->Bytes.emplace_back(
+            SimpleRange{.Start = Offset,
+                        .Size = static_cast<OffsetTy>(Data.size())},
+            Data.str());
       }
     }
   }

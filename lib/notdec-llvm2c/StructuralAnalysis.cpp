@@ -154,7 +154,6 @@ clang::Expr *createCCast(clang::ASTContext &Ctx, ExprBuilder &EB,
   return expr;
 }
 
-
 clang::Stmt *getStmt(CFGElement e) {
   if (auto stmt = e.getAs<CFGStmt>()) {
     return const_cast<clang::Stmt *>(stmt->getStmt());
@@ -706,10 +705,15 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
     clang::VarDecl *Decl = clang::VarDecl::Create(
         getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
         II2, Ty, nullptr, clang::SC_None);
-    Decl->setInit(&Expr);
+
+    // Decl->setInit(&Expr);
     clang::DeclStmt *DS = new (getASTContext())
         clang::DeclStmt(clang::DeclGroupRef(Decl), clang::SourceLocation(),
                         clang::SourceLocation());
+    getEntryBlock()->appendStmt(DS);
+    clang::Expr *assign = createBinaryOperator(
+        getASTContext(), makeDeclRefExpr(Decl), &Expr, clang::BO_Assign,
+        Decl->getType(), clang::VK_LValue);
 
     // Use Assign stmt
     // clang::DeclRefExpr *ref = clang::DeclRefExpr::Create(
@@ -721,7 +725,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
     // clang::Stmt *DS = createBinaryOperator(
     //     getASTContext(), ref, expr, clang::BO_Assign,
     //     expr->getType(), clang::VK_PRValue);
-    block.appendStmt(DS);
+    block.appendStmt(assign);
     ExprMap[&V] = makeDeclRefExpr(Decl);
   }
 }
@@ -876,6 +880,9 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
 }
 
 void CFGBuilder::visitBinaryOperator(llvm::BinaryOperator &I) {
+  if (llvm::isa<llvm::BinaryOperator>(I.getOperand(1))) {
+    llvm::errs() << "here";
+  }
   auto binop =
       handleBinary(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), I,
                    I.getOperand(0), I.getOperand(1),
@@ -988,7 +995,7 @@ clang::ASTContext &SAFuncContext::getASTContext() {
   return Ctx.getASTContext();
 }
 
-void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT) {
+void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char * DebugDir) {
   std::map<std::pair<llvm::Function *, std::string>,
            std::pair<HType *, HType *>>
       NameMap;
@@ -1023,10 +1030,15 @@ void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT) {
     }
   }
 
-  // demote SSA using reg2mem
-  printModule(M, "llvm2c-before-demotessa.ll");
+  if (DebugDir) {
+    // demote SSA using reg2mem
+    printModule(M, join(DebugDir, "llvm2c-before-demotessa.ll").c_str());
+  }
   notdec::llvm2c::demoteSSA(M);
-  printModule(M, "llvm2c-after-demotessa.ll");
+  if (DebugDir) {
+    // demote SSA using reg2mem  
+    printModule(M, join(DebugDir, "llvm2c-after-demotessa.ll").c_str());
+  }
 
   // find all phi alloca and phi reload, set type as previous.
   for (llvm::Function &F : M) {
@@ -1059,8 +1071,14 @@ void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT) {
 /// Decompile the module to c and print to a file.
 void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
                      std::unique_ptr<HTypeResult> HT) {
+
+  auto DebugDir = std::getenv("NOTDEC_DEBUG_DIR");
+  if (DebugDir) {
+    llvm::sys::fs::create_directories(DebugDir);
+  }
+
   if (!opts.noDemoteSSA) {
-    demoteSSAFixHT(M, *HT);
+    demoteSSAFixHT(M, *HT, DebugDir);
   }
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");

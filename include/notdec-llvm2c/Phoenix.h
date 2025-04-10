@@ -11,6 +11,7 @@ namespace notdec::llvm2c {
 
 class Phoenix : IStructuralAnalysis {
 public:
+  const int StmtExprThreshold = 4;
   enum LoopType {
     While,
     DoWhile,
@@ -79,6 +80,8 @@ protected:
   findLastResortEdge(std::set<CFGBlock *> &blocks);
   CFGBlock *getSwitchFollow(CFGBlock *n);
   bool reduceIncSwitch(CFGBlock *n, CFGBlock *follow);
+
+  clang::Expr *createBlockCondExpr(CFGBlock *Block, clang::Expr *Cond);
 
 public:
   Phoenix(SAFuncContext &Ctx) : IStructuralAnalysis(Ctx) {}

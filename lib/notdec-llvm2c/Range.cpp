@@ -29,7 +29,7 @@ OffsetRange OffsetRange::operator+(const OffsetRange &rhs) const {
   for (auto &a : rhs.access) {
     Muls.insert(a.Size);
   }
-  for (auto &I: Muls) {
+  for (auto &I : Muls) {
     ret.access.push_back(ArrayOffset(I));
   }
   return ret;
@@ -38,16 +38,19 @@ OffsetRange OffsetRange::operator+(const OffsetRange &rhs) const {
 OffsetRange OffsetRange::operator*(const OffsetRange Rhs) const {
   OffsetRange Ret;
   Ret.offset = offset * Rhs.offset;
+  // from small to big
   std::set<int64_t> Muls;
   for (uint64_t i = 0; i < access.size() + 1; i++) {
     for (uint64_t j = 0; j < Rhs.access.size() + 1; j++) {
       if (i == 0 && j == 0) {
         continue;
       }
-      Muls.insert(access.at(i).Size * Rhs.access.at(j).Size);
+      auto Val1 = i == 0 ? offset : access.at(i - 1).Size;
+      auto Val2 = j == 0 ? Rhs.offset : access.at(j - 1).Size;
+      Muls.insert(Val1 * Val2);
     }
   }
-  for (auto &I: Muls) {
+  for (auto &I : Muls) {
     Ret.access.push_back(ArrayOffset(I));
   }
   return Ret;

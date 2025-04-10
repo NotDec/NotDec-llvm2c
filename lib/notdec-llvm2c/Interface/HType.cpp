@@ -43,21 +43,21 @@ TypedefDecl *TypedefDecl::Create(HTypeContext &Ctx, const std::string &Name,
                                  HType *Type) {
   assert(!Ctx.getDecl(Name));
   auto Decl = new TypedefDecl(Name, Type);
-  Ctx.addDecl(Name, std::unique_ptr<TypedDecl>{Decl});
+  Ctx.addDecl(Name, std::shared_ptr<TypedefDecl>{Decl});
   return Decl;
 }
 
 RecordDecl *RecordDecl::Create(HTypeContext &Ctx, const std::string &Name) {
   assert(!Ctx.getDecl(Name));
   auto Decl = new RecordDecl(Name);
-  Ctx.addDecl(Name, std::unique_ptr<TypedDecl>{Decl});
+  Ctx.addDecl(Name, std::shared_ptr<RecordDecl>{Decl});
   return Decl;
 }
 
 UnionDecl *UnionDecl::Create(HTypeContext &Ctx, const std::string &Name) {
   assert(!Ctx.getDecl(Name));
   auto Decl = new UnionDecl(Name);
-  Ctx.addDecl(Name, std::unique_ptr<TypedDecl>{Decl});
+  Ctx.addDecl(Name, std::shared_ptr<UnionDecl>{Decl});
   return Decl;
 }
 
