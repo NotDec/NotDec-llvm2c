@@ -45,8 +45,6 @@ class ExprBuilder;
 
 void demoteSSAFixHT(llvm::Module &M, HTypeResult &Result);
 
-bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
-                      clang::QualType To);
 // remove all array types within.
 clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty);
 clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty);
@@ -150,7 +148,7 @@ public:
 
   clang::Expr *checkCast(clang::Expr *Val, clang::QualType To);
   bool isTypeCompatible(clang::QualType From, clang::QualType To) {
-    return notdec::llvm2c::isTypeCompatible(Ctx, From, To);
+    return ClangTypeResult::isTypeCompatible(Ctx, From, To);
   }
 
 protected:

@@ -369,7 +369,8 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
         EndOff = FS[i + 1].R.Start;
       }
 
-      auto Bs = Bytes.getRange(SimpleRange{.Start = Field.R.Start, .Size = EndOff - Field.R.Start});
+      auto Bs = Bytes.getRange(
+          SimpleRange{.Start = Field.R.Start, .Size = EndOff - Field.R.Start});
       if (!Bs) {
         continue;
       }
@@ -494,6 +495,96 @@ void ClangTypeResult::createMemoryDecls() {
   }
 }
 
+bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
+                                       clang::QualType From,
+                                       clang::QualType To) {
+  // char[0] vs char (*)[32]
+  // if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
+  //   return isTypeCompatible(From->getPointeeType(), To);
+  // }
+  // if (To->isPointerType() && To->getPointeeType()->isArrayType()) {
+  //   return isTypeCompatible(From, To->getPointeeType());
+  // }
+
+  if (From->isArrayType()) {
+    From = Ctx.getDecayedType(From);
+  }
+  if (To->isArrayType()) {
+    To = Ctx.getDecayedType(To);
+  }
+
+  if (From == To || From.getCanonicalType() == To.getCanonicalType()) {
+    return true;
+  }
+  if (From->isReferenceType() || To->isReferenceType()) {
+    assert(false &&
+           "TODO isTypeCompatible: reference type is not supposed to exist.");
+  }
+
+  if (From->isPointerType() && To->isPointerType()) {
+    return isTypeCompatible(Ctx, From->getPointeeType(), To->getPointeeType());
+  } else if (From->isPointerType() != To->isPointerType()) {
+    // pointer and non-pointer
+    return false;
+  }
+  if (From->isBooleanType() && To->isIntegerType()) {
+    return false;
+  } else if (From->isIntegerType() && To->isBooleanType()) {
+    return false;
+  }
+  // uncompatible if different size
+  if (Ctx.getTypeSize(From) != Ctx.getTypeSize(To)) {
+    return false;
+  }
+  if (From->isIntegerType() && To->isIntegerType()) {
+    return false;
+  }
+  if (From->isStructureOrClassType() || To->isStructureOrClassType()) {
+    return false;
+  }
+  if (From->isVoidType()) {
+    return false;
+  }
+  if (To->isVoidType()) {
+    return false;
+  }
+  // TODO
+  if (From->isFunctionType() && To->isFunctionType()) {
+    return true;
+  }
+  From->dump();
+  To->dump();
+  assert(false && "TODO isTypeCompatible: implement the rest.");
+}
+
+clang::Expr *ClangTypeResult::checkCast(clang::Expr *Val, clang::QualType To) {
+  // remove any cast expr
+  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Val)) {
+    Val = Cast->getSubExpr();
+  }
+  
+  if (isTypeCompatible(Ctx, Val->getType(), To)) {
+    return Val;
+  }
+
+  // try to cast using gep
+  if (Val->getType()->isPointerType()) {
+    clang::Expr *R = Val;
+    auto Exprs = tryAddZero(R);
+    for (auto R : Exprs) {
+      if (isTypeCompatible(Ctx, R->getType(), To)) {
+        return R;
+      }
+    }
+  }
+
+  // TODO should we use CK_Bitcast here?
+  return clang::CStyleCastExpr::Create(
+      Ctx, To, clang::VK_PRValue, clang::CK_BitCast, Val, nullptr,
+      clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(To),
+      clang::SourceLocation(), clang::SourceLocation());
+}
+
 std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
   std::vector<clang::Expr *> Result;
   assert(Val->getType()->isPointerType());
@@ -552,24 +643,27 @@ std::optional<int64_t> getIntValue(clang::Expr *Index) {
 
 std::optional<int> isPowerOfTwo(int n) {
   if (n <= 0 || (n & (n - 1)) != 0) {
-      return std::nullopt;
+    return std::nullopt;
   }
   int count = 0;
   while (n > 1) {
-      n >>= 1;
-      ++count;
+    n >>= 1;
+    ++count;
   }
   return count;
 }
 
-int myPow(int x, unsigned int p)
-{
-  if (p == 0) return 1;
-  if (p == 1) return x;
-  
-  int tmp = myPow(x, p/2);
-  if (p%2 == 0) return tmp * tmp;
-  else return x * tmp * tmp;
+int myPow(int x, unsigned int p) {
+  if (p == 0)
+    return 1;
+  if (p == 1)
+    return x;
+
+  int tmp = myPow(x, p / 2);
+  if (p % 2 == 0)
+    return tmp * tmp;
+  else
+    return x * tmp * tmp;
 }
 
 clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
@@ -742,8 +836,8 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
 
       // Create array indexing?
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
-          deref(Ctx, Base), CurrentIndex, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
-          clang::SourceLocation());
+          deref(Ctx, Base), CurrentIndex, ElemTy, clang::VK_LValue,
+          clang::OK_Ordinary, clang::SourceLocation());
 
       Base = addrOf(Ctx, AS);
       // TODO Remaining Offset?

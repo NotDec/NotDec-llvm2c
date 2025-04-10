@@ -218,7 +218,9 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
     if (auto PointerTy = Ty->getAs<clang::PointerType>()) {
       // 1. pointer arithmetic + deref
       Ty = PointerTy->getPointeeType().getTypePtr();
-      if (Index == nullptr) {
+      if (Index == nullptr ||
+          (llvm::isa<clang::IntegerLiteral>(Index) &&
+           llvm::cast<clang::IntegerLiteral>(Index)->getValue().isZero())) {
         // we use nullptr as int 0 here.
         Val = deref(Ctx, Val);
         continue;
@@ -569,6 +571,8 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
            "CallInst operand is not a function pointer?");
     FRef = CalleeExpr;
 
+    // TODO create func ptr type cast?
+
     Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
   }
   // Handle argument casts
@@ -592,80 +596,7 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
 }
 
 clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
-  if (isTypeCompatible(Val->getType(), To)) {
-    return Val;
-  }
-
-  // try to case using gep
-  if (CT && Val->getType()->isPointerType()) {
-    clang::Expr *R = Val;
-    for (auto R : tryGepZero(R)) {
-      if (isTypeCompatible(R->getType(), To)) {
-        return R;
-      }
-    }
-  }
-
-  // TODO should we use CK_Bitcast here?
-  return clang::CStyleCastExpr::Create(
-      Ctx, To, clang::VK_PRValue, clang::CK_BitCast, Val, nullptr,
-      clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(To),
-      clang::SourceLocation(), clang::SourceLocation());
-}
-
-bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From,
-                      clang::QualType To) {
-  // char[0] vs char (*)[32]
-  // if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
-  //   return isTypeCompatible(From->getPointeeType(), To);
-  // }
-  // if (To->isPointerType() && To->getPointeeType()->isArrayType()) {
-  //   return isTypeCompatible(From, To->getPointeeType());
-  // }
-
-  if (From->isArrayType()) {
-    From = Ctx.getDecayedType(From);
-  }
-  if (To->isArrayType()) {
-    To = Ctx.getDecayedType(To);
-  }
-
-  if (From == To || From.getCanonicalType() == To.getCanonicalType()) {
-    return true;
-  }
-  if (From->isReferenceType() || To->isReferenceType()) {
-    assert(false &&
-           "TODO isTypeCompatible: reference type is not supposed to exist.");
-  }
-
-  if (From->isPointerType() && To->isPointerType()) {
-    return isTypeCompatible(Ctx, From->getPointeeType(), To->getPointeeType());
-  } else if (From->isPointerType() != To->isPointerType()) {
-    // pointer and non-pointer
-    return false;
-  }
-  if (From->isBooleanType() && To->isIntegerType()) {
-    return false;
-  } else if (From->isIntegerType() && To->isBooleanType()) {
-    return false;
-  }
-  // uncompatible if different size
-  if (Ctx.getTypeSize(From) != Ctx.getTypeSize(To)) {
-    return false;
-  }
-  if (From->isIntegerType() && To->isIntegerType()) {
-    return false;
-  }
-  if (From->isStructureOrClassType() || To->isStructureOrClassType()) {
-    return false;
-  }
-  // TODO
-  if (From->isFunctionType() && To->isFunctionType()) {
-    return true;
-  }
-  From->dump();
-  To->dump();
-  assert(false && "TODO isTypeCompatible: implement the rest.");
+  return CT->checkCast(Val, To);
 }
 
 ValueNamer &SAFuncContext::getValueNamer() {
@@ -880,9 +811,6 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
 }
 
 void CFGBuilder::visitBinaryOperator(llvm::BinaryOperator &I) {
-  if (llvm::isa<llvm::BinaryOperator>(I.getOperand(1))) {
-    llvm::errs() << "here";
-  }
   auto binop =
       handleBinary(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), I,
                    I.getOperand(0), I.getOperand(1),
@@ -995,7 +923,7 @@ clang::ASTContext &SAFuncContext::getASTContext() {
   return Ctx.getASTContext();
 }
 
-void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char * DebugDir) {
+void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char *DebugDir) {
   std::map<std::pair<llvm::Function *, std::string>,
            std::pair<HType *, HType *>>
       NameMap;
@@ -1036,7 +964,7 @@ void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char * DebugDir) {
   }
   notdec::llvm2c::demoteSSA(M);
   if (DebugDir) {
-    // demote SSA using reg2mem  
+    // demote SSA using reg2mem
     printModule(M, join(DebugDir, "llvm2c-after-demotessa.ll").c_str());
   }
 
@@ -1208,7 +1136,7 @@ void SAContext::createDecls() {
     }
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getGlobName(GV));
-    auto Ty = TB.getTypeL(&GV, nullptr, -1)->getPointeeType();
+    auto Ty = TB.getType(&GV, nullptr, -1)->getPointeeType();
     if (GV.isConstant()) {
       Ty = Ty.withConst();
     }
@@ -1368,32 +1296,35 @@ clang::Expr *ExprBuilder::visitValue(llvm::Value *Val, llvm::User *User,
     Ty = TB.getType(Val, User, OpInd);
   }
 
+  clang::Expr *Ret = nullptr;
+
   // Check for ExprMap
   if (FCtx != nullptr && FCtx->isExpr(Val)) {
-    return FCtx->getExpr(Val);
+    Ret = FCtx->getExpr(Val);
+  } else {
+    // if (auto V = std::get_if<llvm::Value *>(&Val)) {
+    if (Val == nullptr) {
+      return nullptr;
+    }
+    if (llvm::Instruction *Inst =
+            llvm::dyn_cast_or_null<llvm::Instruction>(Val)) {
+      Ret = visit(*Inst);
+    } else if (llvm::Constant *C =
+                   llvm::dyn_cast_or_null<llvm::Constant>(Val)) {
+      Ret = visitConstant(*C, User, OpInd, Ty);
+    } else {
+      llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
+                   << "UnImplemented: ExprBuilder.visitValue cannot handle: "
+                   << *Val << "\n";
+      std::abort();
+    }
   }
 
-  // if (auto V = std::get_if<llvm::Value *>(&Val)) {
-  if (Val == nullptr) {
-    return nullptr;
+  // Add cast if needed
+  if (!Ty.isNull() && !Ret->getType().isNull()) {
+    Ret = TB.checkCast(Ret, Ty);
   }
-  if (llvm::Instruction *Inst =
-          llvm::dyn_cast_or_null<llvm::Instruction>(Val)) {
-    return visit(*Inst);
-  } else if (llvm::Constant *C = llvm::dyn_cast_or_null<llvm::Constant>(Val)) {
-    return visitConstant(*C, User, OpInd, Ty);
-  } else {
-    llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                 << "UnImplemented: ExprBuilder.visitValue cannot handle: "
-                 << *Val << "\n";
-    std::abort();
-  }
-  // } else {
-  //   llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-  //                << "UnImplemented: ExprBuilder.visitValue cannot handle: "
-  //                << *Val << "\n";
-  //   std::abort();
-  // }
+  return Ret;
 }
 
 clang::QualType TypeBuilder::getFunctionType(
@@ -1601,9 +1532,11 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                  llvm::dyn_cast<llvm::ConstantAggregate>(&C)) {
     // struct and array
     llvm::SmallVector<clang::Expr *> vec(CA->getNumOperands());
+    assert(Ty->isArrayType());
+    auto ElemTy = Ty->getArrayElementTypeNoTypeQual();
     for (unsigned i = 0; i < CA->getNumOperands(); i++) {
       // TODO Pass type to operand.
-      vec[i] = visitValue(CA->getOperand(i), CA, i, clang::QualType());
+      vec[i] = visitValue(CA->getOperand(i), CA, i, clang::QualType(ElemTy, 0));
     }
     return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), vec,
                                          clang::SourceLocation());

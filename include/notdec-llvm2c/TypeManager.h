@@ -90,6 +90,8 @@ public:
   clang::Expr *tryHandlePtrAdd(clang::Expr *Val, clang::Expr *Index);
   std::vector<clang::Expr *> tryAddZero(clang::Expr *Val);
   clang::Expr *getGlobal(int64_t Offset);
+  clang::Expr *checkCast(clang::Expr *Val, clang::QualType To);
+  static bool isTypeCompatible(clang::ASTContext &Ctx, clang::QualType From, clang::QualType To);
 
   // For array type, we may modify decl's type
   clang::Expr *decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
