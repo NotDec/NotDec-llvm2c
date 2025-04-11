@@ -260,7 +260,7 @@ void ClangTypeResult::declareDecls() {
           createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
       ASTDecl = CDecl;
     } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
-      auto *CDecl = createRecordDecl(Ctx, TUD, clang::TTK_Union, RD->getName());
+      auto *CDecl = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
       ASTDecl = CDecl;
     } else if (auto *TD = llvm::dyn_cast<ast::TypedefDecl>(Decl)) {
       clang::TypeSourceInfo *TInfo =
@@ -439,59 +439,61 @@ void ClangTypeResult::createMemoryDecls() {
   auto *MDecl = Result->MemoryDecl;
   auto *TUD = AM->getGlobalDefinitions();
 
-  if (expandMemory) {
-    // split the memory type into individual var decls.
-    auto &FS = MDecl->getFields();
-    for (size_t i = 0; i < FS.size(); i++) {
-      auto &Field = FS[i];
-      auto Name = Field.Name;
-      if (startswith(Name, "field_")) {
-        Name = Name.substr(strlen("field_"));
-        Name = "global_" + Name;
-      }
-      clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
-      auto CType = convertTypeL(Field.Type);
-      clang::VarDecl *VD = clang::VarDecl::Create(
-          Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II, CType,
-          nullptr, clang::SC_None);
-
-      // handle initializer
-      if (MDecl->getBytesManager()) {
-        auto EndRange = std::numeric_limits<int64_t>::max();
-        if (i + 1 < FS.size()) {
-          EndRange = FS[i + 1].R.Start;
+  if (MDecl) {
+    if (expandMemory) {
+      // split the memory type into individual var decls.
+      auto &FS = MDecl->getFields();
+      for (size_t i = 0; i < FS.size(); i++) {
+        auto &Field = FS[i];
+        auto Name = Field.Name;
+        if (startswith(Name, "field_")) {
+          Name = Name.substr(strlen("field_"));
+          Name = "global_" + Name;
         }
-        auto SubBytes =
-            MDecl->getBytesManager()->getSubBytes(Field.R.Start, EndRange);
-        clang::Expr *Init = decodeInitializer(VD, SubBytes);
-        VD->setInit(Init);
+        clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
+        auto CType = convertTypeL(Field.Type);
+        clang::VarDecl *VD = clang::VarDecl::Create(
+            Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
+            CType, nullptr, clang::SC_None);
+
+        // handle initializer
+        if (MDecl->getBytesManager()) {
+          auto EndRange = std::numeric_limits<int64_t>::max();
+          if (i + 1 < FS.size()) {
+            EndRange = FS[i + 1].R.Start;
+          }
+          auto SubBytes =
+              MDecl->getBytesManager()->getSubBytes(Field.R.Start, EndRange);
+          clang::Expr *Init = decodeInitializer(VD, SubBytes);
+          VD->setInit(Init);
+        }
+
+        TUD->addDecl(VD);
+        Field.setASTDecl(VD);
+        FieldDeclMap[VD] = &Field;
       }
+    } else {
+      // create non-freestanding memory type.
+      auto *CDecl = convertStruct(MDecl, true);
+      MDecl->setASTDecl(CDecl);
+      CDecl->setFreeStanding(false);
+      auto ElabTy = Ctx.getElaboratedType(clang::ETK_Struct, nullptr,
+                                          Ctx.getRecordType(CDecl), CDecl);
 
-      TUD->addDecl(VD);
-      Field.setASTDecl(VD);
-      FieldDeclMap[VD] = &Field;
+      DeclMap[CDecl] = MDecl;
+
+      auto *II = &Ctx.Idents.get("MEMORY");
+      MemoryVar = clang::VarDecl::Create(Ctx, TUD, clang::SourceLocation(),
+                                         clang::SourceLocation(), II, ElabTy,
+                                         nullptr, clang::SC_None);
+      if (MDecl->getBytesManager()) {
+        clang::Expr *Init =
+            decodeInitializer(MemoryVar, *MDecl->getBytesManager());
+        MemoryVar->setInit(Init);
+      }
+      TUD->addDecl(MemoryVar);
+      DeclMap[MemoryVar] = MDecl;
     }
-  } else {
-    // create non-freestanding memory type.
-    auto *CDecl = convertStruct(MDecl, true);
-    MDecl->setASTDecl(CDecl);
-    CDecl->setFreeStanding(false);
-    auto ElabTy = Ctx.getElaboratedType(clang::ETK_Struct, nullptr,
-                                        Ctx.getRecordType(CDecl), CDecl);
-
-    DeclMap[CDecl] = MDecl;
-
-    auto *II = &Ctx.Idents.get("MEMORY");
-    MemoryVar = clang::VarDecl::Create(Ctx, TUD, clang::SourceLocation(),
-                                       clang::SourceLocation(), II, ElabTy,
-                                       nullptr, clang::SC_None);
-    if (MDecl->getBytesManager()) {
-      clang::Expr *Init =
-          decodeInitializer(MemoryVar, *MDecl->getBytesManager());
-      MemoryVar->setInit(Init);
-    }
-    TUD->addDecl(MemoryVar);
-    DeclMap[MemoryVar] = MDecl;
   }
 }
 
@@ -542,10 +544,18 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   if (From->isStructureOrClassType() || To->isStructureOrClassType()) {
     return false;
   }
+  
   if (From->isVoidType()) {
     return false;
   }
   if (To->isVoidType()) {
+    return false;
+  }
+
+  if (From->isFloatingType()) {
+    return false;
+  }
+  if (To->isFloatingType()) {
     return false;
   }
   // TODO
@@ -562,7 +572,7 @@ clang::Expr *ClangTypeResult::checkCast(clang::Expr *Val, clang::QualType To) {
   while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Val)) {
     Val = Cast->getSubExpr();
   }
-  
+
   if (isTypeCompatible(Ctx, Val->getType(), To)) {
     return Val;
   }
