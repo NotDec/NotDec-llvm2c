@@ -354,32 +354,52 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
     auto *RD = Ty->getAsRecordDecl();
     auto ASTDecl = DeclMap.at(RD)->getAs<ast::RecordDecl>();
     llvm::SmallVector<clang::Expr *> Inits;
-    auto &FS = ASTDecl->getFields();
-    for (size_t i = 0; i < FS.size(); i++) {
-      auto &Field = FS[i];
-      auto VD = llvm::cast<clang::ValueDecl>(Field.ASTDecl);
-      llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
-      llvm::SmallVector<clang::Expr *> IndexExprs;
-      Designators.push_back(DesignatedInitExpr::Designator(
-          VD->getIdentifier(), clang::SourceLocation(),
-          clang::SourceLocation()));
+    if (RD->getTagKind() == clang::TTK_Struct) {
+      auto &FS = ASTDecl->getFields();
+      for (size_t i = 0; i < FS.size(); i++) {
+        auto &Field = FS[i];
+        auto VD = llvm::cast<clang::ValueDecl>(Field.ASTDecl);
+        llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
+        llvm::SmallVector<clang::Expr *> IndexExprs;
+        Designators.push_back(DesignatedInitExpr::Designator(
+            VD->getIdentifier(), clang::SourceLocation(),
+            clang::SourceLocation()));
 
-      OffsetTy EndOff = std::numeric_limits<OffsetTy>::max();
-      if (i + 1 < FS.size()) {
-        EndOff = FS[i + 1].R.Start;
-      }
+        OffsetTy EndOff = std::numeric_limits<OffsetTy>::max();
+        if (i + 1 < FS.size()) {
+          EndOff = FS[i + 1].R.Start;
+        }
 
-      auto Bs = Bytes.getRange(
-          SimpleRange{.Start = Field.R.Start, .Size = EndOff - Field.R.Start});
-      if (!Bs) {
-        continue;
+        auto Bs = Bytes.getRange(SimpleRange{.Start = Field.R.Start,
+                                             .Size = EndOff - Field.R.Start});
+        if (!Bs) {
+          continue;
+        }
+        auto BM1 = BytesManager::fromOneString(*Bs);
+        auto Init = decodeInitializer(VD, *BM1);
+        auto DIE = clang::DesignatedInitExpr::Create(
+            Ctx, Designators, IndexExprs, clang::SourceLocation(), false, Init);
+        Inits.push_back(DIE);
       }
-      auto BM1 = BytesManager::fromOneString(*Bs);
-      auto Init = decodeInitializer(VD, *BM1);
-      auto DIE = clang::DesignatedInitExpr::Create(
-          Ctx, Designators, IndexExprs, clang::SourceLocation(), false, Init);
-      Inits.push_back(DIE);
+    } else if (RD->getTagKind() == clang::TTK_Union) {
+      // TODO select which for init expr?
+      // Select first member.
+      auto *VD = *RD->fields().begin();
+      auto Init = decodeInitializer(VD, Bytes);
+      if (Init != nullptr) {
+        llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
+        llvm::SmallVector<clang::Expr *> IndexExprs;
+
+        Designators.push_back(DesignatedInitExpr::Designator(
+            VD->getIdentifier(), clang::SourceLocation(),
+            clang::SourceLocation()));
+
+        auto DIE = clang::DesignatedInitExpr::Create(
+            Ctx, Designators, IndexExprs, clang::SourceLocation(), false, Init);
+        Inits.push_back(DIE);
+      }
     }
+
     return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), Inits,
                                          clang::SourceLocation());
   } else if (Ty->isArrayType()) {
@@ -544,7 +564,7 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   if (From->isStructureOrClassType() || To->isStructureOrClassType()) {
     return false;
   }
-  
+
   if (From->isVoidType()) {
     return false;
   }
@@ -558,6 +578,14 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   if (To->isFloatingType()) {
     return false;
   }
+
+  if (From->isAggregateType()) {
+    return false;
+  }
+  if (To->isAggregateType()) {
+    return false;
+  }
+  
   // TODO
   if (From->isFunctionType() && To->isFunctionType()) {
     return true;
@@ -615,7 +643,12 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
           return addZero(R);
         }
       } else if (Decl->getTagKind() == clang::TTK_Union) {
-        assert(false && "todo");
+        for (auto *F: Decl->fields()) {
+          auto *ME = createMemberExpr(Ctx, Val, F);
+          auto R = addrOf(Ctx, ME);
+          Result.push_back(R);
+          addZero(R);
+        }
       } else {
         Decl->dump();
         llvm::errs()

@@ -1131,7 +1131,9 @@ void SAContext::createDecls() {
     if (CT) {
       if (GV.getName() == "__stack_pointer" ||
           GV.getName().startswith("__notdec_mem")) {
-        continue;
+        if (GV.getNumUses() == 0) {
+          continue;
+        }
       }
     }
     clang::IdentifierInfo *II =

@@ -39,15 +39,12 @@ struct SimpleRange {
     }
     return Start <= Offset && Offset < Start + Size;
   }
-  OffsetTy end() const {
-    return Start + Size;
-  }
+  OffsetTy end() const { return Start + Size; }
 };
 
 struct FieldEntry {
   SimpleRange R;
   const retypd::CGEdge *Edge = nullptr;
-  retypd::CGNode *Target = nullptr;
   // clang::DeclaratorDecl *Decl = nullptr;
 };
 
@@ -56,7 +53,9 @@ struct BytesManager {
   static std::shared_ptr<BytesManager> create(llvm::Module &M);
   static std::shared_ptr<BytesManager> fromOneString(std::string Data) {
     auto BM = std::make_shared<BytesManager>();
-    BM->Bytes.push_back({SimpleRange{.Start = 0, .Size = static_cast<OffsetTy>(Data.size())}, Data});
+    BM->Bytes.push_back(
+        {SimpleRange{.Start = 0, .Size = static_cast<OffsetTy>(Data.size())},
+         Data});
     return BM;
   }
   std::string decodeCStr(int64_t Offset);
@@ -65,7 +64,6 @@ struct BytesManager {
 };
 
 struct UnionInfo {
-  SimpleRange R;
   std::vector<const retypd::CGEdge *> Members;
 };
 
