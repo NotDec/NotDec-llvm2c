@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
@@ -207,27 +208,54 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
 }
 
 void ClangTypeResult::defineDecls() {
+  std::set<notdec::ast::TypedDecl*> Visited;
 
-  // Add all decls but memory and maintain DeclMap
-  for (auto &Ent : Result->HTCtx->getDecls()) {
-    auto *Decl = Ent.second.get();
+  // Because if one record is embedded, inner record need to be defined first.
+  // So, Depth-first search to visit and define type.
+  std::function<void(notdec::ast::TypedDecl*)> Visit = [&](notdec::ast::TypedDecl* Decl)-> void{
+    
+    std::function<void(notdec::ast::HType*)> VisitType = [&](notdec::ast::HType* Ty) {
+      if (Ty->isArrayType()) {
+        VisitType(Ty->getArrayElementType());
+      } else if (Ty->isTypedefType()) {
+        VisitType(Ty->getAsTypedefDecl()->getType());
+      } else if (Ty->isRecordType()) {
+        Visit(Ty->getAsRecordDecl());
+      } else if (Ty->isUnionType()) {
+        Visit(Ty->getAsUnionDecl());
+      }
+      // Skip simple type, pointer type, function type
+    };
+    
     if (Decl == Result->MemoryDecl) {
-      continue;
+      return;
     }
+    
+    if (Visited.count(Decl)) {
+      return;
+    }
+    Visited.insert(Decl);
+
     auto OldDecl = Decl->getASTDecl();
     assert(OldDecl != nullptr && "Decl not declared?");
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
+      for (auto &Field : RD->getFields() ) {
+        VisitType(Field.Type);
+      }
       auto *CDecl = convertStruct(RD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
       ASTDecl = CDecl;
     } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
+      for (auto &Member : UD->getMembers()) {
+        VisitType(Member.Type);
+      }
       auto *CDecl = convertUnion(UD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
       ASTDecl = CDecl;
     } else if (auto *TD = llvm::dyn_cast<ast::TypedefDecl>(Decl)) {
-      // no need to create typedef.
-      continue;
+      // typedef only need declaration, no need to create definition.
+      return;
     } else {
       assert(false && "Unknown Decl type");
     }
@@ -235,6 +263,12 @@ void ClangTypeResult::defineDecls() {
     // replaced with definition.
     Decl->setASTDecl(ASTDecl);
     DeclMap[ASTDecl] = Decl;
+  };
+
+  // Add all decls but memory and maintain DeclMap
+  for (auto &Ent : Result->HTCtx->getDecls()) {
+    auto *Decl = Ent.second.get();
+    Visit(Decl);
   }
 
   // Create the Memory types
