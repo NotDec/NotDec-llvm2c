@@ -12,13 +12,13 @@ void ASTManager::print(DeclPrinter &Printer) {
   Printer.VisitTranslationUnitDecl(FunctionDeclarations);
   OS << "// ====== End of Function Declarations ======\n\n";
 
-  OS << "// ====== Global Definitions ======\n";
-  Printer.VisitTranslationUnitDecl(GlobalDefinitions);
-  OS << "// ====== End of Global Definitions ======\n\n";
-
   OS << "// ====== Type Definitions ======\n";
   Printer.VisitTranslationUnitDecl(TypeDefinitions);
   OS << "// ====== End of Type Definitions ======\n\n";
+
+  OS << "// ====== Global Definitions ======\n";
+  Printer.VisitTranslationUnitDecl(GlobalDefinitions);
+  OS << "// ====== End of Global Definitions ======\n\n";
 
   OS << "// ====== Function Definitions ======\n";
   Printer.VisitTranslationUnitDecl(FunctionDefinitions);
