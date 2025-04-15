@@ -1478,6 +1478,8 @@ clang::QualType TypeBuilder::visitType(llvm::Type &Ty) {
   } else if (Ty.isIntegerTy(1)) {
     return Ctx.IntTy;
     // return Ctx.BoolTy;
+  } else if (Ty.isIntegerTy(8)) {
+    return Ctx.CharTy;
   }
 
   if (Ty.isIntegerTy()) {

@@ -872,7 +872,10 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
               clang::SourceLocation());
         }
       } else if (Decl->getTagKind() == clang::TTK_Union) {
-        assert(false && "todo");
+        // assert(false && "todo");
+        llvm::errs() << "Warning: TODO how to handle ptradd for union?\n";
+        auto *ME = createMemberExpr(Ctx, DerefBase, *Decl->field_begin());
+        return handlePtrAdd(addrOf(Ctx, ME), Index);
       } else {
         Decl->dump();
         llvm::errs()
