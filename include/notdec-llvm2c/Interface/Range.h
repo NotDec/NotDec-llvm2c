@@ -26,7 +26,7 @@ std::vector<int64_t> PrimeFactors(int64_t n);
 /// the optional limit of the range. If the limit is -1, it means the range is
 /// unbounded.
 struct ArrayOffset {
-  uint64_t Size = 0;
+  int64_t Size = 0;
   // 0 represents unbounded
   // Unused now, so make it const to prevent error.
   const uint64_t Count = 0;
