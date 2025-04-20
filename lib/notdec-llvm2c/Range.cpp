@@ -47,7 +47,9 @@ OffsetRange OffsetRange::operator*(const OffsetRange Rhs) const {
       }
       auto Val1 = i == 0 ? offset : access.at(i - 1).Size;
       auto Val2 = j == 0 ? Rhs.offset : access.at(j - 1).Size;
-      Muls.insert(Val1 * Val2);
+      if (Val1 * Val2 > 0) {
+        Muls.insert(Val1 * Val2);
+      }
     }
   }
   for (auto &I : Muls) {

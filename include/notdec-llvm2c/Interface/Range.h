@@ -31,7 +31,7 @@ struct ArrayOffset {
   // Unused now, so make it const to prevent error.
   const uint64_t Count = 0;
 
-  ArrayOffset(uint64_t Size = 0, uint64_t Count = 0)
+  ArrayOffset(int64_t Size = 0, uint64_t Count = 0)
       : Size(Size), Count(Count){};
 
   // copy constructor
@@ -99,7 +99,9 @@ struct OffsetRange {
       return ret;
     }
     auto New = OffsetRange();
-    New.access.push_back(ArrayOffset(offset));
+    if (offset > 0) {
+      New.access.push_back(ArrayOffset(offset));
+    }
     return ret + New;
   }
 

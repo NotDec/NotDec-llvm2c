@@ -972,7 +972,7 @@ clang::Expr *ClangTypeResult::getGlobal(int64_t Offset) {
       if (RemainingOffset == 0) {
         return addrOf(Ctx, makeDeclRefExpr(Var));
       } else {
-        return handlePtrAdd(makeDeclRefExpr(Var),
+        return handlePtrAdd(addrOf(Ctx, makeDeclRefExpr(Var)),
                             clang::IntegerLiteral::Create(
                                 Ctx, llvm::APInt(32, RemainingOffset, false),
                                 Ctx.IntTy, clang::SourceLocation()));
