@@ -368,6 +368,7 @@ public:
   }
   void createDecls();
 
+  clang::FunctionDecl* getIntrinsic(llvm::Function& F);
   ASTManager& getASTManager() { return *AM; }
   clang::ASTContext &getASTContext() { return AM->getASTContext(); }
   ValueNamer &getValueNamer() { return VN; }

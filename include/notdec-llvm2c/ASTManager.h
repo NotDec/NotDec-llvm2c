@@ -49,6 +49,8 @@ public:
     FunctionDefinitions->addDecl(D);
   }
 
+  clang::FunctionDecl* getFuncDeclaration(const char* Name);
+
   void print(DeclPrinter &Printer);
 };
 

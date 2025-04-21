@@ -1,5 +1,6 @@
 #include <cassert>
 #include <clang/Frontend/ASTUnit.h>
+#include <cstddef>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Use.h>
@@ -556,6 +557,12 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
       FRef = makeImplicitCast(FRef, Ty, clang::CK_FunctionToPointerDecay);
     }
     Ret = FD->getReturnType();
+
+    if (Callee->isIntrinsic()) {
+      if (FD->param_size() < Args.size()) {
+        Args.resize(FD->param_size());
+      }
+    }
   } else {
     // Function pointer call
     // TODO: double check
@@ -1081,6 +1088,50 @@ clang::StorageClass SAContext::getStorageClass(llvm::GlobalValue &GV) {
              : clang::SC_None;
 }
 
+clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
+  auto *TUD = AM->getFunctionDeclarations();
+  clang::FunctionDecl *FD = nullptr;
+  if (F.getIntrinsicID() == llvm::Intrinsic::memset) {
+    if (auto F1 = AM->getFuncDeclaration("memset")) {
+      return F1;
+    }
+    // create a declaration
+    // void * memset ( void * ptr, int value, size_t num );
+    const int ParamSize = 3;
+    const char *Names[] = {"ptr", "value", "num"};
+    QualType ParamTys[3] = {getASTContext().VoidPtrTy, getASTContext().IntTy,
+                            getASTContext().UnsignedLongTy};
+    QualType RetTy = getASTContext().VoidPtrTy;
+
+    // create function type
+    auto FTy = getASTContext().getFunctionType(
+        RetTy, ParamTys, clang::FunctionProtoType::ExtProtoInfo());
+
+    // create function decl
+    clang::IdentifierInfo *II = getIdentifierInfo("memset");
+    clang::FunctionProtoType::ExtProtoInfo EPI;
+    EPI.Variadic = F.isVarArg();
+    FD = clang::FunctionDecl::Create(
+        getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
+        II, FTy, nullptr, getStorageClass(F));
+
+    // create function parameters
+    llvm::SmallVector<clang::ParmVarDecl *, 4> Params;
+    for (int i = 0; i < ParamSize; i++) {
+      clang::IdentifierInfo *ArgII = getIdentifierInfo(Names[i]);
+      clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
+          getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
+          ArgII, ParamTys[i], nullptr, clang::SC_None, nullptr);
+      Params.push_back(PVD);
+    }
+    FD->setParams(Params);
+    TUD->addDecl(FD);
+  } else {
+    assert(false && "unhandled intrinsic.");
+  }
+  return FD;
+}
+
 void SAContext::createDecls() {
   // visit all record definitions
   for (llvm::StructType *Ty : M.getIdentifiedStructTypes()) {
@@ -1098,9 +1149,12 @@ void SAContext::createDecls() {
   auto *TUD = AM->getFunctionDeclarations();
   // create function decls
   for (llvm::Function &F : M) {
+    if (F.isIntrinsic()) {
+      continue;
+    }
     getValueNamer().clearFuncCount();
-    llvm::SmallVector<clang::ParmVarDecl *, 16> Params;
     llvm::errs() << "SAContext: Declare Function: " << F.getName() << "\n";
+
     // create function decl
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getFuncName(F));
@@ -1111,6 +1165,7 @@ void SAContext::createDecls() {
         II, TB.getFunctionType(F, EPI), nullptr, getStorageClass(F));
 
     // create function parameters
+    llvm::SmallVector<clang::ParmVarDecl *, 8> Params;
     for (llvm::Argument &Arg : F.args()) {
       clang::IdentifierInfo *ArgII =
           getIdentifierInfo(getValueNamer().getArgName(Arg));
@@ -1120,8 +1175,18 @@ void SAContext::createDecls() {
       Params.push_back(PVD);
     }
     FD->setParams(Params);
-
     TUD->addDecl(FD);
+
+    globalDecls.insert(std::make_pair(&F, FD));
+  }
+
+  // handle intrinsic functions
+  for (llvm::Function &F : M) {
+    if (!F.isIntrinsic()) {
+      continue;
+    }
+    clang::FunctionDecl *FD = getIntrinsic(F);
+
     globalDecls.insert(std::make_pair(&F, FD));
   }
 

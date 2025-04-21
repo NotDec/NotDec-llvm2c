@@ -24,4 +24,15 @@ void ASTManager::print(DeclPrinter &Printer) {
   Printer.VisitTranslationUnitDecl(FunctionDefinitions);
   OS << "// ====== End of Function Definitions ======\n\n";
 }
+
+clang::FunctionDecl* ASTManager::getFuncDeclaration(const char* Name) {
+  for (auto* Decl : FunctionDeclarations->decls()) {
+    if (auto *FuncDecl = Decl->getAsFunction()) {
+      if (FuncDecl->getName().equals(Name)) {
+        return FuncDecl;
+      }
+    }
+  }
+  return nullptr;
+}
 } // namespace notdec::llvm2c
