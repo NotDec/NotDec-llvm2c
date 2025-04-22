@@ -208,29 +208,30 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
 }
 
 void ClangTypeResult::defineDecls() {
-  std::set<notdec::ast::TypedDecl*> Visited;
+  std::set<notdec::ast::TypedDecl *> Visited;
 
   // Because if one record is embedded, inner record need to be defined first.
   // So, Depth-first search to visit and define type.
-  std::function<void(notdec::ast::TypedDecl*)> Visit = [&](notdec::ast::TypedDecl* Decl)-> void{
-    
-    std::function<void(notdec::ast::HType*)> VisitType = [&](notdec::ast::HType* Ty) {
-      if (Ty->isArrayType()) {
-        VisitType(Ty->getArrayElementType());
-      } else if (Ty->isTypedefType()) {
-        VisitType(Ty->getAsTypedefDecl()->getType());
-      } else if (Ty->isRecordType()) {
-        Visit(Ty->getAsRecordDecl());
-      } else if (Ty->isUnionType()) {
-        Visit(Ty->getAsUnionDecl());
-      }
-      // Skip simple type, pointer type, function type
-    };
-    
+  std::function<void(notdec::ast::TypedDecl *)> Visit =
+      [&](notdec::ast::TypedDecl *Decl) -> void {
+    std::function<void(notdec::ast::HType *)> VisitType =
+        [&](notdec::ast::HType *Ty) {
+          if (Ty->isArrayType()) {
+            VisitType(Ty->getArrayElementType());
+          } else if (Ty->isTypedefType()) {
+            VisitType(Ty->getAsTypedefDecl()->getType());
+          } else if (Ty->isRecordType()) {
+            Visit(Ty->getAsRecordDecl());
+          } else if (Ty->isUnionType()) {
+            Visit(Ty->getAsUnionDecl());
+          }
+          // Skip simple type, pointer type, function type
+        };
+
     if (Decl == Result->MemoryDecl) {
       return;
     }
-    
+
     if (Visited.count(Decl)) {
       return;
     }
@@ -240,7 +241,7 @@ void ClangTypeResult::defineDecls() {
     assert(OldDecl != nullptr && "Decl not declared?");
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
-      for (auto &Field : RD->getFields() ) {
+      for (auto &Field : RD->getFields()) {
         VisitType(Field.Type);
       }
       auto *CDecl = convertStruct(RD);
@@ -619,7 +620,7 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   if (To->isAggregateType()) {
     return false;
   }
-  
+
   // TODO
   if (From->isFunctionType() && To->isFunctionType()) {
     return true;
@@ -651,10 +652,8 @@ clang::Expr *ClangTypeResult::checkCast(clang::Expr *Val, clang::QualType To) {
   }
 
   // TODO should we use CK_Bitcast here?
-  return clang::CStyleCastExpr::Create(
-      Ctx, To, clang::VK_PRValue, clang::CK_BitCast, Val, nullptr,
-      clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(To),
-      clang::SourceLocation(), clang::SourceLocation());
+  return createCStyleCastExpr(Ctx, To, clang::VK_PRValue, clang::CK_BitCast,
+                              Val);
 }
 
 std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
@@ -677,7 +676,7 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
           return addZero(R);
         }
       } else if (Decl->getTagKind() == clang::TTK_Union) {
-        for (auto *F: Decl->fields()) {
+        for (auto *F : Decl->fields()) {
           auto *ME = createMemberExpr(Ctx, Val, F);
           auto R = addrOf(Ctx, ME);
           Result.push_back(R);

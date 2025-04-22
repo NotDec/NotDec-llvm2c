@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Use.h>
 #include <map>
 #include <memory>
@@ -684,10 +685,7 @@ clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                         clang::Expr *E) {
   if (E->getType()->isUnsignedIntegerType()) {
     auto ty = TB.makeSigned(Ctx, E->getType());
-    return clang::CStyleCastExpr::Create(
-        Ctx, ty, clang::VK_PRValue, clang::CK_IntegralCast, E, nullptr,
-        clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(ty),
-        clang::SourceLocation(), clang::SourceLocation());
+    return createCStyleCastExpr(Ctx, ty, clang::VK_PRValue, clang::CK_IntegralCast, E);
   }
   return E;
 }
@@ -696,10 +694,7 @@ clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                           clang::Expr *E) {
   if (E->getType()->isSignedIntegerType()) {
     auto ty = TB.makeUnsigned(Ctx, E->getType());
-    return clang::CStyleCastExpr::Create(
-        Ctx, ty, clang::VK_PRValue, clang::CK_IntegralCast, E, nullptr,
-        clang::FPOptionsOverride(), Ctx.CreateTypeSourceInfo(ty),
-        clang::SourceLocation(), clang::SourceLocation());
+    return createCStyleCastExpr(Ctx, ty, clang::VK_PRValue, clang::CK_IntegralCast, E);
   }
   return E;
 }
@@ -1088,6 +1083,39 @@ clang::StorageClass SAContext::getStorageClass(llvm::GlobalValue &GV) {
              : clang::SC_None;
 }
 
+clang::FunctionDecl *
+SAContext::createFunctionDecl(TranslationUnitDecl *TUD, const char *Name,
+                              ArrayRef<const char *> ParamNames,
+                              ArrayRef<QualType> ParamTys, QualType RetTy,
+                              bool isVariadic) {
+  auto ParamSize = ParamNames.size();
+  assert(ParamSize == ParamTys.size());
+  clang::FunctionDecl *FD = nullptr;
+  // create function type
+  auto FTy = getASTContext().getFunctionType(
+      RetTy, ParamTys, clang::FunctionProtoType::ExtProtoInfo());
+
+  // create function decl
+  clang::IdentifierInfo *II = getIdentifierInfo(Name);
+  clang::FunctionProtoType::ExtProtoInfo EPI;
+  EPI.Variadic = isVariadic;
+  FD = clang::FunctionDecl::Create(
+      getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
+      II, FTy, nullptr, clang::SC_Extern);
+
+  // create function parameters
+  llvm::SmallVector<clang::ParmVarDecl *, 4> Params;
+  for (int i = 0; i < ParamSize; i++) {
+    clang::IdentifierInfo *ArgII = getIdentifierInfo(ParamNames[i]);
+    clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
+        getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
+        ArgII, ParamTys[i], nullptr, clang::SC_None, nullptr);
+    Params.push_back(PVD);
+  }
+  FD->setParams(Params);
+  return FD;
+}
+
 clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
   auto *TUD = AM->getFunctionDeclarations();
   clang::FunctionDecl *FD = nullptr;
@@ -1097,36 +1125,32 @@ clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
     }
     // create a declaration
     // void * memset ( void * ptr, int value, size_t num );
-    const int ParamSize = 3;
+    // const int ParamSize = 3;
     const char *Names[] = {"ptr", "value", "num"};
     QualType ParamTys[3] = {getASTContext().VoidPtrTy, getASTContext().IntTy,
                             getASTContext().UnsignedLongTy};
     QualType RetTy = getASTContext().VoidPtrTy;
 
-    // create function type
-    auto FTy = getASTContext().getFunctionType(
-        RetTy, ParamTys, clang::FunctionProtoType::ExtProtoInfo());
+    FD = createFunctionDecl(TUD, "memset", Names, ParamTys, RetTy);
+    TUD->addDecl(FD);
+  } else if (F.getIntrinsicID() == llvm::Intrinsic::memcpy) {
+    // call void @llvm.memcpy.p0i8.p0i8.i64(i8* %6, i8* inttoptr (i32 1136 to
+    // i8*), i64 44, i1 false)
 
-    // create function decl
-    clang::IdentifierInfo *II = getIdentifierInfo("memset");
-    clang::FunctionProtoType::ExtProtoInfo EPI;
-    EPI.Variadic = F.isVarArg();
-    FD = clang::FunctionDecl::Create(
-        getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
-        II, FTy, nullptr, getStorageClass(F));
-
-    // create function parameters
-    llvm::SmallVector<clang::ParmVarDecl *, 4> Params;
-    for (int i = 0; i < ParamSize; i++) {
-      clang::IdentifierInfo *ArgII = getIdentifierInfo(Names[i]);
-      clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
-          getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
-          ArgII, ParamTys[i], nullptr, clang::SC_None, nullptr);
-      Params.push_back(PVD);
+    if (auto F1 = AM->getFuncDeclaration("memcpy")) {
+      return F1;
     }
-    FD->setParams(Params);
+    // void *memcpy(void *destination, const void *source, size_t num);
+    const int ParamSize = 3;
+    const char *Names[] = {"destination", "source", "num"};
+    QualType ParamTys[3] = {getASTContext().VoidPtrTy, getASTContext().VoidPtrTy.withConst(),
+                            getASTContext().UnsignedLongTy};
+    QualType RetTy = getASTContext().VoidPtrTy;
+
+    FD = createFunctionDecl(TUD, "memcpy", Names, ParamTys, RetTy);
     TUD->addDecl(FD);
   } else {
+
     assert(false && "unhandled intrinsic.");
   }
   return FD;
@@ -1548,7 +1572,9 @@ clang::QualType TypeBuilder::visitType(llvm::Type &Ty) {
   }
 
   if (Ty.isIntegerTy()) {
-    auto ret = Ctx.getIntTypeForBitwidth(Ty.getIntegerBitWidth(), false);
+    // default to signed
+    // TODO create unk32
+    auto ret = Ctx.getIntTypeForBitwidth(Ty.getIntegerBitWidth(), true);
     if (ret.isNull()) {
       llvm::errs() << "Warning: cannot find exact type for: " << Ty << "\n";
       ret = Ctx.getBitIntType(true, Ty.getIntegerBitWidth());

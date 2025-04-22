@@ -318,9 +318,7 @@ public:
   ValueNamer &getValueNamer();
   bool isExpr(ExtValuePtr V) { return ExprMap.count(V) > 0; }
   clang::Expr *getExpr(ExtValuePtr V) { return ExprMap.at(V); }
-  CFGBlock * getEntryBlock() {
-    return ll2cfg.at(&Func.getEntryBlock());
-  }
+  CFGBlock *getEntryBlock() { return ll2cfg.at(&Func.getEntryBlock()); }
   CFGBlock *&getBlock(llvm::BasicBlock &bb) { return ll2cfg.at(&bb); }
   CFGBlock *createBlock(llvm::BasicBlock &bb) {
     CFG::iterator b = getCFG().createBlock();
@@ -368,8 +366,14 @@ public:
   }
   void createDecls();
 
-  clang::FunctionDecl* getIntrinsic(llvm::Function& F);
-  ASTManager& getASTManager() { return *AM; }
+  clang::FunctionDecl *createFunctionDecl(TranslationUnitDecl *TUD,
+                                          const char *Name,
+                                          ArrayRef<const char *> ParamNames,
+                                          ArrayRef<QualType> ParamTys,
+                                          QualType RetTy,
+                                          bool isVariadic = false);
+  clang::FunctionDecl *getIntrinsic(llvm::Function &F);
+  ASTManager &getASTManager() { return *AM; }
   clang::ASTContext &getASTContext() { return AM->getASTContext(); }
   ValueNamer &getValueNamer() { return VN; }
   TypeBuilder &getTypeBuilder() { return TB; }
