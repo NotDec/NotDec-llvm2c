@@ -1383,9 +1383,9 @@ clang::Expr *ExprBuilder::createCompoundLiteralExpr(llvm::Value *Val,
 
 clang::Expr *ExprBuilder::visitValue(llvm::Value *Val, llvm::User *User,
                                      long OpInd, clang::QualType Ty) {
-  if (Ty.isNull()) {
-    Ty = TB.getType(Val, User, OpInd);
-  }
+  // if (Ty.isNull()) {
+  //   Ty = TB.getType(Val, User, OpInd);
+  // }
 
   clang::Expr *Ret = nullptr;
 
@@ -1537,6 +1537,7 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
     Ret = Ctx.getPointerType(Ret);
   } else {
     Ret = visitType(*notdec::getType(Val));
+    // TODO if int type, and if value is negative constant, we use signed type.
   }
 
   assert(!Ret.isNull() && "TypeBuilder.getType: Ret is null?");

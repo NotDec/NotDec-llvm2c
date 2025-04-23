@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <llvm/Support/Casting.h>
 #include <memory>
 #include <queue>
 #include <set>
@@ -30,6 +31,13 @@
 #define DEBUG_TYPE "structural-phoenix"
 
 namespace notdec::llvm2c {
+
+bool isComplexStmt(clang::Stmt *St) {
+  if (llvm::isa<CompoundStmt, DoStmt, IfStmt, ForStmt>(St)) {
+    return true;
+  }
+  return false;
+}
 
 void Phoenix::execute() {
   int iterations = 0;
@@ -163,14 +171,27 @@ std::unique_ptr<std::set<CFGBlock *>> getLoopNodes(CFGBlock *Block,
   return ret;
 }
 
-clang::Expr* Phoenix::createBlockCondExpr(CFGBlock* Block, clang::Expr* Cond) {
+clang::Expr *Phoenix::createBlockCondExpr(CFGBlock *Block, clang::Expr *Cond) {
   if (Block->size() == 0) {
     return Cond;
   }
   if (Block->size() < StmtExprThreshold) {
-    auto CS = llvm::cast<CompoundStmt>(makeCompoundStmt(Block, Cond));
-    auto Ret = new (Ctx) StmtExpr(CS, Cond->getType(), clang::SourceLocation(), clang::SourceLocation(), 0);
-    return Ret;
+    bool hasNoCompound = true;
+    for (auto Elem = Block->begin(); Elem != Block->end(); ++Elem) {
+      // TODO what if there are other kinds of CFGElement
+      if (auto Stmt = getStmt(*Elem)) {
+        if (isComplexStmt(Stmt)) {
+          hasNoCompound = false;
+        }
+      }
+    }
+    if (hasNoCompound) {
+      auto CS = llvm::cast<CompoundStmt>(makeCompoundStmt(Block, Cond));
+      auto Ret =
+          new (Ctx) StmtExpr(CS, Cond->getType(), clang::SourceLocation(),
+                             clang::SourceLocation(), 0);
+      return Ret;
+    }
   }
   return nullptr;
 }
@@ -1142,9 +1163,11 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
   assert(th != nullptr && el != nullptr && el != th);
   CFGBlock *elS = linearSuccessor(el);
   CFGBlock *thS = linearSuccessor(th);
+  bool elseTail = (el->succ_size() == 0);
+  bool thenTail = (th->succ_size() == 0);
 
   // the successor of else is then block.
-  if (elS == th && onlyPred(el, Block)) {
+  if ((elS == th || elseTail) && onlyPred(el, Block)) {
     clang::Expr *cond = takeBinaryCond(*Block);
     // collapse the else block: if(!cond){else} elseSucc/then
     cond = invertCond(cond);
@@ -1156,11 +1179,13 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
     Block->appendStmt(IfStmt);
     // maintain the edge
     removeEdge(Block, el);
-    removeEdge(el, elS);
+    if (!elseTail) {
+      removeEdge(el, elS);
+    }
     deferredRemove(el);
     assert(Block->succ_size() == 1);
     return true;
-  } else if (thS == el && onlyPred(th, Block)) {
+  } else if ((thS == el || thenTail) && onlyPred(th, Block)) {
     clang::Expr *cond = takeBinaryCond(*Block);
     // collapse the then block: if(cond){then} thenSucc/else;
     auto then = makeCompoundStmt(th);
@@ -1171,7 +1196,9 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
     Block->appendStmt(IfStmt);
     // maintain the edge
     removeEdge(Block, th);
-    removeEdge(th, thS);
+    if (!thenTail) {
+      removeEdge(th, thS);
+    }
     deferredRemove(th);
     assert(Block->succ_size() == 1);
     return true;
