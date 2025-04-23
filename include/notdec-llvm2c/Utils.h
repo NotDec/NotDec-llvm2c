@@ -158,24 +158,24 @@ constexpr PrecedenceLevel getOperatorPrecedence(clang::UnaryOperatorKind OK) {
 }
 
 template <typename T> constexpr PrecedenceLevel getPrecedence(int OpCode = -1) {
-  if (std::is_same<T, clang::CallExpr>()) {
+  if (std::is_base_of<clang::CallExpr, T>()) {
     return SuffixUnary;
-  } else if (std::is_same<T, clang::ArraySubscriptExpr>()) {
+  } else if (std::is_base_of<clang::ArraySubscriptExpr, T>()) {
     return SuffixUnary;
-  } else if (std::is_same<T, clang::MemberExpr>()) {
+  } else if (std::is_base_of<clang::MemberExpr, T>()) {
     return SuffixUnary;
-  } else if (std::is_same<T, clang::CompoundLiteralExpr>()) {
+  } else if (std::is_base_of<clang::CompoundLiteralExpr, T>()) {
     return SuffixUnary;
-  } else if (std::is_same<T, clang::CastExpr>()) {
+  } else if (std::is_base_of<clang::CastExpr, T>()) {
     return PrefixUnary;
-  } else if (std::is_same<T, clang::UnaryExprOrTypeTraitExpr>()) {
+  } else if (std::is_base_of<clang::UnaryExprOrTypeTraitExpr, T>()) {
     return PrefixUnary;
-  } else if (std::is_same<T, clang::UnaryOperator>()) {
+  } else if (std::is_base_of<clang::UnaryOperator, T>()) {
     return getOperatorPrecedence((clang::UnaryOperatorKind)OpCode);
-  } else if (std::is_same<T, clang::BinaryOperator>()) {
+  } else if (std::is_base_of<clang::BinaryOperator, T>()) {
     return getOperatorPrecedence((clang::BinaryOperatorKind)OpCode);
-  } else if (std::is_same<T, clang::ConditionalOperator>() ||
-             std::is_same<T, clang::BinaryConditionalOperator>()) {
+  } else if (std::is_base_of<clang::ConditionalOperator, T>() ||
+             std::is_base_of<clang::BinaryConditionalOperator, T>()) {
     return Conditional;
   }
   return Unknown;
