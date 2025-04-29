@@ -54,6 +54,9 @@ struct ConstantAddr {
 // 1. Differentiate Constants by Users.
 // 2. For some constant expr like (inttoptr i32 1064), the address of the expr
 // is different, but we need to merge them.
+// 3. For Index into global variables like env.table@4, the case is the same.
+// So, in general, for constant expr, we probably should always convert to
+// NodeKey instead of maintain the mapping
 using ExtValuePtr =
     std::variant<llvm::Value *, ReturnValue, UConstant, ConstantAddr>;
 
