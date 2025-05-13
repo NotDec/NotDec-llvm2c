@@ -782,7 +782,7 @@ ClangTypeResult::getTypeSizeInChars(const clang::Type *Ty) {
 // TODO: How to handle Union with multiple possible solutions?
 clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
                                               clang::Expr *Index) {
-  assert(Base->getType()->isPointerType() &&
+  assert((Base->getType()->isPointerType() || Base->getType()->canDecayToPointerType()) &&
          "tryHandlePtrAdd: Base is not a pointer type");
   clang::QualType ValQTy = Base->getType();
   const clang::Type *ValTy = Base->getType().getTypePtr();
@@ -928,7 +928,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
 
 clang::Expr *ClangTypeResult::handlePtrAdd(clang::Expr *Val,
                                            clang::Expr *Index) {
-  assert(Val->getType()->isPointerType() &&
+  assert((Val->getType()->isPointerType() || Val->getType()->canDecayToPointerType()) &&
          "handlePtrAdd: Val is not a pointer type");
   auto Result = tryHandlePtrAdd(Val, Index);
   if (Result != nullptr) {

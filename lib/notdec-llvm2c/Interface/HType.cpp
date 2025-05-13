@@ -113,11 +113,8 @@ std::string HType::getAsString() const {
            (hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
   }
   case TK_Typedef:
-    return "typedef " +
-           llvm::cast<TypedefType>(this)->getDecl()->getType()->getAsString() +
-           " " + llvm::cast<TypedefType>(this)->getDecl()->getName();
-  default:
-    assert(false && "Unknown HType");
+    return llvm::cast<TypedefType>(this)->getDecl()->getName();
+        default : assert(false && "Unknown HType");
   }
 }
 
