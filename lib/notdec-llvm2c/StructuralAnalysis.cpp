@@ -604,7 +604,20 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
 }
 
 clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
-  return CT->checkCast(Val, To);
+  // remove any cast expr
+  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Val)) {
+    Val = Cast->getSubExpr();
+  }
+
+  if (isTypeCompatible(Val->getType(), To)) {
+    return Val;
+  }
+  if (auto R = CT->gepCast(Val, To)) {
+    return R;
+  }
+  // TODO should we use CK_Bitcast here?
+  return createCStyleCastExpr(Ctx, To, clang::VK_PRValue, clang::CK_BitCast,
+                              Val);
 }
 
 ValueNamer &SAFuncContext::getValueNamer() {
@@ -685,7 +698,8 @@ clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                         clang::Expr *E) {
   if (E->getType()->isUnsignedIntegerType()) {
     auto ty = TB.makeSigned(Ctx, E->getType());
-    return createCStyleCastExpr(Ctx, ty, clang::VK_PRValue, clang::CK_IntegralCast, E);
+    return createCStyleCastExpr(Ctx, ty, clang::VK_PRValue,
+                                clang::CK_IntegralCast, E);
   }
   return E;
 }
@@ -694,7 +708,8 @@ clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                           clang::Expr *E) {
   if (E->getType()->isSignedIntegerType()) {
     auto ty = TB.makeUnsigned(Ctx, E->getType());
-    return createCStyleCastExpr(Ctx, ty, clang::VK_PRValue, clang::CK_IntegralCast, E);
+    return createCStyleCastExpr(Ctx, ty, clang::VK_PRValue,
+                                clang::CK_IntegralCast, E);
   }
   return E;
 }
@@ -1143,7 +1158,8 @@ clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
     // void *memcpy(void *destination, const void *source, size_t num);
     const int ParamSize = 3;
     const char *Names[] = {"destination", "source", "num"};
-    QualType ParamTys[3] = {getASTContext().VoidPtrTy, getASTContext().VoidPtrTy.withConst(),
+    QualType ParamTys[3] = {getASTContext().VoidPtrTy,
+                            getASTContext().VoidPtrTy.withConst(),
                             getASTContext().UnsignedLongTy};
     QualType RetTy = getASTContext().VoidPtrTy;
 

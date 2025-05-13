@@ -630,16 +630,7 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   assert(false && "TODO isTypeCompatible: implement the rest.");
 }
 
-clang::Expr *ClangTypeResult::checkCast(clang::Expr *Val, clang::QualType To) {
-  // remove any cast expr
-  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Val)) {
-    Val = Cast->getSubExpr();
-  }
-
-  if (isTypeCompatible(Ctx, Val->getType(), To)) {
-    return Val;
-  }
-
+clang::Expr *ClangTypeResult::gepCast(clang::Expr *Val, clang::QualType To) {
   // try to cast using gep
   if (Val->getType()->isPointerType()) {
     clang::Expr *R = Val;
@@ -650,10 +641,7 @@ clang::Expr *ClangTypeResult::checkCast(clang::Expr *Val, clang::QualType To) {
       }
     }
   }
-
-  // TODO should we use CK_Bitcast here?
-  return createCStyleCastExpr(Ctx, To, clang::VK_PRValue, clang::CK_BitCast,
-                              Val);
+  return nullptr;
 }
 
 std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
