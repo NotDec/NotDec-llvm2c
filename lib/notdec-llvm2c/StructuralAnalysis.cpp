@@ -298,19 +298,31 @@ void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
 
 void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   // store = assign + deref left.
-  clang::Expr *val = EB.visitValue(I.getValueOperand(), &I, 0);
-  clang::Expr *ptr = EB.visitValue(I.getPointerOperand(), &I, 1);
-  ptr = deref(Ctx, ptr);
-  val = getTypeBuilder().checkCast(val, ptr->getType());
-  clang::Expr *assign = createBinaryOperator(Ctx, ptr, val, clang::BO_Assign,
-                                             ptr->getType(), clang::VK_LValue);
+  clang::Expr *Val = EB.visitValue(I.getValueOperand(), &I, 0);
+  clang::Expr *Ptr = EB.visitValue(I.getPointerOperand(), &I, 1);
+  // implicit inttoptr
+  if (!Ptr->getType()->isPointerType()) {
+    Ptr = createCStyleCastExpr(
+        Ctx, getTypeBuilder().visitType(*I.getPointerOperandType()),
+        clang::VK_PRValue, clang::CastKind::CK_BitCast, Ptr);
+  }
+  Ptr = deref(Ctx, Ptr);
+  Val = getTypeBuilder().checkCast(Val, Ptr->getType());
+  clang::Expr *assign = createBinaryOperator(Ctx, Ptr, Val, clang::BO_Assign,
+                                             Ptr->getType(), clang::VK_LValue);
   addExprOrStmt(I, *assign);
 }
 
 void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
-  clang::Expr *E = EB.visitValue(I.getPointerOperand(), &I, 0);
-  E = deref(Ctx, E);
-  addExprOrStmt(I, *E);
+  clang::Expr *Ptr = EB.visitValue(I.getPointerOperand(), &I, 0);
+  // implicit inttoptr
+  if (!Ptr->getType()->isPointerType()) {
+    Ptr = createCStyleCastExpr(
+        Ctx, getTypeBuilder().visitType(*I.getPointerOperandType()),
+        clang::VK_PRValue, clang::CastKind::CK_BitCast, Ptr);
+  }
+  Ptr = deref(Ctx, Ptr);
+  addExprOrStmt(I, *Ptr);
 }
 
 clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
@@ -1023,7 +1035,11 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
   }
 
   if (!opts.noDemoteSSA) {
-    demoteSSAFixHT(M, *HT, DebugDir);
+    if (HT) {
+      demoteSSAFixHT(M, *HT, DebugDir);
+    } else {
+      demoteSSA(M);
+    }
   }
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
@@ -1032,7 +1048,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
              << "\n========= End IR before structural analysis =========\n");
 
   // convert to shared ptr for easier usage
-  std::shared_ptr<HTypeResult> HTR = HT == nullptr ? nullptr : std::move(HT);
+  std::shared_ptr<HTypeResult> HTR = (HT == nullptr ? nullptr : std::move(HT));
   std::shared_ptr<ASTUnit> AST = buildAST(M.getName());
   std::shared_ptr<ASTManager> AM = std::make_shared<ASTManager>(OS, AST);
   std::shared_ptr<ClangTypeResult> CT =
@@ -1156,7 +1172,6 @@ clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
       return F1;
     }
     // void *memcpy(void *destination, const void *source, size_t num);
-    const int ParamSize = 3;
     const char *Names[] = {"destination", "source", "num"};
     QualType ParamTys[3] = {getASTContext().VoidPtrTy,
                             getASTContext().VoidPtrTy.withConst(),
@@ -1165,8 +1180,28 @@ clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
 
     FD = createFunctionDecl(TUD, "memcpy", Names, ParamTys, RetTy);
     TUD->addDecl(FD);
-  } else {
+  } else if (F.getIntrinsicID() == llvm::Intrinsic::fabs) {
+    if (auto F1 = AM->getFuncDeclaration("fabs")) {
+      return F1;
+    }
+    const char *Names[] = {"x"};
+    QualType RetTy = getTypeBuilder().visitType(*F.getReturnType());
+    QualType ParamTys[1] = {RetTy};
 
+    FD = createFunctionDecl(TUD, "fabs", Names, ParamTys, RetTy);
+    TUD->addDecl(FD);
+  } else if (F.getIntrinsicID() == llvm::Intrinsic::abs) {
+    if (auto F1 = AM->getFuncDeclaration("abs")) {
+      return F1;
+    }
+    const char *Names[] = {"x"};
+    QualType RetTy = getASTContext().getIntTypeForBitwidth(
+        F.getReturnType()->getIntegerBitWidth(), true);
+    QualType ParamTys[1] = {RetTy};
+
+    FD = createFunctionDecl(TUD, "abs", Names, ParamTys, RetTy);
+    TUD->addDecl(FD);
+  } else {
     assert(false && "unhandled intrinsic.");
   }
   return FD;
@@ -1617,10 +1652,13 @@ clang::Expr *ExprBuilder::getNull(clang::QualType Ty) {
   if (isCpp) {
     return new (Ctx) clang::CXXNullPtrLiteralExpr(Ty, clang::SourceLocation());
   } else {
-    auto *Zero = clang::IntegerLiteral::Create(
+    clang::Expr *Zero = clang::IntegerLiteral::Create(
         Ctx, llvm::APInt(32, 0, false), Ctx.IntTy, clang::SourceLocation());
-    return createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,
-                                clang::CK_NullToPointer, Zero);
+    if (!Ty.isNull()) {
+      Zero = createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,
+                                  clang::CK_NullToPointer, Zero);
+    }
+    return Zero;
   }
 }
 
