@@ -1575,6 +1575,19 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
   llvmValue2ExtVal(Val, User, OpInd);
   auto *V = std::get_if<llvm::Value *>(&Val);
 
+  // Override main func sig
+  if (V != nullptr) {
+    if (auto Arg = llvm::dyn_cast<llvm::Argument>(*V)) {
+      if (Arg->getParent()->getName() == "main") {
+        if (Arg->getArgNo() == 0) {
+          return Ctx.IntTy;
+        } else if (Arg->getArgNo() == 1) {
+          return Ctx.getPointerType(Ctx.getPointerType(Ctx.CharTy));
+        }
+      }
+    }
+  }
+
   llvm::Function *F;
   if (CT != nullptr && CT->hasType(Val)) {
     Ret = CT->getType(Val);
