@@ -3,11 +3,24 @@
 
 namespace notdec {
 
-std::string toString(const ExtValuePtr &Val) {
+std::string toString(const ExtValuePtr &Val) { return toString(Val, false); }
+
+std::string toString(const ExtValuePtr &Val, bool Verbose) {
   std::string Ret;
   llvm::raw_string_ostream OS(Ret);
   if (auto V = std::get_if<llvm::Value *>(&Val)) {
     OS << "Value: " << **V;
+    if (Verbose) {
+      llvm::Function *F = nullptr;
+      if (auto I = llvm::dyn_cast<llvm::Instruction>(*V)) {
+        F = I->getFunction();
+      } else if (auto Arg = llvm::dyn_cast<llvm::Argument>(*V)) {
+        F = Arg->getParent();
+      }
+      if (F) {
+        OS << " (In Func: " << F->getName() << ")";
+      }
+    }
   } else if (auto F = std::get_if<ReturnValue>(&Val)) {
     OS << "ReturnValue: " + ValueNamer::getName(*F->Func, "func_");
   } else if (auto IC = std::get_if<UConstant>(&Val)) {

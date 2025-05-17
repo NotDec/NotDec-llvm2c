@@ -62,6 +62,7 @@ using ExtValuePtr =
 
 ExtValuePtr getExtValuePtr(llvm::Value *Val, llvm::User *User, long OpInd = -1);
 std::string getName(const ExtValuePtr &Val);
+std::string toString(const ExtValuePtr &Val, bool Verbose);
 std::string toString(const ExtValuePtr &Val);
 void dump(const ExtValuePtr &Val);
 llvm::Type *getType(const ExtValuePtr &Val);

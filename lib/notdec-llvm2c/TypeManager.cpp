@@ -621,9 +621,8 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
     return false;
   }
 
-  // TODO
   if (From->isFunctionType() && To->isFunctionType()) {
-    return true;
+    return false;
   }
   From->dump();
   To->dump();

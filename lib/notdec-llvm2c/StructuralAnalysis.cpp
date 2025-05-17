@@ -576,27 +576,8 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
         Args.resize(FD->param_size());
       }
     }
-  } else {
-    // Function pointer call
-    // TODO: double check
-    auto CalleeExpr = EB.visitValue(I.getCalledOperand(), &I, I.arg_size());
-    FunctionType = CalleeExpr->getType();
-    assert(CalleeExpr != nullptr &&
-           "CFGBuilder.visitCallInst: CalleeExpr is null?");
-    auto Ty = CalleeExpr->getType();
-    if (Ty->isPointerType()) {
-      Ty = Ty->getPointeeType();
-    }
-    assert(Ty->isFunctionType() &&
-           "CallInst operand is not a function pointer?");
-    FRef = CalleeExpr;
 
-    // TODO create func ptr type cast?
-
-    Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
-  }
-  // Handle argument casts
-  if (FunctionType->isFunctionProtoType()) {
+    // Handle argument casts
     auto *FT = llvm::cast<clang::FunctionProtoType>(FunctionType);
     auto Params = FT->getParamTypes();
     for (unsigned i = 0; i < Params.size(); i++) {
@@ -604,9 +585,40 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
       Args[i] = FCtx.getTypeBuilder().checkCast(Args[i], ParamTy);
     }
   } else {
+    // Function pointer call.
+    // TODO: What is the return type here?
+    auto CalleeExpr = EB.visitValue(I.getCalledOperand(), &I, I.arg_size());
+    auto RetTy = getTypeBuilder().getType(&I, nullptr, -1);
+    llvm::SmallVector<clang::QualType, 16> ArgTypes;
+    for (auto Arg: Args) {
+      ArgTypes.push_back(Arg->getType());
+    }
+    FunctionType = Ctx.getFunctionType(RetTy, ArgTypes, FunctionProtoType::ExtProtoInfo());
+    
+    
+    // FunctionType = CalleeExpr->getType();
+    assert(CalleeExpr != nullptr &&
+           "CFGBuilder.visitCallInst: CalleeExpr is null?");
+    auto Ty = CalleeExpr->getType();
+    if (Ty->isPointerType()) {
+      Ty = Ty->getPointeeType();
+      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, Ctx.getPointerType(FunctionType));
+    } else {
+      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, FunctionType);
+    }
+    assert(Ty->isFunctionType() &&
+           "CallInst operand is not a function pointer?");
+    FRef = CalleeExpr;
+
+    // create func ptr type cast
+    Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
+
     llvm::errs()
-        << "CFGBuilder.visitCallInst: no type available for arg casting.\n";
+    << "CFGBuilder.visitCallInst: Warning: Func ptr call does no arg casting.\n";
+
   }
+
+  FRef = addParenthesis<clang::CallExpr>(Ctx, FRef, false);
   // TODO? CallExpr type is function return type or not?
   auto Call = clang::CallExpr::Create(Ctx, FRef, Args, Ret, clang::VK_PRValue,
                                       clang::SourceLocation(),
@@ -676,7 +688,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
                         clang::SourceLocation());
     getEntryBlock()->appendStmt(DS);
     clang::Expr *assign = createBinaryOperator(
-        getASTContext(), makeDeclRefExpr(Decl), &Expr, clang::BO_Assign,
+        getASTContext(), makeDeclRefExpr(Decl), TB.checkCast(&Expr, Ty), clang::BO_Assign,
         Decl->getType(), clang::VK_LValue);
 
     // Use Assign stmt
