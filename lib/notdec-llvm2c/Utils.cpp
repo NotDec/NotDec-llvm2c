@@ -1,3 +1,4 @@
+#include <cassert>
 #include <iostream>
 #include <type_traits>
 #include <vector>
@@ -108,7 +109,7 @@ llvm::Value *PhiHaveAddress(llvm::PHINode *P) {
 /// node and replaces it with a slot in the stack frame allocated via alloca.
 /// The PHI node is deleted. It returns the pointer to the alloca inserted.
 llvm::Value *DemotePHIToStack2(llvm::PHINode *P,
-                                    llvm::Instruction *AllocaPoint) {
+                               llvm::Instruction *AllocaPoint) {
   using namespace llvm;
   if (P->use_empty()) {
     P->eraseFromParent();
@@ -470,6 +471,37 @@ std::string llvmObjToString(const llvm::Module *t) {
   return ss.str();
 }
 
+clang::Expr *getNoCast(clang::Expr *E) {
+  clang::Expr *ENoCast = E;
+  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
+    ENoCast = Cast->getSubExpr();
+  }
+  return ENoCast;
+}
+
+clang::Expr *makeNonArrow(clang::MemberExpr *M) {
+  assert(M->isArrow());
+  M->setArrow(false);
+  return M;
+  // assert(!M->hasExplicitTemplateArgs());
+  // assert(!M->getTemplateArgs());
+
+  // clang::Expr *base = M->getBase();
+  // bool isArrow = false; // convert from -> to .
+
+  // return clang::MemberExpr::Create(
+  //     Ctx, base, isArrow, M->getOperatorLoc(), M->getQualifierLoc(),
+  //     M->getTemplateKeywordLoc(), M->getMemberDecl(), M->getFoundDecl(),
+  //     M->getMemberNameInfo(), nullptr, M->getType(), M->getValueKind(),
+  //     M->getObjectKind(), clang::NOUR_None);
+}
+
+clang::Expr *makeArrow(clang::MemberExpr *M) {
+  assert(!M->isArrow());
+  M->setArrow(true);
+  return M;
+}
+
 clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
                               clang::FieldDecl *Field) {
   // check if the val is deref, if so, then remove it and use arrow expr.
@@ -486,12 +518,36 @@ clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
       clang::OK_Ordinary, clang::NOUR_None);
 }
 
+clang::Expr *getDerefInner(clang::Expr *E) {
+  clang::Expr *ENoCast = getNoCast(E);
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_Deref) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
+  }
+  // eliminate arrow operator is incorrect.
+  // // arrow operator = deref + non-arrow. return non-arrow
+  // if (auto MemberExpr = llvm::dyn_cast<clang::MemberExpr>(E)) {
+  //   if (MemberExpr->isArrow()) {
+  //     return makeNonArrow(MemberExpr);
+  //   }
+  // }
+  return nullptr;
+}
+
+clang::Expr *getAddrofInner(clang::Expr *E) {
+  clang::Expr *ENoCast = getNoCast(E);
+  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
+      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
+          clang::UO_AddrOf) {
+    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
+  }
+  return nullptr;
+}
+
 clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
   // eliminate addrOf + deref
-  clang::Expr *ENoCast = E;
-  if (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
-    ENoCast = Cast->getSubExpr();
-  }
+  clang::Expr *ENoCast = getNoCast(E);
   if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
       llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
           clang::UO_Deref) {
@@ -506,36 +562,33 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
       }
     }
   }
+  // eliminate arrow operator is incorrect.
+  // // eliminate arrow operator.
+  // if (auto MemberExpr = llvm::dyn_cast<clang::MemberExpr>(E)) {
+  //   if (MemberExpr->isArrow()) {
+  //     return makeNonArrow(MemberExpr);
+  //   }
+  // }
   return createUnaryOperator(Ctx, E, clang::UO_AddrOf,
                              Ctx.getPointerType(E->getType()),
                              clang::VK_LValue);
 }
 
-clang::Expr *getDerefInner(clang::Expr *E) {
-  // eliminate deref + addrOf
-  clang::Expr *ENoCast = E;
-  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
-    ENoCast = Cast->getSubExpr();
-  }
-  if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
-      llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
-          clang::UO_AddrOf) {
-    return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
-  }
-  return nullptr;
-}
-
 clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
   // eliminate deref + addrOf
-  clang::Expr *ENoCast = E;
-  while (auto Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) {
-    ENoCast = Cast->getSubExpr();
-  }
+  clang::Expr *ENoCast = getNoCast(E);
   if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
       llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
           clang::UO_AddrOf) {
     return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
   }
+  // use arrow operator is incorrect
+  // // use arrow operator.
+  // if (auto MemberExpr = llvm::dyn_cast<clang::MemberExpr>(E)) {
+  //   if (!MemberExpr->isArrow()) {
+  //     return makeArrow(MemberExpr);
+  //   }
+  // }
   clang::QualType Ty = E->getType();
   if (Ty->isPointerType()) {
     Ty = Ty->getPointeeType();

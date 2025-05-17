@@ -639,6 +639,17 @@ clang::Expr *ClangTypeResult::gepCast(clang::Expr *Val, clang::QualType To) {
         return R;
       }
     }
+  } else if (llvm::isa<clang::RecordType>(Val->getType())) {
+    // try to cast by select union member
+    auto *Decl = llvm::cast<clang::RecordDecl>(Val->getType()->getAsTagDecl());
+    if (Decl->getTagKind() == clang::TTK_Union) {
+      for (auto *F : Decl->fields()) {
+        auto R = createMemberExpr(Ctx, Val, F);
+        if (isTypeCompatible(Ctx, R->getType(), To)) {
+          return R;
+        }
+      }
+    }
   }
   return nullptr;
 }
@@ -781,7 +792,8 @@ ClangTypeResult::getTypeSizeInChars(const clang::Type *Ty) {
 // TODO: How to handle Union with multiple possible solutions?
 clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
                                               clang::Expr *Index) {
-  assert((Base->getType()->isPointerType() || Base->getType()->canDecayToPointerType()) &&
+  assert((Base->getType()->isPointerType() ||
+          Base->getType()->canDecayToPointerType()) &&
          "tryHandlePtrAdd: Base is not a pointer type");
   clang::QualType ValQTy = Base->getType();
   const clang::Type *ValTy = Base->getType().getTypePtr();
@@ -927,7 +939,8 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
 
 clang::Expr *ClangTypeResult::handlePtrAdd(clang::Expr *Val,
                                            clang::Expr *Index) {
-  assert((Val->getType()->isPointerType() || Val->getType()->canDecayToPointerType()) &&
+  assert((Val->getType()->isPointerType() ||
+          Val->getType()->canDecayToPointerType()) &&
          "handlePtrAdd: Val is not a pointer type");
   auto Result = tryHandlePtrAdd(Val, Index);
   if (Result != nullptr) {

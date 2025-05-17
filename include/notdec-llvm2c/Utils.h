@@ -272,12 +272,16 @@ inline clang::CStyleCastExpr *createCStyleCastExpr(clang::ASTContext &Ctx,
       clang::SourceLocation(), clang::SourceLocation());
 }
 
-clang::Expr *getDerefInner(clang::Expr *E);
-clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E);
-
-clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E);
+clang::Expr *getNoCast(clang::Expr *E);
+clang::Expr *makeNonArrow(clang::MemberExpr *M);
+clang::Expr *makeArrow(clang::MemberExpr *M);
 clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
                               clang::FieldDecl *Field);
+clang::Expr *getDerefInner(clang::Expr *E);
+clang::Expr *getAddrofInner(clang::Expr *E);
+
+clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E);
+clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E);
 
 // dump LLVM object to string
 template <typename T> std::string llvmObjToString(const T *t) {
