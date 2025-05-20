@@ -372,6 +372,7 @@ public:
                                           ArrayRef<QualType> ParamTys,
                                           QualType RetTy,
                                           bool isVariadic = false);
+  clang::FunctionDecl *getIntrinsic(std::string FName);
   clang::FunctionDecl *getIntrinsic(llvm::Function &F);
   ASTManager &getASTManager() { return *AM; }
   clang::ASTContext &getASTContext() { return AM->getASTContext(); }

@@ -69,6 +69,18 @@
 
 namespace notdec::llvm2c {
 
+bool canIgnore(llvm::Instruction::CastOps OpCode) {
+  switch (OpCode) {
+  case llvm::Instruction::PtrToInt:
+  case llvm::Instruction::IntToPtr:
+  case llvm::Instruction::BitCast:
+    return true;
+  default:
+    return false;
+  }
+  return false;
+}
+
 clang::CastKind convertCastKind(llvm::Instruction::CastOps OpCode,
                                 bool isBool) {
   clang::CastKind ck;
@@ -203,12 +215,15 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
     FCtx.getFunctionDecl()->addDecl(VD);
     // When alloca is referenced, it refers to the address of the DeclRefExpr
     auto addr = addrOf(Ctx, makeDeclRefExpr(VD));
-    addExprOrStmt(I, *addr);
+    FCtx.addMapping(&I, *addr);
   } else {
-    // TODO create a alloca call
-    llvm::errs() << "Warning: Dynamic stack allocation in "
-                 << I.getParent()->getParent()->getName() << ": " << I << "\n";
-    std::abort();
+    auto *FD = FCtx.getSAContext().getIntrinsic("alloca");
+    auto Arg = EB.visitValue(I.getOperand(0), &I, 0);
+    Arg = getTypeBuilder().checkCast(Arg, FD->getParamDecl(0)->getType());
+    auto Call = clang::CallExpr::Create(
+        Ctx, makeDeclRefExpr(FD), {Arg}, FD->getReturnType(), clang::VK_PRValue,
+        clang::SourceLocation(), clang::FPOptionsOverride());
+    addExprOrStmt(I, *Call);
   }
 }
 
@@ -590,19 +605,20 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     auto CalleeExpr = EB.visitValue(I.getCalledOperand(), &I, I.arg_size());
     auto RetTy = getTypeBuilder().getType(&I, nullptr, -1);
     llvm::SmallVector<clang::QualType, 16> ArgTypes;
-    for (auto Arg: Args) {
+    for (auto Arg : Args) {
       ArgTypes.push_back(Arg->getType());
     }
-    FunctionType = Ctx.getFunctionType(RetTy, ArgTypes, FunctionProtoType::ExtProtoInfo());
-    
-    
+    FunctionType =
+        Ctx.getFunctionType(RetTy, ArgTypes, FunctionProtoType::ExtProtoInfo());
+
     // FunctionType = CalleeExpr->getType();
     assert(CalleeExpr != nullptr &&
            "CFGBuilder.visitCallInst: CalleeExpr is null?");
     auto Ty = CalleeExpr->getType();
     if (Ty->isPointerType()) {
       Ty = Ty->getPointeeType();
-      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, Ctx.getPointerType(FunctionType));
+      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr,
+                                              Ctx.getPointerType(FunctionType));
     } else {
       CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, FunctionType);
     }
@@ -613,9 +629,8 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     // create func ptr type cast
     Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
 
-    llvm::errs()
-    << "CFGBuilder.visitCallInst: Warning: Func ptr call does no arg casting.\n";
-
+    llvm::errs() << "CFGBuilder.visitCallInst: Warning: Func ptr call does no "
+                    "arg casting.\n";
   }
 
   FRef = addParenthesis<clang::CallExpr>(Ctx, FRef, false);
@@ -651,8 +666,7 @@ ValueNamer &SAFuncContext::getValueNamer() {
 void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
                                   CFGBlock &block) {
   // non-instruction or expr-like instruction.
-  if (!llvm::isa<llvm::Instruction>(&V) || llvm::isa<llvm::AllocaInst>(&V) ||
-      llvm::isa<llvm::Argument>(&V)) {
+  if (!llvm::isa<llvm::Instruction>(&V) || llvm::isa<llvm::Argument>(&V)) {
     ExprMap[&V] = &llvm::cast<clang::Expr>(Stmt);
     return;
   }
@@ -688,8 +702,8 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
                         clang::SourceLocation());
     getEntryBlock()->appendStmt(DS);
     clang::Expr *assign = createBinaryOperator(
-        getASTContext(), makeDeclRefExpr(Decl), TB.checkCast(&Expr, Ty), clang::BO_Assign,
-        Decl->getType(), clang::VK_LValue);
+        getASTContext(), makeDeclRefExpr(Decl), TB.checkCast(&Expr, Ty),
+        clang::BO_Assign, Decl->getType(), clang::VK_LValue);
 
     // Use Assign stmt
     // clang::DeclRefExpr *ref = clang::DeclRefExpr::Create(
@@ -790,16 +804,15 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
   auto *Val = EB.visitValue(I.getOperand(0), &I, 0);
   auto destTy = getType(&I, nullptr, -1);
   // if there is HighTypes, ignore low level casts.
-  auto expr = FCtx.getSAContext().hasHighTypes()
-                  ? nullptr
-                  : createCCast(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(),
-                                &I, destTy, Val);
-  if (expr == nullptr) {
+  if (FCtx.getSAContext().hasHighTypes() && canIgnore(I.getOpcode())) {
     // no need to cast
     FCtx.addMapping(&I, *Val);
     return;
+  } else {
+    auto expr = createCCast(Ctx, EB, FCtx.getTypeBuilder(), I.getOpcode(), &I,
+                            destTy, Val);
+    addExprOrStmt(I, *expr);
   }
-  addExprOrStmt(I, *expr);
 }
 
 clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
@@ -1105,9 +1118,20 @@ bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb) {
   return false;
 }
 
+bool hasOneUseIgnoreCast(llvm::Value &Val) {
+  if (Val.hasOneUse()) {
+    if (auto Cast = llvm::dyn_cast<llvm::CastInst>(*Val.user_begin())) {
+      return Cast->hasOneUse();
+    } else {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool onlyUsedInBlock(llvm::Instruction &inst) {
   llvm::BasicBlock *BB = inst.getParent();
-  if (inst.hasOneUse()) {
+  if (hasOneUseIgnoreCast(inst)) {
     for (llvm::User *U : inst.users()) {
       if (llvm::Instruction *UI = llvm::dyn_cast<llvm::Instruction>(U)) {
         if (UI->getParent() == BB) {
@@ -1156,6 +1180,28 @@ SAContext::createFunctionDecl(TranslationUnitDecl *TUD, const char *Name,
     Params.push_back(PVD);
   }
   FD->setParams(Params);
+  return FD;
+}
+
+clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
+  auto *TUD = AM->getFunctionDeclarations();
+  clang::FunctionDecl *FD = nullptr;
+  if (FName == "alloca") {
+    if (auto F1 = AM->getFuncDeclaration("alloca")) {
+      return F1;
+    }
+    // create a declaration
+    // void * alloca ( size_t size );
+    constexpr int ParamSize = 1;
+    const char *Names[ParamSize] = {"size"};
+    QualType ParamTys[ParamSize] = {getASTContext().UnsignedLongTy};
+    QualType RetTy = getASTContext().VoidPtrTy;
+
+    FD = createFunctionDecl(TUD, "alloca", Names, ParamTys, RetTy);
+    TUD->addDecl(FD);
+  } else {
+    assert(false && "unhandled intrinsic.");
+  }
   return FD;
 }
 
