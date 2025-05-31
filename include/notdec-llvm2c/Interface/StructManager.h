@@ -22,7 +22,6 @@ struct CGEdge;
 struct ConstraintGraph;
 struct ConstraintSummary;
 struct TRContext;
-struct EdgeLabel;
 } // namespace notdec::retypd
 
 namespace notdec {
@@ -43,9 +42,9 @@ struct SimpleRange {
   OffsetTy end() const { return Start + Size; }
 };
 
-template <typename EL = retypd::EdgeLabel> struct FieldEntry {
+struct FieldEntry {
   SimpleRange R;
-  std::optional<EL> L = std::nullopt;
+  const retypd::CGEdge *Edge = nullptr;
   // clang::DeclaratorDecl *Decl = nullptr;
 };
 
@@ -64,35 +63,32 @@ struct BytesManager {
   BytesManager getSubBytes(int64_t Start, int64_t End);
 };
 
-template <typename EL = retypd::EdgeLabel> struct UnionInfo {
-  std::vector<EL> MemberLabels;
+struct UnionInfo {
+  std::vector<const retypd::CGEdge *> Members;
 };
 
-template <typename EL = retypd::EdgeLabel> struct StructInfo {
-  std::vector<FieldEntry<EL>> Fields;
+struct StructInfo {
+  std::vector<FieldEntry> Fields;
 };
 
-template <typename EL = retypd::EdgeLabel> struct SimpleTypeInfo {
-  std::optional<EL> L = std::nullopt;
+struct SimpleTypeInfo {
+  const retypd::CGEdge *Edge = nullptr;
 };
 
-template <typename EL = retypd::EdgeLabel> struct ArrayInfo {
-  std::optional<EL> L = std::nullopt;
+struct ArrayInfo {
+  const retypd::CGEdge *Edge = nullptr;
   // force the element size
   std::optional<OffsetTy> ElemSize = std::nullopt;
 };
 
-template <typename EL = retypd::EdgeLabel> struct TypeInfo {
+struct TypeInfo {
   std::optional<OffsetTy> Size = std::nullopt;
-  std::variant<SimpleTypeInfo<EL>, StructInfo<EL>, UnionInfo<EL>, ArrayInfo<EL>>
-      Info;
+  std::variant<SimpleTypeInfo, StructInfo, UnionInfo, ArrayInfo> Info;
 
-  bool isSimple() const {
-    return std::holds_alternative<SimpleTypeInfo<EL>>(Info);
-  }
-  bool isStruct() const { return std::holds_alternative<StructInfo<EL>>(Info); }
-  bool isUnion() const { return std::holds_alternative<UnionInfo<EL>>(Info); }
-  bool isArray() const { return std::holds_alternative<ArrayInfo<EL>>(Info); }
+  bool isSimple() const { return std::holds_alternative<SimpleTypeInfo>(Info); }
+  bool isStruct() const { return std::holds_alternative<StructInfo>(Info); }
+  bool isUnion() const { return std::holds_alternative<UnionInfo>(Info); }
+  bool isArray() const { return std::holds_alternative<ArrayInfo>(Info); }
 
   template <typename T> T *getAs() { return std::get_if<T>(&Info); }
   template <typename T> const T *getAs() const { return std::get_if<T>(&Info); }

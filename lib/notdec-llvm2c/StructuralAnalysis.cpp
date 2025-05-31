@@ -818,7 +818,7 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
 clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
                           TypeBuilder &TB, llvm::Instruction::BinaryOps OpCode,
                           llvm::User &Result, llvm::Value *L, llvm::Value *R,
-                          std::map<clang::Decl *, StructInfo<>> *StructInfos) {
+                          std::map<clang::Decl *, StructInfo> *StructInfos) {
   clang::Optional<clang::BinaryOperatorKind> op = convertOp(OpCode);
   assert(op.hasValue() && "CFGBuilder.visitBinaryOperator: unexpected op type");
   Conversion cv = getSignedness(OpCode);
