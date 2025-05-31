@@ -22,6 +22,7 @@ struct CGEdge;
 struct ConstraintGraph;
 struct ConstraintSummary;
 struct TRContext;
+struct EdgeLabel;
 } // namespace notdec::retypd
 
 namespace notdec {
@@ -42,9 +43,9 @@ struct SimpleRange {
   OffsetTy end() const { return Start + Size; }
 };
 
-struct FieldEntry {
+template <typename EL = retypd::EdgeLabel> struct FieldEntry {
   SimpleRange R;
-  const retypd::CGEdge *Edge = nullptr;
+  std::optional<EL> L = std::nullopt;
   // clang::DeclaratorDecl *Decl = nullptr;
 };
 
@@ -63,27 +64,28 @@ struct BytesManager {
   BytesManager getSubBytes(int64_t Start, int64_t End);
 };
 
-struct UnionInfo {
-  std::vector<const retypd::CGEdge *> Members;
+template <typename EL = retypd::EdgeLabel> struct UnionInfo {
+  std::vector<EL> MemberLabels;
 };
 
-struct StructInfo {
-  std::vector<FieldEntry> Fields;
+template <typename EL = retypd::EdgeLabel> struct StructInfo {
+  std::vector<FieldEntry<EL>> Fields;
 };
 
-struct SimpleTypeInfo {
-  const retypd::CGEdge *Edge = nullptr;
+template <typename EL = retypd::EdgeLabel> struct SimpleTypeInfo {
+  std::optional<EL> L = std::nullopt;
 };
 
-struct ArrayInfo {
-  const retypd::CGEdge *Edge = nullptr;
+template <typename EL = retypd::EdgeLabel> struct ArrayInfo {
+  std::optional<EL> L = std::nullopt;
   // force the element size
   std::optional<OffsetTy> ElemSize = std::nullopt;
 };
 
-struct TypeInfo {
+template <typename EL = retypd::EdgeLabel> struct TypeInfo {
   std::optional<OffsetTy> Size = std::nullopt;
-  std::variant<SimpleTypeInfo, StructInfo, UnionInfo, ArrayInfo> Info;
+  std::variant<SimpleTypeInfo<EL>, StructInfo<EL>, UnionInfo<EL>, ArrayInfo<EL>>
+      Info;
 
   bool isSimple() const {
     return std::holds_alternative<SimpleTypeInfo<EL>>(Info);
