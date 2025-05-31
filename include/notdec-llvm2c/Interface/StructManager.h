@@ -84,6 +84,16 @@ struct ArrayInfo {
 struct TypeInfo {
   std::optional<OffsetTy> Size = std::nullopt;
   std::variant<SimpleTypeInfo, StructInfo, UnionInfo, ArrayInfo> Info;
+
+  bool isSimple() const {
+    return std::holds_alternative<SimpleTypeInfo<EL>>(Info);
+  }
+  bool isStruct() const { return std::holds_alternative<StructInfo<EL>>(Info); }
+  bool isUnion() const { return std::holds_alternative<UnionInfo<EL>>(Info); }
+  bool isArray() const { return std::holds_alternative<ArrayInfo<EL>>(Info); }
+
+  template <typename T> T *getAs() { return std::get_if<T>(&Info); }
+  template <typename T> const T *getAs() const { return std::get_if<T>(&Info); }
 };
 
 } // namespace notdec
