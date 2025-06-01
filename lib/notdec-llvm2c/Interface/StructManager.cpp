@@ -13,6 +13,44 @@
 
 namespace notdec {
 
+void TypeInfo::fixEdge(
+    const std::map<const retypd::CGEdge *, const retypd::CGEdge *> &EdgeMap) {
+  if (auto UI = getAs<UnionInfo>()) {
+    for (size_t i = 0; i < UI->Members.size(); i++) {
+      auto Edge = UI->Members[i];
+      auto it = EdgeMap.find(Edge);
+      if (it != EdgeMap.end()) {
+        UI->Members[i] = it->second;
+      }
+    }
+  } else if (auto SI = getAs<StructInfo>()) {
+    for (auto &Field : SI->Fields) {
+      if (Field.Edge) {
+        auto it = EdgeMap.find(Field.Edge);
+        if (it != EdgeMap.end()) {
+          Field.Edge = it->second;
+        }
+      }
+    }
+  } else if (auto AI = getAs<ArrayInfo>()) {
+    if (AI->Edge) {
+      auto it = EdgeMap.find(AI->Edge);
+      if (it != EdgeMap.end()) {
+        AI->Edge = it->second;
+      }
+    }
+  } else if (auto TI = getAs<SimpleTypeInfo>()) {
+    if (TI->Edge) {
+      auto it = EdgeMap.find(TI->Edge);
+      if (it != EdgeMap.end()) {
+        TI->Edge = it->second;
+      }
+    }
+  } else {
+    assert(false && "Unknown TypeInfo");
+  }
+}
+
 std::optional<std::string> BytesManager::getRange(SimpleRange R) {
   if (R.Size < 0) {
     return std::nullopt;

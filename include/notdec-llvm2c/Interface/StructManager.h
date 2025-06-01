@@ -92,6 +92,9 @@ struct TypeInfo {
 
   template <typename T> T *getAs() { return std::get_if<T>(&Info); }
   template <typename T> const T *getAs() const { return std::get_if<T>(&Info); }
+
+  void fixEdge(
+      const std::map<const retypd::CGEdge *, const retypd::CGEdge *> &EdgeMap);
 };
 
 } // namespace notdec
