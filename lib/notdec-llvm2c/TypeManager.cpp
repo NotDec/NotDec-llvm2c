@@ -662,20 +662,21 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
     auto PointeeTy = Val->getType()->getPointeeOrArrayElementType();
     if (llvm::isa<clang::RecordType>(PointeeTy)) {
       auto *Decl = llvm::cast<clang::RecordDecl>(PointeeTy->getAsTagDecl());
+      auto *StructVal = deref(Ctx, Val);
       if (Decl->getTagKind() == clang::TTK_Struct) {
         auto ASTDecl = DeclMap.at(Decl)->getAs<ast::RecordDecl>();
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(0);
         if (Target != nullptr) {
           auto FD = llvm::cast<clang::FieldDecl>(Target->ASTDecl);
           assert(FD != nullptr && "Field not declared?");
-          auto *ME = createMemberExpr(Ctx, Val, FD);
+          auto *ME = createMemberExpr(Ctx, StructVal, FD);
           auto R = addrOf(Ctx, ME);
           Result.push_back(R);
           return addZero(R);
         }
       } else if (Decl->getTagKind() == clang::TTK_Union) {
         for (auto *F : Decl->fields()) {
-          auto *ME = createMemberExpr(Ctx, Val, F);
+          auto *ME = createMemberExpr(Ctx, StructVal, F);
           auto R = addrOf(Ctx, ME);
           Result.push_back(R);
           addZero(R);
