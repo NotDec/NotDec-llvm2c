@@ -321,9 +321,54 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
         Ctx, getTypeBuilder().visitType(*I.getPointerOperandType()),
         clang::VK_PRValue, clang::CastKind::CK_BitCast, Ptr);
   }
-  Ptr = deref(Ctx, Ptr);
-  Val = getTypeBuilder().checkCast(Val, Ptr->getType());
-  clang::Expr *assign = createBinaryOperator(Ctx, Ptr, Val, clang::BO_Assign,
+  // 1. 确定assign的类型
+  clang::Expr *Val1 = Val;
+  clang::Expr *Ptr1 = Ptr;
+  // assign最终的类型。
+  QualType Ty;
+  auto StoreSize = I.getValueOperand()->getType()->getPrimitiveSizeInBits();
+
+  // 2. 优先左边的类型
+  if (Ty.isNull()) {
+    // 获得左边指针+0可能的值，依次判断类型
+    auto Vals2 = getTypeBuilder().CT->tryAddZero(Ptr);
+    Vals2.insert(Vals2.begin(), Ptr);
+    for (auto V : Vals2) {
+      assert(V->getType()->isPointerType());
+      auto VTy = toLValueType(Ctx, V->getType());
+      auto Pte = VTy->getPointeeType();
+      // 检查类型是否符合store的大小
+      if (Pte->isArrayType()) {
+        continue;
+      }
+      if (*expectedToOptional(getTypeBuilder().CT->getTypeSize(Pte)) ==
+          I.getValueOperand()->getType()->getPrimitiveSizeInBits()) {
+        Ty = Pte;
+        Ptr1 = V;
+        break;
+      }
+    }
+  }
+
+  if (Ty.isNull()) {
+    if (!Val1->getType()->isArrayType()) {
+      if (*expectedToOptional(
+              getTypeBuilder().CT->getTypeSize(Val1->getType())) == StoreSize) {
+        Ty = Val1->getType();
+      }
+    }
+  }
+
+  // TODO: use simple int if the type is not found.
+  assert(!Ty.isNull());
+
+  Ty = toLValueType(Ctx, Ty);
+  Val1 = getTypeBuilder().checkCast(Val1, Ty);
+  Ptr1 = getTypeBuilder().checkCast(Ptr1, Ctx.getPointerType(Ty));
+  auto PtrD = deref(Ctx, Ptr1);
+  // // if there is addrof, cast may be eliminated, we need to cast again.
+  // PtrD = getTypeBuilder().checkCast(PtrD, Ty);
+  clang::Expr *assign = createBinaryOperator(Ctx, PtrD, Val1, clang::BO_Assign,
                                              Ptr->getType(), clang::VK_LValue);
   addExprOrStmt(I, *assign);
 }

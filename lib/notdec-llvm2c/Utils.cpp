@@ -3,6 +3,7 @@
 #include <type_traits>
 #include <vector>
 
+#include <llvm/ADT/APInt.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
@@ -19,6 +20,7 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
+#include <clang/Basic/SourceLocation.h>
 #include <clang/Tooling/Tooling.h>
 
 #include "notdec-llvm2c/Utils.h"
@@ -594,6 +596,13 @@ clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
     Ty = Ty->getPointeeType();
   } else if (Ty->isArrayType()) {
     Ty = Ty->castAsArrayTypeUnsafe()->getElementType();
+    // Create array subscript operator
+    auto ArrSub = new (Ctx) clang::ArraySubscriptExpr(
+        E,
+        clang::IntegerLiteral::Create(Ctx, llvm::APInt::getZero(32), Ctx.IntTy,
+                                      clang::SourceLocation()),
+        Ty, clang::VK_LValue, clang::OK_Ordinary, clang::SourceLocation());
+    return ArrSub;
   } else {
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                  << "ERROR: CFGBuilder.deref: unexpected type: ";

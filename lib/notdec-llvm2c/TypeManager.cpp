@@ -774,6 +774,20 @@ clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
   return nullptr;
 }
 
+llvm::Expected<int64_t> ClangTypeResult::getTypeSize(const clang::Type *Ty) {
+  if (llvm::isa<clang::RecordType>(Ty)) {
+    auto ASTDecl = DeclMap.at(Ty->getAsRecordDecl());
+    auto Range = ast::getRange(ASTDecl);
+    if (Range.Start < 0) {
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "Invalid start offset for a valid size: %d", Range.Start);
+    }
+    return (Range.Start + Range.Size) * 8;
+  }
+  return Ctx.getTypeSize(Ty);
+}
+
 llvm::Expected<int64_t>
 ClangTypeResult::getTypeSizeInChars(const clang::Type *Ty) {
   if (llvm::isa<clang::RecordType>(Ty)) {

@@ -81,6 +81,11 @@ public:
   }
   void createMemoryDecls();
 
+  llvm::Expected<int64_t> getTypeSize(const clang::Type *Ty);
+  llvm::Expected<int64_t> getTypeSize(QualType Ty) {
+    return getTypeSize(Ty.getTypePtr());
+  }
+
   llvm::Expected<int64_t> getTypeSizeInChars(const clang::Type *Ty);
   llvm::Expected<int64_t> getTypeSizeInChars(QualType Ty) {
     return getTypeSizeInChars(Ty.getTypePtr());
