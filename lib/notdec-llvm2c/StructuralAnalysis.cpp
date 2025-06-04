@@ -903,9 +903,11 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
     op = clang::BO_LOr;
   }
 
-  clang::Expr *binop =
-      createBinaryOperator(Ctx, lhs, rhs, op.getValue(),
-                           TB.getType(&Result, nullptr, -1), clang::VK_PRValue);
+  auto ExpectedTy = TB.getType(&Result, nullptr, -1);
+  // for normal arithmetic addition, use lhs's type.
+  clang::Expr *binop = createBinaryOperator(Ctx, lhs, rhs, op.getValue(),
+                                            lhs->getType(), clang::VK_PRValue);
+  binop = TB.checkCast(binop, ExpectedTy);
   return binop;
 }
 
