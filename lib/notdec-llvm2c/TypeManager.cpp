@@ -694,7 +694,7 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
           deref(Ctx, Val), Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
           clang::SourceLocation());
-      auto R = addrOf(Ctx, AS);
+      auto R = addrOf(Ctx, AS, true);
       Result.push_back(R);
       return addZero(R);
     }

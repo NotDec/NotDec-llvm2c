@@ -280,7 +280,7 @@ clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
 clang::Expr *getDerefInner(clang::Expr *E);
 clang::Expr *getAddrofInner(clang::Expr *E);
 
-clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E);
+clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E, bool NoElimMember = false);
 clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E);
 
 // dump LLVM object to string

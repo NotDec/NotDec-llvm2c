@@ -39,17 +39,7 @@ public:
   TranslationUnitDecl *getTypeDefinitions() { return TypeDefinitions; }
   TranslationUnitDecl *getFunctionDefinitions() { return FunctionDefinitions; }
 
-  void addTypeDeclaration(clang::Decl *D) { TypeDeclarations->addDecl(D); }
-  void addFunctionDeclaration(clang::Decl *D) {
-    FunctionDeclarations->addDecl(D);
-  }
-  void addGlobalDefinition(clang::Decl *D) { GlobalDefinitions->addDecl(D); }
-  void addTypeDefinition(clang::Decl *D) { TypeDefinitions->addDecl(D); }
-  void addFunctionDefinition(clang::Decl *D) {
-    FunctionDefinitions->addDecl(D);
-  }
-
-  clang::FunctionDecl* getFuncDeclaration(const char* Name);
+  clang::FunctionDecl *getFuncDeclaration(const char *Name);
 
   void print(DeclPrinter &Printer);
 };

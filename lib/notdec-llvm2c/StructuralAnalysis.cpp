@@ -342,7 +342,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
         continue;
       }
       if (*expectedToOptional(getTypeBuilder().CT->getTypeSize(Pte)) ==
-          I.getValueOperand()->getType()->getPrimitiveSizeInBits()) {
+          StoreSize) {
         Ty = Pte;
         Ptr1 = V;
         break;
@@ -381,8 +381,39 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
         Ctx, getTypeBuilder().visitType(*I.getPointerOperandType()),
         clang::VK_PRValue, clang::CastKind::CK_BitCast, Ptr);
   }
-  Ptr = deref(Ctx, Ptr);
-  addExprOrStmt(I, *Ptr);
+
+  clang::Expr *Ptr1 = Ptr;
+  // load type
+  QualType Ty;
+  auto Size = I.getPointerOperandType()
+                  ->getPointerElementType()
+                  ->getPrimitiveSizeInBits();
+
+  if (Ty.isNull()) {
+    auto Vals2 = getTypeBuilder().CT->tryAddZero(Ptr);
+    Vals2.insert(Vals2.begin(), Ptr);
+    for (auto V : Vals2) {
+      assert(V->getType()->isPointerType());
+      auto VTy = V->getType();
+      // VTy = toLValueType(Ctx, VTy);
+      auto Pte = VTy->getPointeeType();
+      // 检查类型是否符合store的大小
+      if (Pte->isArrayType()) {
+        continue;
+      }
+      if (*expectedToOptional(getTypeBuilder().CT->getTypeSize(Pte)) == Size) {
+        Ty = Pte;
+        Ptr1 = V;
+        break;
+      }
+    }
+  }
+
+  // TODO: use simple int if the type is not found.
+  assert(!Ty.isNull());
+
+  Ptr1 = deref(Ctx, Ptr1);
+  addExprOrStmt(I, *Ptr1);
 }
 
 clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,

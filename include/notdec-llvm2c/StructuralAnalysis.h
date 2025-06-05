@@ -127,12 +127,13 @@ class TypeBuilder {
   // Map from llvm struct type to clang RecordDecl type.
   std::map<llvm::Type *, clang::Decl *> typeMap;
   llvm::StringSet<> &Names;
+  llvm::DataLayout DL;
 
 public:
   std::shared_ptr<ClangTypeResult> CT;
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
-              std::shared_ptr<ClangTypeResult> CT)
-      : Ctx(Ctx), VN(&VN), Names(Names), CT(CT) {}
+              std::shared_ptr<ClangTypeResult> CT, const llvm::DataLayout & DL)
+      : Ctx(Ctx), VN(&VN), Names(Names), CT(CT), DL(DL) {}
   clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
   clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
     return toLValueType(Ctx, getType(Val, User, OpInd));
@@ -360,7 +361,7 @@ public:
             std::shared_ptr<ClangTypeResult> CT)
       : M(mod), AM(AM), CT(CT), opts(opts),
         Names(std::make_unique<llvm::StringSet<>>()),
-        TB(getASTContext(), VN, *Names, CT), EB(*this, getASTContext(), TB) {
+        TB(getASTContext(), VN, *Names, CT, M.getDataLayout()), EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
     // and int width is correct.
   }

@@ -547,7 +547,7 @@ clang::Expr *getAddrofInner(clang::Expr *E) {
   return nullptr;
 }
 
-clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
+clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E, bool NoElimMember) {
   // eliminate addrOf + deref
   clang::Expr *ENoCast = getNoCast(E);
   if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
@@ -556,14 +556,17 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E) {
     return llvm::cast<clang::UnaryOperator>(ENoCast)->getSubExpr();
   }
   // eliminate addrOf + array subscript 0.
-  if (auto ArraySub = llvm::dyn_cast<clang::ArraySubscriptExpr>(E)) {
-    if (auto Index =
-            llvm::dyn_cast<clang::IntegerLiteral>(ArraySub->getIdx())) {
-      if (Index->getValue() == 0) {
-        return llvm::cast<clang::ArraySubscriptExpr>(E)->getBase();
+  if (!NoElimMember) {
+    if (auto ArraySub = llvm::dyn_cast<clang::ArraySubscriptExpr>(E)) {
+      if (auto Index =
+              llvm::dyn_cast<clang::IntegerLiteral>(ArraySub->getIdx())) {
+        if (Index->getValue() == 0) {
+          return llvm::cast<clang::ArraySubscriptExpr>(E)->getBase();
+        }
       }
     }
   }
+
   // eliminate arrow operator is incorrect.
   // // eliminate arrow operator.
   // if (auto MemberExpr = llvm::dyn_cast<clang::MemberExpr>(E)) {
