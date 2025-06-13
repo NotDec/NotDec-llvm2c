@@ -104,7 +104,10 @@ public:
   std::shared_ptr<BytesManager> getBytesManager() { return Bytes; }
 
   SimpleRange getRange() const {
-    assert(!Fields.empty() && "getRange: Empty fields?");
+    if (Fields.empty()) {
+      return SimpleRange{};
+    }
+    // assert(!Fields.empty() && "getRange: Empty fields?");
     int64_t Max = std::numeric_limits<decltype(Max)>::min();
     int64_t Min = std::numeric_limits<decltype(Min)>::max();
     for (auto &Ent : Fields) {

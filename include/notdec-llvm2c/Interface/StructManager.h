@@ -30,8 +30,8 @@ using IndexTy = OffsetRange;
 using OffsetTy = decltype(IndexTy::offset);
 
 struct SimpleRange {
-  OffsetTy Start;
-  OffsetTy Size;
+  OffsetTy Start = 0;
+  OffsetTy Size = 0;
 
   bool containsOffset(OffsetTy Offset) const {
     if (Start == Offset) {
@@ -89,7 +89,7 @@ struct TypeInfo {
   bool isStruct() const { return std::holds_alternative<StructInfo>(Info); }
   bool isUnion() const { return std::holds_alternative<UnionInfo>(Info); }
   bool isArray() const { return std::holds_alternative<ArrayInfo>(Info); }
-  const char* getTypeStr() const;
+  const char *getTypeStr() const;
 
   template <typename T> T *getAs() { return std::get_if<T>(&Info); }
   template <typename T> const T *getAs() const { return std::get_if<T>(&Info); }
