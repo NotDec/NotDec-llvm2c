@@ -127,12 +127,37 @@ class TypeBuilder {
   // Map from llvm struct type to clang RecordDecl type.
   std::map<llvm::Type *, clang::Decl *> typeMap;
   llvm::StringSet<> &Names;
-  llvm::DataLayout DL;
 
 public:
   std::shared_ptr<ClangTypeResult> CT;
+  llvm::DataLayout DL;
+  std::vector<clang::Expr *> tryAddZero(clang::Expr *Val) {
+    if (CT) {
+      return CT->tryAddZero(Val);
+    }
+    return {};
+  }
+  llvm::Expected<int64_t> getTypeSize(const clang::Type *Ty) {
+    if (CT) {
+      return CT->getTypeSize(Ty);
+    }
+    return Ctx.getTypeSize(Ty);
+  }
+  llvm::Expected<int64_t> getTypeSize(QualType Ty) {
+    return getTypeSize(Ty.getTypePtr());
+  }
+  llvm::Expected<int64_t> getTypeSizeInChars(const clang::Type *Ty) {
+    if (CT) {
+      return CT->getTypeSizeInChars(Ty);
+    }
+    return Ctx.getTypeSizeInChars(Ty).getQuantity();
+  }
+  llvm::Expected<int64_t> getTypeSizeInChars(QualType Ty) {
+    return getTypeSizeInChars(Ty.getTypePtr());
+  }
+
   TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
-              std::shared_ptr<ClangTypeResult> CT, const llvm::DataLayout & DL)
+              std::shared_ptr<ClangTypeResult> CT, const llvm::DataLayout &DL)
       : Ctx(Ctx), VN(&VN), Names(Names), CT(CT), DL(DL) {}
   clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
   clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
@@ -361,7 +386,8 @@ public:
             std::shared_ptr<ClangTypeResult> CT)
       : M(mod), AM(AM), CT(CT), opts(opts),
         Names(std::make_unique<llvm::StringSet<>>()),
-        TB(getASTContext(), VN, *Names, CT, M.getDataLayout()), EB(*this, getASTContext(), TB) {
+        TB(getASTContext(), VN, *Names, CT, M.getDataLayout()),
+        EB(*this, getASTContext(), TB) {
     // TODO: set target arch by cmdline or input arch, so that TargetInfo is set
     // and int width is correct.
   }

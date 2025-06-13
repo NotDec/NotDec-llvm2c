@@ -553,8 +553,8 @@ void ClangTypeResult::createMemoryDecls() {
 }
 
 bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
-                                       clang::QualType From,
-                                       clang::QualType To) {
+                                       clang::QualType FromQ,
+                                       clang::QualType ToQ) {
   // char[0] vs char (*)[32]
   // if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
   //   return isTypeCompatible(From->getPointeeType(), To);
@@ -563,14 +563,17 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   //   return isTypeCompatible(From, To->getPointeeType());
   // }
 
-  if (From->isArrayType()) {
-    From = Ctx.getDecayedType(From);
+  if (FromQ->isArrayType()) {
+    FromQ = Ctx.getDecayedType(FromQ);
   }
-  if (To->isArrayType()) {
-    To = Ctx.getDecayedType(To);
+  if (ToQ->isArrayType()) {
+    ToQ = Ctx.getDecayedType(ToQ);
   }
 
-  if (From == To || From.getCanonicalType() == To.getCanonicalType()) {
+  const clang::Type* From = FromQ.getCanonicalType().getTypePtr();
+  const clang::Type* To =  ToQ.getCanonicalType().getTypePtr();
+
+  if (From == To) {
     return true;
   }
   if (From->isReferenceType() || To->isReferenceType()) {

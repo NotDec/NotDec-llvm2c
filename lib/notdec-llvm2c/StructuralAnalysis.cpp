@@ -331,7 +331,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   // 2. 优先左边的类型
   if (Ty.isNull()) {
     // 获得左边指针+0可能的值，依次判断类型
-    auto Vals2 = getTypeBuilder().CT->tryAddZero(Ptr);
+    auto Vals2 = getTypeBuilder().tryAddZero(Ptr);
     Vals2.insert(Vals2.begin(), Ptr);
     for (auto V : Vals2) {
       assert(V->getType()->isPointerType());
@@ -341,7 +341,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
       if (Pte->isArrayType()) {
         continue;
       }
-      if (*expectedToOptional(getTypeBuilder().CT->getTypeSize(Pte)) ==
+      if (*expectedToOptional(getTypeBuilder().getTypeSize(Pte)) ==
           StoreSize) {
         Ty = Pte;
         Ptr1 = V;
@@ -353,14 +353,17 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   if (Ty.isNull()) {
     if (!Val1->getType()->isArrayType()) {
       if (*expectedToOptional(
-              getTypeBuilder().CT->getTypeSize(Val1->getType())) == StoreSize) {
+              getTypeBuilder().getTypeSize(Val1->getType())) == StoreSize) {
         Ty = Val1->getType();
       }
     }
   }
 
-  // TODO: use simple int if the type is not found.
-  assert(!Ty.isNull());
+  // use simple int if the type is not found.
+  if (Ty.isNull()) {
+    llvm::errs() << "Warning: Cannot find type for store inst: " << I << "\n";
+    Ty = Ctx.getIntTypeForBitwidth(StoreSize, true);
+  }
 
   Ty = toLValueType(Ctx, Ty);
   Val1 = getTypeBuilder().checkCast(Val1, Ty);
@@ -390,7 +393,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
                   ->getPrimitiveSizeInBits();
 
   if (Ty.isNull()) {
-    auto Vals2 = getTypeBuilder().CT->tryAddZero(Ptr);
+    auto Vals2 = getTypeBuilder().tryAddZero(Ptr);
     Vals2.insert(Vals2.begin(), Ptr);
     for (auto V : Vals2) {
       assert(V->getType()->isPointerType());
@@ -401,7 +404,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
       if (Pte->isArrayType()) {
         continue;
       }
-      if (*expectedToOptional(getTypeBuilder().CT->getTypeSize(Pte)) == Size) {
+      if (*expectedToOptional(getTypeBuilder().getTypeSize(Pte)) == Size) {
         Ty = Pte;
         Ptr1 = V;
         break;
@@ -409,8 +412,10 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
     }
   }
 
-  // TODO: use simple int if the type is not found.
-  assert(!Ty.isNull());
+  if (Ty.isNull()) {
+    llvm::errs() << "Warning: Cannot find type for load inst: " << I << "\n";
+    Ty = Ctx.getIntTypeForBitwidth(Size, true);
+  }
 
   Ptr1 = deref(Ctx, Ptr1);
   addExprOrStmt(I, *Ptr1);
