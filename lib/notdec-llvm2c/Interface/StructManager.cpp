@@ -13,6 +13,20 @@
 
 namespace notdec {
 
+const char *TypeInfo::getTypeStr() const {
+  if (isSimple()) {
+    return "simple";
+  } else if (isStruct()) {
+    return "struct";
+  } else if (isUnion()) {
+    return "union";
+  } else if (isArray()) {
+    return "array";
+  } else {
+    assert(false);
+  }
+}
+
 void TypeInfo::fixEdge(
     const std::map<const retypd::CGEdge *, const retypd::CGEdge *> &EdgeMap) {
   if (auto UI = getAs<UnionInfo>()) {
