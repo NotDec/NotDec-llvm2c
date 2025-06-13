@@ -1,15 +1,14 @@
 #include <cassert>
-#include <clang/Frontend/ASTUnit.h>
 #include <cstddef>
-#include <llvm/ADT/ArrayRef.h>
-#include <llvm/IR/InstrTypes.h>
-#include <llvm/IR/Intrinsics.h>
-#include <llvm/IR/Use.h>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/Use.h>
 #include "llvm/ADT/PostOrderIterator.h"
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
@@ -31,6 +30,7 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <clang/Frontend/ASTUnit.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Comment.h>
 #include <clang/AST/Decl.h>
@@ -326,7 +326,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   clang::Expr *Ptr1 = Ptr;
   // assign最终的类型。
   QualType Ty;
-  auto StoreSize = I.getValueOperand()->getType()->getPrimitiveSizeInBits();
+  auto StoreSize = getLLVMTypeSize(I.getValueOperand()->getType(), getTypeBuilder().getPointerSizeInBits());
 
   // 2. 优先左边的类型
   if (Ty.isNull()) {
@@ -341,8 +341,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
       if (Pte->isArrayType()) {
         continue;
       }
-      if (*expectedToOptional(getTypeBuilder().getTypeSize(Pte)) ==
-          StoreSize) {
+      if (*expectedToOptional(getTypeBuilder().getTypeSize(Pte)) == StoreSize) {
         Ty = Pte;
         Ptr1 = V;
         break;
@@ -352,8 +351,8 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
 
   if (Ty.isNull()) {
     if (!Val1->getType()->isArrayType()) {
-      if (*expectedToOptional(
-              getTypeBuilder().getTypeSize(Val1->getType())) == StoreSize) {
+      if (*expectedToOptional(getTypeBuilder().getTypeSize(Val1->getType())) ==
+          StoreSize) {
         Ty = Val1->getType();
       }
     }
@@ -388,9 +387,8 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   clang::Expr *Ptr1 = Ptr;
   // load type
   QualType Ty;
-  auto Size = I.getPointerOperandType()
-                  ->getPointerElementType()
-                  ->getPrimitiveSizeInBits();
+  auto Size =
+      getLLVMTypeSize(I.getPointerOperandType()->getPointerElementType(), getTypeBuilder().getPointerSizeInBits());
 
   if (Ty.isNull()) {
     auto Vals2 = getTypeBuilder().tryAddZero(Ptr);

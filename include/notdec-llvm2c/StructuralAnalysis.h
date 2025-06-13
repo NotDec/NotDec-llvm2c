@@ -131,6 +131,11 @@ class TypeBuilder {
 public:
   std::shared_ptr<ClangTypeResult> CT;
   llvm::DataLayout DL;
+  
+  auto getPointerSizeInBits() const {
+    return DL.getPointerSizeInBits();
+  }
+
   std::vector<clang::Expr *> tryAddZero(clang::Expr *Val) {
     if (CT) {
       return CT->tryAddZero(Val);

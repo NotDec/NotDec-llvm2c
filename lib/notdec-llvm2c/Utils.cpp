@@ -29,6 +29,16 @@
 
 namespace notdec::llvm2c {
 
+unsigned getLLVMTypeSize(llvm::Type *Ty, unsigned PointerSizeInBits) {
+  if (Ty->isPointerTy()) {
+    assert(PointerSizeInBits != 0);
+    return PointerSizeInBits;
+  }
+  auto Size = Ty->getPrimitiveSizeInBits();
+  assert(Size != 0);
+  return Size;
+}
+
 std::string join(std::string path, std::string elem) {
   return path.back() == '/' ? path + elem : path + "/" + elem;
 }
