@@ -5,12 +5,9 @@
 #include <string>
 #include <utility>
 
-#include <llvm/ADT/ArrayRef.h>
-#include <llvm/IR/InstrTypes.h>
-#include <llvm/IR/Intrinsics.h>
-#include <llvm/IR/Use.h>
 #include "llvm/ADT/PostOrderIterator.h"
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/Twine.h>
@@ -22,15 +19,17 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalObject.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/IR/Type.h>
+#include <llvm/IR/Use.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <clang/Frontend/ASTUnit.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Comment.h>
 #include <clang/AST/Decl.h>
@@ -49,6 +48,7 @@
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
 #include <clang/Basic/TokenKinds.h>
+#include <clang/Frontend/ASTUnit.h>
 #include <clang/Tooling/Transformer/RewriteRule.h>
 #include <variant>
 #include <vector>
@@ -326,7 +326,8 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   clang::Expr *Ptr1 = Ptr;
   // assign最终的类型。
   QualType Ty;
-  auto StoreSize = getLLVMTypeSize(I.getValueOperand()->getType(), getTypeBuilder().getPointerSizeInBits());
+  auto StoreSize = getLLVMTypeSize(I.getValueOperand()->getType(),
+                                   getTypeBuilder().getPointerSizeInBits());
 
   // 2. 优先左边的类型
   if (Ty.isNull()) {
@@ -341,7 +342,8 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
       if (Pte->isArrayType()) {
         continue;
       }
-      if (*expectedToOptional(getTypeBuilder().getTypeSize(Pte)) == StoreSize) {
+      auto TS = expectedToOptional(getTypeBuilder().getTypeSize(Pte));
+      if (TS && *TS == StoreSize) {
         Ty = Pte;
         Ptr1 = V;
         break;
@@ -351,8 +353,9 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
 
   if (Ty.isNull()) {
     if (!Val1->getType()->isArrayType()) {
-      if (*expectedToOptional(getTypeBuilder().getTypeSize(Val1->getType())) ==
-          StoreSize) {
+      auto TS =
+          expectedToOptional(getTypeBuilder().getTypeSize(Val1->getType()));
+      if (TS && *TS == StoreSize) {
         Ty = Val1->getType();
       }
     }
@@ -388,7 +391,8 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   // load type
   QualType Ty;
   auto Size =
-      getLLVMTypeSize(I.getPointerOperandType()->getPointerElementType(), getTypeBuilder().getPointerSizeInBits());
+      getLLVMTypeSize(I.getPointerOperandType()->getPointerElementType(),
+                      getTypeBuilder().getPointerSizeInBits());
 
   if (Ty.isNull()) {
     auto Vals2 = getTypeBuilder().tryAddZero(Ptr);
@@ -402,7 +406,8 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
       if (Pte->isArrayType()) {
         continue;
       }
-      if (*expectedToOptional(getTypeBuilder().getTypeSize(Pte)) == Size) {
+      auto TS = expectedToOptional(getTypeBuilder().getTypeSize(Pte));
+      if (TS && *TS == Size) {
         Ty = Pte;
         Ptr1 = V;
         break;
