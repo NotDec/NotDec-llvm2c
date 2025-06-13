@@ -44,11 +44,11 @@ protected:
   CFGDomTree Dom;
   std::vector<CFGBlock *> unresolvedSwitches;
   std::queue<std::pair<CFGBlock *, std::set<CFGBlock *>>> unresolvedCycles;
-  bool ReduceAcyclic(CFGBlock *Block);
+  bool ReduceAcyclic(CFGBlock *Block, bool UseTail = true);
   bool isCyclic(CFGBlock *Block);
   bool ReduceCyclic(CFGBlock *Block);
   bool reduceSequence(CFGBlock *Block);
-  bool reduceIfRegion(CFGBlock *Block);
+  bool reduceIfRegion(CFGBlock *Block, bool UseTail = true);
   bool reduceSwitchRegion(CFGBlock *Block);
   bool ProcessUnresolvedRegions();
   bool refineLoop(CFGBlock *head, std::set<CFGBlock *> &loopNodes);

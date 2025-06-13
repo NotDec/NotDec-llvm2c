@@ -71,10 +71,11 @@ void Phoenix::execute() {
       // int round = 0;
       do {
         Changed = false;
-        Changed |= ReduceAcyclic(Block);
+        Changed |= ReduceAcyclic(Block, false);
         if (!Changed && isCyclic(Block)) {
           Changed |= ReduceCyclic(Block);
         }
+        Changed |= ReduceAcyclic(Block, true);
         // round += 1;
       } while (Changed);
     }
@@ -1156,15 +1157,19 @@ bool Phoenix::reduceSwitchRegion(CFGBlock *n) {
   return false;
 }
 
-bool Phoenix::reduceIfRegion(CFGBlock *Block) {
+bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
   auto tmp = Block->getTwoSuccs();
   CFGBlock *th = tmp.first;
   CFGBlock *el = tmp.second;
   assert(th != nullptr && el != nullptr && el != th);
   CFGBlock *elS = linearSuccessor(el);
   CFGBlock *thS = linearSuccessor(th);
-  bool elseTail = (el->succ_size() == 0);
-  bool thenTail = (th->succ_size() == 0);
+  bool elseTail = false;
+  bool thenTail = false;
+  if (UseTail) {
+    elseTail = (el->succ_size() == 0);
+    thenTail = (th->succ_size() == 0);
+  }
 
   // the successor of else is then block.
   if ((elS == th || elseTail) && onlyPred(el, Block)) {
@@ -1196,7 +1201,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
     Block->appendStmt(IfStmt);
     // maintain the edge
     removeEdge(Block, th);
-    if (!thenTail) {
+    if (thS == el) {
       removeEdge(th, thS);
     }
     deferredRemove(th);
@@ -1230,7 +1235,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block) {
   return false;
 }
 
-bool Phoenix::ReduceAcyclic(CFGBlock *Block) {
+bool Phoenix::ReduceAcyclic(CFGBlock *Block, bool UseTail) {
   switch (Block->succ_size()) {
   case 0:
     return false;
@@ -1241,7 +1246,7 @@ bool Phoenix::ReduceAcyclic(CFGBlock *Block) {
     break;
   case 2:
     // reduce if-else
-    return reduceIfRegion(Block);
+    return reduceIfRegion(Block, UseTail);
     break;
   default:
     return reduceSwitchRegion(Block);
