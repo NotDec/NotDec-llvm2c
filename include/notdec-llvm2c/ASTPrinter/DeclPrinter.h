@@ -38,7 +38,7 @@ public:
         MyPolicy(P2), CT(CT) {}
 
   void printDeclComments(Decl *D);
-  void VisitDeclContext(DeclContext *DC, bool Indent = true);
+  void VisitDeclContext(DeclContext *DC, bool Indent = true, std::function<bool(Decl*)> Filter = nullptr);
 
   void VisitTranslationUnitDecl(TranslationUnitDecl *D);
   void VisitTypedefDecl(TypedefDecl *D);

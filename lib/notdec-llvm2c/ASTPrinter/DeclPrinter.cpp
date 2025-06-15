@@ -121,7 +121,7 @@ void DeclPrinter::printDeclType(QualType T, StringRef DeclName, bool Pack) {
       .print(ty.Ty, ty.Quals, Out, PH);
 }
 
-void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
+void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent, std::function<bool(Decl*)> Filter) {
 
   if (Indent)
     Indentation += Policy.Indentation;
@@ -164,6 +164,11 @@ void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
     // so we can merge it with the subsequent declaration(s) using it.
     if (isa<TagDecl>(*D) && !cast<TagDecl>(*D)->isFreeStanding()) {
       Decls.push_back(*D);
+      continue;
+    }
+
+    // skip the function by filter
+    if (Filter && !Filter(*D)) {
       continue;
     }
 

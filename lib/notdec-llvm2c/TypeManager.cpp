@@ -261,6 +261,9 @@ void ClangTypeResult::defineDecls() {
       assert(false && "Unknown Decl type");
     }
 
+    if (isa<TagDecl>(ASTDecl)) {
+      cast<TagDecl>(ASTDecl)->setFreeStanding(true);
+    }
     // replaced with definition.
     Decl->setASTDecl(ASTDecl);
     DeclMap[ASTDecl] = Decl;
@@ -308,6 +311,9 @@ void ClangTypeResult::declareDecls() {
       assert(false && "Unknown Decl type");
     }
 
+    if (isa<TagDecl>(ASTDecl)) {
+      cast<TagDecl>(ASTDecl)->setFreeStanding(true);
+    }
     // declaration in this field will be replaced with definition later.
     Decl->setASTDecl(ASTDecl);
     TUD->addDecl(ASTDecl);
@@ -570,8 +576,8 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
     ToQ = Ctx.getDecayedType(ToQ);
   }
 
-  const clang::Type* From = FromQ.getCanonicalType().getTypePtr();
-  const clang::Type* To =  ToQ.getCanonicalType().getTypePtr();
+  const clang::Type *From = FromQ.getCanonicalType().getTypePtr();
+  const clang::Type *To = ToQ.getCanonicalType().getTypePtr();
 
   if (From == To) {
     return true;

@@ -40,6 +40,7 @@ public:
   TranslationUnitDecl *getFunctionDefinitions() { return FunctionDefinitions; }
 
   clang::FunctionDecl *getFuncDeclaration(const char *Name);
+  clang::NamedDecl *getNamedDecl(const char *Name);
 
   void print(DeclPrinter &Printer);
 };
