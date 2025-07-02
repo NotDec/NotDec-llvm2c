@@ -111,6 +111,7 @@ void ASTManager::print(DeclPrinter &Printer) {
 
   Collector.collect(GlobalDefinitions);
   Collector.collect(FunctionDefinitions);
+  Collector.collect(FunctionDeclarations);
 
   // // 处理类型内引用其他类型的情况，递归访问类型
   // auto Size = Collector.size();
