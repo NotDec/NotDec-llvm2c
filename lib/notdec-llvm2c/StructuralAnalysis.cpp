@@ -182,7 +182,7 @@ void CFGBuilder::visitInstruction(llvm::Instruction &I) {
 
 /// Check if the block is the entry block of the function, or a must via block
 /// that follows the entry.
-bool isMustViaBlock(llvm::BasicBlock &bb) {
+bool isEntryLikeBlock(llvm::BasicBlock &bb) {
   llvm::Function *F = bb.getParent();
   llvm::BasicBlock *entry = &F->getEntryBlock();
   // from entry, continue if unique successor and predecessor.
@@ -197,14 +197,23 @@ bool isMustViaBlock(llvm::BasicBlock &bb) {
 
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   // check if the instruction is in the entry block.
-  if (isMustViaBlock(*I.getParent())) {
+  if (isEntryLikeBlock(*I.getParent())) {
+
+    auto AllocaSize = I.getModule()
+                          ->getDataLayout()
+                          .getTypeAllocSize(I.getAllocatedType())
+                          .getFixedSize();
+    if (I.isArrayAllocation()) {
+      AllocaSize = 0;
+    }
+
     // create a local variable
     auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(I));
     // TODO: ensure that type size is the same to ensure semantic.
     clang::VarDecl *VD = clang::VarDecl::Create(
         Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
         clang::SourceLocation(), II,
-        FCtx.getTypeBuilder().getTypeL(&I, nullptr, -1)->getPointeeType(),
+        FCtx.getTypeBuilder().getType(&I, nullptr, -1)->getPointeeType(),
         nullptr, clang::SC_None);
 
     // Create a decl statement.

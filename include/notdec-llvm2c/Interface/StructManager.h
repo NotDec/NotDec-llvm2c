@@ -3,6 +3,7 @@
 #ifndef _NOTDEC_STRUCTMANAGER_H_
 #define _NOTDEC_STRUCTMANAGER_H_
 
+#include <algorithm>
 #include <clang/AST/Decl.h>
 #include <cstddef>
 #include <memory>
@@ -40,6 +41,11 @@ struct SimpleRange {
     return Start <= Offset && Offset < Start + Size;
   }
   OffsetTy end() const { return Start + Size; }
+  SimpleRange intersect(const SimpleRange &R) const {
+    auto Start1 = std::max(this->Start, R.Start);
+    auto End1 = std::min(R.end(), end());
+    return {.Start = Start1, .Size = std::max(0l, End1 - Start1)};
+  }
 };
 
 struct FieldEntry {
