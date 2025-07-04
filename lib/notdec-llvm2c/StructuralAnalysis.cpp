@@ -1,11 +1,14 @@
 #include <cassert>
 #include <cstddef>
+#include <llvm/Transforms/Scalar/GVN.h>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>
@@ -198,15 +201,6 @@ bool isEntryLikeBlock(llvm::BasicBlock &bb) {
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   // check if the instruction is in the entry block.
   if (isEntryLikeBlock(*I.getParent())) {
-
-    auto AllocaSize = I.getModule()
-                          ->getDataLayout()
-                          .getTypeAllocSize(I.getAllocatedType())
-                          .getFixedSize();
-    if (I.isArrayAllocation()) {
-      AllocaSize = 0;
-    }
-
     // create a local variable
     auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(I));
     // TODO: ensure that type size is the same to ensure semantic.
@@ -220,7 +214,7 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
     clang::DeclStmt *DS = new (Ctx)
         clang::DeclStmt(clang::DeclGroupRef(VD), clang::SourceLocation(),
                         clang::SourceLocation());
-    Blk->appendStmt(DS);
+    VarDecls.push_back(DS);
     FCtx.getFunctionDecl()->addDecl(VD);
     // When alloca is referenced, it refers to the address of the DeclRefExpr
     auto addr = addrOf(Ctx, makeDeclRefExpr(VD));
@@ -772,8 +766,50 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
          "SAFuncContext.addExprOrStmt: Instruction has uses but is not Expr?");
   auto &Expr = llvm::cast<clang::Expr>(Stmt);
   auto &Inst = *llvm::cast<llvm::Instruction>(&V);
-  if (onlyUsedInBlock(Inst) || isAddrOf(&Expr)) {
-    // Has one use and is in the same block
+
+  bool canCache = false;
+
+  using namespace llvm;
+  if (auto LI = dyn_cast<LoadInst>(&Inst)) {
+    auto &MSSAR = FAM.getResult<llvm::MemorySSAAnalysis>(Func);
+    auto &MSSA = MSSAR.getMSSA();
+    auto Walker = MSSA.getWalker();
+    MemoryUse *LoadMU = cast<MemoryUse>(MSSA.getMemoryAccess(LI));
+  
+    bool allUserGood = true;
+    for (User *U : LI->users()) {
+      if (Instruction *UsrI = dyn_cast<Instruction>(U)) {
+        // 只关心再次访问内存的指令（比如另一个 load/store/atomicrmw/...）
+        MemoryAccess *UserMA = MSSA.getMemoryAccess(UsrI);
+        if (!UserMA)
+          continue;
+
+        // 确定 UserMA 也是一个 MemoryUse（读）或 MemoryDef（写）
+        // 对于“读后读”一致性检查，我们比较它们背后的“最近写入”是不是同一个。
+        if (auto *UserMU = dyn_cast<MemoryUse>(UserMA)) {
+          MemoryAccess *DefAtLoad = Walker->getClobberingMemoryAccess(LoadMU);
+          MemoryAccess *DefAtUser = Walker->getClobberingMemoryAccess(UserMU);
+
+          if (DefAtLoad == DefAtUser) {
+            // ——在 LI 和 UsrI 之间，没有其他 Store 改写这块内存——
+            // LI 加载的值和 UsrI 处读取的值是相同的
+          } else {
+            // 之间被某个 Store（或 MemoryDef）修改过
+            allUserGood = false;
+          }
+        }
+      }
+    }
+
+    if (allUserGood) {
+      canCache = true;
+    }
+
+  } else if (onlyUsedInCurrentBlock(Inst) || isAddrOf(&Expr)) {
+    canCache = true;
+  }
+
+  if (canCache) {
     ExprMap[&V] = &Expr; // wait to be folded
   } else {
     // Create a local variable for it, in order to be faithful to the IR.
@@ -793,7 +829,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
     clang::DeclStmt *DS = new (getASTContext())
         clang::DeclStmt(clang::DeclGroupRef(Decl), clang::SourceLocation(),
                         clang::SourceLocation());
-    getEntryBlock()->appendStmt(DS);
+    VarDecls.push_back(DS);
     clang::Expr *assign = createBinaryOperator(
         getASTContext(), makeDeclRefExpr(Decl), TB.checkCast(&Expr, Ty),
         clang::BO_Assign, Decl->getType(), clang::VK_LValue);
@@ -1146,7 +1182,8 @@ void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char *DebugDir) {
 }
 
 /// Decompile the module to c and print to a file.
-void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
+void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
+                     llvm::raw_fd_ostream &OS, Options opts,
                      std::unique_ptr<HTypeResult> HT) {
 
   auto DebugDir = std::getenv("NOTDEC_DEBUG_DIR");
@@ -1178,7 +1215,7 @@ void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &OS, Options opts,
     CT->declareDecls();
   }
 
-  SAContext Ctx(const_cast<llvm::Module &>(M), AM, opts, CT);
+  SAContext Ctx(const_cast<llvm::Module &>(M), MAM, AM, opts, CT);
   Ctx.createDecls();
 
   if (CT != nullptr) {
@@ -1224,7 +1261,8 @@ bool hasOneUseIgnoreCast(llvm::Value &Val) {
   return false;
 }
 
-bool onlyUsedInBlock(llvm::Instruction &inst) {
+// Has one use and is in the same block
+bool onlyUsedInCurrentBlock(llvm::Instruction &inst) {
   llvm::BasicBlock *BB = inst.getParent();
   if (hasOneUseIgnoreCast(inst)) {
     for (llvm::User *U : inst.users()) {
@@ -1466,7 +1504,7 @@ void SAFuncContext::run() {
   assert(PrevFD != nullptr && "SAFuncContext::run: FunctionDecl is null, not "
                               "created by `SAContext::createDecls`?");
   // 1. build the CFGBlocks
-  CFGBuilder Builder(*this);
+  CFGBuilder Builder(*this, VarDecls);
   auto *TUD = Ctx.getASTManager().getFunctionDefinitions();
 
   // create function decl again, and set the previous declaration.
@@ -1557,7 +1595,7 @@ void SAFuncContext::run() {
   // After structural analysis, if things goes well, the CFG should have only
   // one linear block. But we still pick up other blocks if there are any.
   std::set<CFGBlock *> visited;
-  std::vector<clang::Stmt *> Stmts;
+  std::vector<clang::Stmt *> Stmts = std::move(VarDecls);
 
   assert(&Cfg->front() == &Cfg->getEntry());
   for (auto BB : *Cfg) {
@@ -2045,8 +2083,9 @@ clang::LabelDecl *IStructuralAnalysis::getBlockLabel(CFGBlock *Blk,
   }
 }
 
-SAFuncContext::SAFuncContext(SAContext &ctx, llvm::Function &func)
-    : Ctx(ctx), Func(func), TB(ctx.getTypeBuilder()) {
+SAFuncContext::SAFuncContext(SAContext &Ctx, llvm::Function &Func,
+                             llvm::FunctionAnalysisManager &FAM)
+    : Ctx(Ctx), FAM(FAM), Func(Func), TB(Ctx.getTypeBuilder()) {
   Cfg = std::make_unique<CFG>();
   Names = std::make_unique<llvm::StringSet<>>();
 }

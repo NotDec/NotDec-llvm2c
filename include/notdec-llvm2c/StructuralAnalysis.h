@@ -2,6 +2,7 @@
 #define _NOTDEC_BACKEND_STRUCTURAL_H_
 
 #include <cassert>
+#include <llvm/IR/PassManager.h>
 #include <map>
 #include <memory>
 #include <utility>
@@ -58,7 +59,7 @@ inline bool isAddrOf(clang::Expr *E) {
 
 // utility functions
 clang::Stmt *getStmt(CFGElement e);
-bool onlyUsedInBlock(llvm::Instruction &inst);
+bool onlyUsedInCurrentBlock(llvm::Instruction &inst);
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb);
 clang::DeclRefExpr *
 makeDeclRefExpr(clang::ValueDecl *D,
@@ -131,10 +132,8 @@ class TypeBuilder {
 public:
   std::shared_ptr<ClangTypeResult> CT;
   llvm::DataLayout DL;
-  
-  auto getPointerSizeInBits() const {
-    return DL.getPointerSizeInBits();
-  }
+
+  auto getPointerSizeInBits() const { return DL.getPointerSizeInBits(); }
 
   std::vector<clang::Expr *> tryAddZero(clang::Expr *Val) {
     if (CT) {
@@ -312,6 +311,7 @@ public:
 class SAFuncContext {
   SAContext &Ctx;
   llvm::Function &Func;
+  llvm::FunctionAnalysisManager &FAM;
   // map from llvm inst to clang expr
   std::map<ExtValuePtr, clang::Expr *> ExprMap;
   // map from llvm block to CFGBlock. Store the iterator to facilitate deletion
@@ -323,9 +323,11 @@ class SAFuncContext {
   std::unique_ptr<CFG> Cfg;
   // For checking local names (of variables, labels) are used or not.
   std::unique_ptr<llvm::StringSet<>> Names;
+  std::vector<clang::Stmt *> VarDecls;
 
 public:
-  SAFuncContext(SAContext &ctx, llvm::Function &func);
+  SAFuncContext(SAContext &ctx, llvm::Function &func,
+                llvm::FunctionAnalysisManager &FAM);
 
   // Main interface for CFGBuilder to add an expression for an instruction.
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block);
@@ -366,6 +368,7 @@ public:
 class SAContext {
 protected:
   llvm::Module &M;
+  llvm::ModuleAnalysisManager &MAM;
   // Clang AST should be placed first, so that it is initialized first.
   std::shared_ptr<ASTManager> AM;
   std::shared_ptr<ClangTypeResult> CT;
@@ -387,9 +390,10 @@ public:
 public:
   // The usage of `clang::tooling::buildASTFromCode` follows llvm
   // unittests/Analysis/CFGTest.cpp, so we don't need to create ASTContext.
-  SAContext(llvm::Module &mod, std::shared_ptr<ASTManager> AM, Options opts,
+  SAContext(llvm::Module &Mod, llvm::ModuleAnalysisManager &MAM,
+            std::shared_ptr<ASTManager> AM, Options opts,
             std::shared_ptr<ClangTypeResult> CT)
-      : M(mod), AM(AM), CT(CT), opts(opts),
+      : M(Mod), MAM(MAM), AM(AM), CT(CT), opts(opts),
         Names(std::make_unique<llvm::StringSet<>>()),
         TB(getASTContext(), VN, *Names, CT, M.getDataLayout()),
         EB(*this, getASTContext(), TB) {
@@ -418,13 +422,15 @@ public:
   }
 
   /// A new context is created if not exist
-  SAFuncContext &getFuncContext(llvm::Function &func) {
-    if (funcContexts.find(&func) == funcContexts.end()) {
-      auto result = funcContexts.emplace(&func, SAFuncContext(*this, func));
+  SAFuncContext &getFuncContext(llvm::Function &Func) {
+    if (funcContexts.find(&Func) == funcContexts.end()) {
+      auto &FAM =
+          MAM.getResult<llvm::FunctionAnalysisManagerModuleProxy>(M).getManager();
+      auto result = funcContexts.emplace(&Func, SAFuncContext(*this, Func, FAM));
       assert(result.second && "insertion failed");
       return result.first->second;
     }
-    return funcContexts.at(&func);
+    return funcContexts.at(&Func);
   }
   clang::FunctionDecl *getFunctionDecl(llvm::Function &F) {
     return llvm::cast<clang::FunctionDecl>(globalDecls.at(&F));
@@ -693,6 +699,7 @@ protected:
   SAFuncContext &FCtx; // TODO only reference part of the context
   CFGBlock *Blk = nullptr;
   ExprBuilder EB;
+  std::vector<clang::Stmt *> &VarDecls; // put all var decl at the beginning
 
   TypeBuilder &getTypeBuilder() { return FCtx.getTypeBuilder(); }
   clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
@@ -775,8 +782,8 @@ public:
   void visitSelectInst(llvm::SelectInst &I);
   void visitSwitchInst(llvm::SwitchInst &I);
 
-  CFGBuilder(SAFuncContext &FCtx)
-      : Ctx(FCtx.getASTContext()), FCtx(FCtx), EB(FCtx) {}
+  CFGBuilder(SAFuncContext &FCtx, std::vector<clang::Stmt *> &VarDecls)
+      : Ctx(FCtx.getASTContext()), FCtx(FCtx), EB(FCtx), VarDecls(VarDecls) {}
   void setBlock(CFGBlock *blk) { Blk = blk; }
 };
 

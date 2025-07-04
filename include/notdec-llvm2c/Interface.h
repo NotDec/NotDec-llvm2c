@@ -12,6 +12,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Casting.h>
@@ -83,7 +84,7 @@ struct HTypeResult {
 };
 
 // main interface
-void decompileModule(llvm::Module &M, llvm::raw_fd_ostream &os, Options opts,
+void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM, llvm::raw_fd_ostream &os, Options opts,
                      std::unique_ptr<HTypeResult> HT = nullptr);
 
 void demoteSSA(llvm::Module &M);
