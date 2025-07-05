@@ -7,8 +7,8 @@
 #include <utility>
 
 #include "llvm/ADT/PostOrderIterator.h"
-#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
+#include "llvm/Analysis/MemorySSA.h"
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>
@@ -332,6 +332,10 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   auto StoreSize = getLLVMTypeSize(I.getValueOperand()->getType(),
                                    getTypeBuilder().getPointerSizeInBits());
 
+  if (StoreSize == 1) {
+    Ty = Ctx.BoolTy;
+  }
+
   // 2. 优先左边的类型
   if (Ty.isNull()) {
     // 获得左边指针+0可能的值，依次判断类型
@@ -396,6 +400,10 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   auto Size =
       getLLVMTypeSize(I.getPointerOperandType()->getPointerElementType(),
                       getTypeBuilder().getPointerSizeInBits());
+
+  if (Size == 1) {
+    Ty = Ctx.BoolTy;
+  }
 
   if (Ty.isNull()) {
     auto Vals2 = getTypeBuilder().tryAddZero(Ptr);
@@ -775,7 +783,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
     auto &MSSA = MSSAR.getMSSA();
     auto Walker = MSSA.getWalker();
     MemoryUse *LoadMU = cast<MemoryUse>(MSSA.getMemoryAccess(LI));
-  
+
     bool allUserGood = true;
     for (User *U : LI->users()) {
       if (Instruction *UsrI = dyn_cast<Instruction>(U)) {
