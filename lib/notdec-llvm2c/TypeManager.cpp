@@ -725,6 +725,10 @@ std::optional<int64_t> getIntValue(clang::Expr *Index) {
   return OffsetNum;
 }
 
+// std::pair<int64_t, clang::Expr*> splitConstantFromIndex(clang::Expr* Index) {
+//   // TODO
+// }
+
 std::optional<int> isPowerOfTwo(int n) {
   if (n <= 0 || (n & (n - 1)) != 0) {
     return std::nullopt;
@@ -866,7 +870,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
     if (llvm::isa<clang::RecordType>(PointeeTy)) {
       if (!OffsetNum) {
         // TODO try to resolve this case using zero offset conversion?
-        llvm::errs() << "Error: Struct/Union type with non-constant index\n";
+        llvm::errs() << "Error: Struct/Union type with non-constant index!\n";
         return nullptr;
       }
       auto *Decl = llvm::cast<clang::RecordDecl>(PointeeTy->getAsTagDecl());

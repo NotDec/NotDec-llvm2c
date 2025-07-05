@@ -961,6 +961,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
     if (OpCode == llvm::Instruction::Add && lhs->getType()->isIntegerType() &&
         (rhs->getType()->isPointerType() || rhs->getType()->isArrayType())) {
       std::swap(L, R);
+      std::swap(lhs, rhs);
     }
     if ((lhs->getType()->isPointerType() || lhs->getType()->isArrayType()) &&
         rhs->getType()->isIntegerType()) {
