@@ -1,9 +1,13 @@
 #include <iostream>
 #include <string>
 
+#include <llvm/Analysis/CGSCCPassManager.h>
+#include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IRReader/IRReader.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/SourceMgr.h>
@@ -90,7 +94,29 @@ int main(int argc, char *argv[]) {
       std::cerr << EC.message() << std::endl;
       std::abort();
     }
-    notdec::llvm2c::decompileModule(*module, os, getLLVM2COptions());
+
+    // Create the analysis managers.
+    LoopAnalysisManager LAM;
+    FunctionAnalysisManager FAM;
+    CGSCCAnalysisManager SCCAM;
+    ModuleAnalysisManager MAM;
+
+    // add instrumentations.
+    PassInstrumentationCallbacks PIC;
+    StandardInstrumentations SI(::llvm::DebugFlag, false,
+                                PrintPassOptions{.SkipAnalyses = true});
+    SI.registerCallbacks(PIC, &FAM);
+
+    PassBuilder PB(nullptr, PipelineTuningOptions(), llvm::None, &PIC);
+
+    // Register all the basic analyses with the managers.
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(SCCAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, SCCAM, MAM);
+
+    notdec::llvm2c::decompileModule(*module, MAM, os, getLLVM2COptions());
     std::cout << "Decompilation result: " << outputFilename << std::endl;
   }
 
