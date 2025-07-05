@@ -333,7 +333,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
                                    getTypeBuilder().getPointerSizeInBits());
 
   if (StoreSize == 1) {
-    Ty = Ctx.BoolTy;
+    Ty = getBoolTy(Ctx);
   }
 
   // 2. 优先左边的类型
@@ -402,7 +402,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
                       getTypeBuilder().getPointerSizeInBits());
 
   if (Size == 1) {
-    Ty = Ctx.BoolTy;
+    Ty = getBoolTy(Ctx);
   }
 
   if (Ty.isNull()) {
@@ -1130,14 +1130,14 @@ void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char *DebugDir) {
           llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
           HType *T = nullptr;
           HType *TU = nullptr;
-          if (HT.ValueTypes.count(&PN) == 0) {
+          if (HT.ValueTypes.count(&PN)) {
             T = HT.ValueTypes.at(&PN);
             if (T != nullptr) {
               T = HT.HTCtx->getPointerType(false, PointerSize, T);
             }
           }
           HT.ValueTypes.erase(&PN);
-          if (HT.ValueTypesLowerBound.count(&PN) > 0) {
+          if (HT.ValueTypesLowerBound.count(&PN)) {
             TU = HT.ValueTypesLowerBound.at(&PN);
             if (TU != nullptr) {
               TU = HT.HTCtx->getPointerType(false, PointerSize, TU);
@@ -1939,9 +1939,17 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
   } else if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(&C)) {
     auto Val = CI->getValue();
     if (CI->getType()->getBitWidth() == 1) {
-      // todo use C bool
-      return new (Ctx) clang::CXXBoolLiteralExpr(!Val.isZero(), Ctx.BoolTy,
-                                                 clang::SourceLocation());
+      bool useBool = true;
+      if (useBool) {
+        return new (Ctx) clang::CXXBoolLiteralExpr(!Val.isZero(), Ctx.BoolTy,
+                                                   clang::SourceLocation());
+      } else {
+        return createCStyleCastExpr(Ctx, Ctx.BoolTy, clang::VK_PRValue,
+                                    clang::CK_BitCast,
+                                    clang::IntegerLiteral::Create(
+                                        Ctx, Val.zext(Ctx.getIntWidth(Ctx.IntTy)), Ctx.IntTy,
+                                        clang::SourceLocation()));
+      }
     }
     if (Val.getBitWidth() == 1) {
       Val = Val.zext(32);
@@ -2094,7 +2102,7 @@ clang::LabelDecl *IStructuralAnalysis::getBlockLabel(CFGBlock *Blk,
 
 SAFuncContext::SAFuncContext(SAContext &Ctx, llvm::Function &Func,
                              llvm::FunctionAnalysisManager &FAM)
-    : Ctx(Ctx), FAM(FAM), Func(Func), TB(Ctx.getTypeBuilder()) {
+    : Ctx(Ctx), Func(Func), FAM(FAM), TB(Ctx.getTypeBuilder()) {
   Cfg = std::make_unique<CFG>();
   Names = std::make_unique<llvm::StringSet<>>();
 }

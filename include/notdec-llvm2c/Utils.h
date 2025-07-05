@@ -19,6 +19,7 @@ unsigned getLLVMTypeSize(llvm::Type *Ty, unsigned PointerSizeInBits = 0);
 std::string join(std::string path, std::string elem);
 void printModule(llvm::Module &M, const char *path);
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName);
+clang::QualType getBoolTy(clang::ASTContext& Ctx);
 
 // ===============
 // Pass

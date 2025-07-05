@@ -4,6 +4,7 @@
 
 #include "ASTPrinter/DeclPrinter.h"
 #include <clang/AST/DeclBase.h>
+#include <clang/AST/Type.h>
 #include <clang/Frontend/ASTUnit.h>
 #include <memory>
 #include <vector>

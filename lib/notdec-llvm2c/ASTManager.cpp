@@ -75,16 +75,6 @@ private:
         processType(TD->getUnderlyingType());
       }
       return;
-    }
-
-    QT = QT.getCanonicalType();
-
-    if (auto *PT = QT->getAs<PointerType>()) {
-      processType(PT->getPointeeType());
-    } else if (auto *RT = QT->getAs<ReferenceType>()) {
-      processType(RT->getPointeeType());
-    } else if (auto *AT = QT->getAsArrayTypeUnsafe()) {
-      processType(AT->getElementType());
     } else if (auto *FT = QT->getAs<FunctionType>()) {
       // 返回值
       processType(FT->getReturnType());
@@ -94,12 +84,22 @@ private:
           processType(ParamTy);
       }
       return;
+    } else if (auto *PT = QT->getAs<PointerType>()) {
+      processType(PT->getPointeeType());
+    } else if (auto *RT = QT->getAs<ReferenceType>()) {
+      processType(RT->getPointeeType());
+    } else if (auto *AT = QT->getAsArrayTypeUnsafe()) {
+      processType(AT->getElementType());
     } else if (auto *RT = QT->getAs<RecordType>()) {
       auto *RD = RT->getDecl();
       auto Ent = Referenced.insert(RD->getNameAsString());
       if (Ent.second) {
         VisitRecordDecl(RD);
       }
+    } else if (QT->isBuiltinType() || QT->isVoidType()) {
+      // do nothing
+    } else {
+      assert(false && "Unhandled Type!");
     }
   }
 };
@@ -130,6 +130,8 @@ void ASTManager::print(DeclPrinter &Printer) {
   // } while (Collector.size() > Size);
 
   // 根据引用情况打印
+
+  OS << "#include<stdbool.h>\n\n";
 
   OS << "// ====== Type Declarations ======\n";
   // Printer.VisitTranslationUnitDecl(TypeDeclarations);

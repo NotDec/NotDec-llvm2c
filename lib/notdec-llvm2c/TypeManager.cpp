@@ -84,7 +84,7 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
   auto doConvert = [&](HType *T) -> clang::QualType {
     if (auto *IT = llvm::dyn_cast<ast::IntegerType>(T)) {
       if (IT->getBitSize() == 1) {
-        return Ctx.BoolTy;
+        return getBoolTy(Ctx);
       }
       if (IT->getBitSize() == 8) {
         return Ctx.CharTy;

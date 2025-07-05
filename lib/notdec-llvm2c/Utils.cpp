@@ -1,4 +1,5 @@
 #include <cassert>
+#include <clang/AST/Decl.h>
 #include <iostream>
 #include <type_traits>
 #include <vector>
@@ -28,6 +29,18 @@
 #define DEBUG_TYPE "notdec-backend-utils"
 
 namespace notdec::llvm2c {
+
+clang::QualType getBoolTy(clang::ASTContext& Ctx) {
+  static std::map<clang::ASTContext*, clang::TypedefNameDecl*> BoolDecls;
+  if (BoolDecls.count(&Ctx)) {
+    return Ctx.getTypedefType(BoolDecls.at(&Ctx));
+  }
+  auto BoolDecl = clang::TypedefDecl::Create(
+          Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
+          &Ctx.Idents.get("bool"), Ctx.getTrivialTypeSourceInfo(Ctx.BoolTy));
+  BoolDecls.insert({&Ctx, BoolDecl});
+  return Ctx.getTypedefType(BoolDecl);
+}
 
 unsigned getLLVMTypeSize(llvm::Type *Ty, unsigned PointerSizeInBits) {
   if (Ty->isPointerTy()) {
