@@ -221,12 +221,32 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
     FCtx.addMapping(&I, *addr);
   } else {
     auto *FD = FCtx.getSAContext().getIntrinsic("alloca");
-    auto Arg = EB.visitValue(I.getOperand(0), &I, 0);
-    Arg = getTypeBuilder().checkCast(Arg, FD->getParamDecl(0)->getType());
-    auto Call = clang::CallExpr::Create(
-        Ctx, makeDeclRefExpr(FD), {Arg}, FD->getReturnType(), clang::VK_PRValue,
-        clang::SourceLocation(), clang::FPOptionsOverride());
-    addExprOrStmt(I, *Call);
+    if (I.isArrayAllocation()) {
+      // only allow alloca char, n;
+      assert(I.getAllocatedType()->isIntegerTy(8));
+      auto Arg = EB.visitValue(I.getOperand(0), &I, 0);
+      Arg = getTypeBuilder().checkCast(Arg, FD->getParamDecl(0)->getType());
+      auto Call = clang::CallExpr::Create(
+          Ctx, makeDeclRefExpr(FD), {Arg}, FD->getReturnType(),
+          clang::VK_PRValue, clang::SourceLocation(),
+          clang::FPOptionsOverride());
+      addExprOrStmt(I, *Call);
+    } else {
+      auto AT = I.getAllocatedType();
+      auto &DL = I.getModule()->getDataLayout();
+      assert(AT->isSized() && DL.getTypeAllocSize(AT).getFixedSize() != 0);
+
+      auto PTy = FD->getParamDecl(0)->getType();
+      auto Size = llvm::APInt(Ctx.getTypeSize(PTy),
+                              DL.getTypeAllocSize(AT).getFixedSize());
+      auto Arg = clang::IntegerLiteral::Create(Ctx, Size, PTy,
+                                               clang::SourceLocation());
+      auto Call = clang::CallExpr::Create(
+          Ctx, makeDeclRefExpr(FD), {Arg}, FD->getReturnType(),
+          clang::VK_PRValue, clang::SourceLocation(),
+          clang::FPOptionsOverride());
+      addExprOrStmt(I, *Call);
+    }
   }
 }
 
@@ -1944,11 +1964,11 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
         return new (Ctx) clang::CXXBoolLiteralExpr(!Val.isZero(), Ctx.BoolTy,
                                                    clang::SourceLocation());
       } else {
-        return createCStyleCastExpr(Ctx, Ctx.BoolTy, clang::VK_PRValue,
-                                    clang::CK_BitCast,
-                                    clang::IntegerLiteral::Create(
-                                        Ctx, Val.zext(Ctx.getIntWidth(Ctx.IntTy)), Ctx.IntTy,
-                                        clang::SourceLocation()));
+        return createCStyleCastExpr(
+            Ctx, Ctx.BoolTy, clang::VK_PRValue, clang::CK_BitCast,
+            clang::IntegerLiteral::Create(Ctx,
+                                          Val.zext(Ctx.getIntWidth(Ctx.IntTy)),
+                                          Ctx.IntTy, clang::SourceLocation()));
       }
     }
     if (Val.getBitWidth() == 1) {
