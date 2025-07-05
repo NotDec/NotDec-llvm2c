@@ -200,14 +200,17 @@ bool isEntryLikeBlock(llvm::BasicBlock &bb) {
 
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   // check if the instruction is in the entry block.
-  if (isEntryLikeBlock(*I.getParent())) {
+  if (isEntryLikeBlock(*I.getParent()) && !I.isArrayAllocation()) {
     // create a local variable
     auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(I));
+    auto PTy = FCtx.getTypeBuilder().getType(&I, nullptr, -1);
     // TODO: ensure that type size is the same to ensure semantic.
     clang::VarDecl *VD = clang::VarDecl::Create(
         Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
         clang::SourceLocation(), II,
-        FCtx.getTypeBuilder().getType(&I, nullptr, -1)->getPointeeType(),
+        // for array type, we do not need to get pointee type.
+        toLValueType(
+            Ctx, PTy->getPointeeType().isNull() ? PTy : PTy->getPointeeType()),
         nullptr, clang::SC_None);
 
     // Create a decl statement.
