@@ -338,6 +338,10 @@ void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
 }
 
 void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
+  // skip store undef value
+  if (isa<llvm::UndefValue>(I.getValueOperand())) {
+    return;
+  }
   // store = assign + deref left.
   clang::Expr *Val = EB.visitValue(I.getValueOperand(), &I, 0);
   clang::Expr *Ptr = EB.visitValue(I.getPointerOperand(), &I, 1);
@@ -2007,6 +2011,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
 
     // TODO: eliminate Ui8 Ui16 i8 i16 suffix?
     // https://stackoverflow.com/questions/33659846/microsoft-integer-literal-extensions-where-documented
+    // if value is negative, create signed literal then cast.
     if (Val.getBitWidth() > 8 && Val.isNegative() &&
         Ty->isUnsignedIntegerType()) {
       clang::Expr *Ret = clang::IntegerLiteral::Create(
@@ -2032,6 +2037,9 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     }
     // handle casts
     switch (CE->getOpcode()) {
+    case llvm::Instruction::IntToPtr:
+      return visitValue(CE->getOperand(0), CE, 0, Ty);
+
     case llvm::Instruction::Trunc:
     case llvm::Instruction::ZExt:
     case llvm::Instruction::SExt:
@@ -2042,7 +2050,6 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     case llvm::Instruction::FPToUI:
     case llvm::Instruction::FPToSI:
     case llvm::Instruction::PtrToInt:
-    case llvm::Instruction::IntToPtr:
     case llvm::Instruction::BitCast:
     case llvm::Instruction::AddrSpaceCast:
       return createCCast(

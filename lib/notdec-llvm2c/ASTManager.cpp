@@ -131,7 +131,7 @@ void ASTManager::print(DeclPrinter &Printer) {
 
   // 根据引用情况打印
 
-  OS << "#include<stdbool.h>\n\n";
+  OS << "#include <stdbool.h>\n\n";
 
   OS << "// ====== Type Declarations ======\n";
   // Printer.VisitTranslationUnitDecl(TypeDeclarations);
