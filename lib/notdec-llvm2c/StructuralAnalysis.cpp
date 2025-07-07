@@ -340,11 +340,14 @@ void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
 void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   // skip store undef value
   if (isa<llvm::UndefValue>(I.getValueOperand())) {
+    llvm::errs() << "Skipping undef store! Probably uninitialized variable?: "
+                 << I << "\n";
     return;
   }
   // store = assign + deref left.
   clang::Expr *Val = EB.visitValue(I.getValueOperand(), &I, 0);
   clang::Expr *Ptr = EB.visitValue(I.getPointerOperand(), &I, 1);
+  Ptr = getNoCast(Ptr);
   // implicit inttoptr
   if (!Ptr->getType()->isPointerType()) {
     Ptr = createCStyleCastExpr(
@@ -1083,8 +1086,9 @@ void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
       }
     }
   }
-  clang::Expr *tr = EB.visitValue(I.getTrueValue(), &I, 1);
-  clang::Expr *fl = EB.visitValue(I.getFalseValue(), &I, 2);
+  // TODO: find a common type, ensure same type.
+  clang::Expr *tr = EB.visitValue(I.getTrueValue(), &I, 1, RTy);
+  clang::Expr *fl = EB.visitValue(I.getFalseValue(), &I, 2, RTy);
   auto exp =
       createConditionalOperator(Ctx, cond, tr, fl, RTy, clang::VK_PRValue);
   addExprOrStmt(I, *exp);
@@ -1144,7 +1148,8 @@ clang::ASTContext &SAFuncContext::getASTContext() {
   return Ctx.getASTContext();
 }
 
-void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char *DebugDir) {
+void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
+                    HTypeResult &HT, const char *DebugDir) {
   std::map<std::pair<llvm::Function *, std::string>,
            std::pair<HType *, HType *>>
       NameMap;
@@ -1183,7 +1188,7 @@ void demoteSSAFixHT(llvm::Module &M, HTypeResult &HT, const char *DebugDir) {
     // demote SSA using reg2mem
     printModule(M, join(DebugDir, "llvm2c-before-demotessa.ll").c_str());
   }
-  notdec::llvm2c::demoteSSA(M);
+  notdec::llvm2c::demoteSSA(M, MAM);
   if (DebugDir) {
     // demote SSA using reg2mem
     printModule(M, join(DebugDir, "llvm2c-after-demotessa.ll").c_str());
@@ -1229,9 +1234,9 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
 
   if (!opts.noDemoteSSA) {
     if (HT) {
-      demoteSSAFixHT(M, *HT, DebugDir);
+      demoteSSAFixHT(M, MAM, *HT, DebugDir);
     } else {
-      demoteSSA(M);
+      demoteSSA(M, MAM);
     }
   }
   LLVM_DEBUG(
@@ -1505,13 +1510,21 @@ void SAContext::createDecls() {
     }
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getGlobName(GV));
-    auto Ty = TB.getType(&GV, nullptr, -1)->getPointeeType();
+    QualType PTy;
+
+    if (GV.getName().startswith("table_")) {
+      PTy = TB.visitType(*GV.getType());
+    } else {
+      PTy = TB.getType(&GV, nullptr, -1)->getPointeeType();
+    }
+
     if (GV.isConstant()) {
-      Ty = Ty.withConst();
+      PTy = PTy.withConst();
     }
     clang::VarDecl *VD = clang::VarDecl::Create(
         getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
-        II, Ty, nullptr, getStorageClass(GV));
+        II, PTy->getPointeeType().isNull() ? PTy : PTy->getPointeeType(),
+        nullptr, getStorageClass(GV));
 
     TUD->addDecl(VD);
     globalDecls.insert(std::make_pair(&GV, VD));
@@ -1915,7 +1928,13 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
       Ty = CT->getType(&C);
     }
   }
-  if (llvm::GlobalObject *GO = llvm::dyn_cast<llvm::GlobalObject>(&C)) {
+
+  if (llvm::UndefValue *UV = llvm::dyn_cast<llvm::UndefValue>(&C)) {
+    if (Ty.isNull()) {
+      Ty = TB.visitType(*UV->getType());
+    }
+    return getNull(Ty);
+  } else if (llvm::GlobalObject *GO = llvm::dyn_cast<llvm::GlobalObject>(&C)) {
     // global variables and functions
     return addrOf(Ctx, makeDeclRefExpr(SCtx.getGlobalDecl(*GO)));
   } else if (llvm::ConstantAggregate *CA =

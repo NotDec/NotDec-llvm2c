@@ -44,7 +44,8 @@
 namespace notdec::llvm2c {
 class ExprBuilder;
 
-void demoteSSAFixHT(llvm::Module &M, HTypeResult &Result);
+void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
+                    HTypeResult &HT, const char *DebugDir);
 
 // remove all array types within.
 clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty);
@@ -424,9 +425,10 @@ public:
   /// A new context is created if not exist
   SAFuncContext &getFuncContext(llvm::Function &Func) {
     if (funcContexts.find(&Func) == funcContexts.end()) {
-      auto &FAM =
-          MAM.getResult<llvm::FunctionAnalysisManagerModuleProxy>(M).getManager();
-      auto result = funcContexts.emplace(&Func, SAFuncContext(*this, Func, FAM));
+      auto &FAM = MAM.getResult<llvm::FunctionAnalysisManagerModuleProxy>(M)
+                      .getManager();
+      auto result =
+          funcContexts.emplace(&Func, SAFuncContext(*this, Func, FAM));
       assert(result.second && "insertion failed");
       return result.first->second;
     }

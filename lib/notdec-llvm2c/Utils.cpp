@@ -30,14 +30,15 @@
 
 namespace notdec::llvm2c {
 
-clang::QualType getBoolTy(clang::ASTContext& Ctx) {
-  static std::map<clang::ASTContext*, clang::TypedefNameDecl*> BoolDecls;
+clang::QualType getBoolTy(clang::ASTContext &Ctx) {
+  static std::map<clang::ASTContext *, clang::TypedefNameDecl *> BoolDecls;
   if (BoolDecls.count(&Ctx)) {
     return Ctx.getTypedefType(BoolDecls.at(&Ctx));
   }
   auto BoolDecl = clang::TypedefDecl::Create(
-          Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
-          &Ctx.Idents.get("bool"), Ctx.getTrivialTypeSourceInfo(Ctx.BoolTy));
+      Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(),
+      clang::SourceLocation(), &Ctx.Idents.get("bool"),
+      Ctx.getTrivialTypeSourceInfo(Ctx.BoolTy));
   BoolDecls.insert({&Ctx, BoolDecl});
   return Ctx.getTypedefType(BoolDecl);
 }
@@ -85,23 +86,9 @@ std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
 }
 
 /// Run the RegToMemPass to demote SSA to memory, i.e., eliminate Phi nodes.
-void demoteSSA(llvm::Module &M) {
+void demoteSSA(llvm::Module &M, llvm::ModuleAnalysisManager &MAM) {
   using namespace llvm;
-  // Create the analysis managers.
-  LoopAnalysisManager LAM;
-  FunctionAnalysisManager FAM;
-  CGSCCAnalysisManager CGAM;
-  ModuleAnalysisManager MAM;
   ModulePassManager MPM;
-  PassBuilder PB;
-  PB.registerModuleAnalyses(MAM);
-  PB.registerCGSCCAnalyses(CGAM);
-  PB.registerFunctionAnalyses(FAM);
-  PB.registerLoopAnalyses(LAM);
-  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-  // SimplifyCFGOptions Opts;
-  // MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass(Opts)));
 
   MPM.addPass(createModuleToFunctionPassAdaptor(AdjustCFGPass()));
   MPM.addPass(createModuleToFunctionPassAdaptor(RetDupPass()));
@@ -407,7 +394,7 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
           B->removePredecessor(pred, true);
           br->eraseFromParent();
         } else {
-          BasicBlock *N = BasicBlock::Create(C, B->getName(), &F, B);
+          BasicBlock *N = BasicBlock::Create(C, B->getName() + "_dup", &F, B);
           builder.SetInsertPoint(N);
           if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
             auto rv = p->getIncomingValueForBlock(pred);
@@ -420,8 +407,17 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
           pred->getTerminator()->replaceSuccessorWith(B, N);
         }
       }
-      B->eraseFromParent();
     }
+    assert(B->hasNPredecessors(0));
+    assert(B->getNumUses() == 0);
+    std::vector<Instruction *> Vec;
+    for (auto &I : *B) {
+      Vec.push_back(&I);
+    }
+    for (auto I : Vec) {
+      I->eraseFromParent();
+    }
+    B->eraseFromParent();
   }
   return PreservedAnalyses::none();
 }

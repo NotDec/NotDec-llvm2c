@@ -700,6 +700,10 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
       auto ElemTy = ArrayTy->getElementType();
       auto Index = clang::IntegerLiteral::Create(
           Ctx, llvm::APInt(32, 0, false), Ctx.IntTy, clang::SourceLocation());
+      Result.push_back(ImplicitCastExpr::Create(
+          Ctx, Ctx.getDecayedType(QualType(ArrayTy, 0)),
+          CastKind::CK_ArrayToPointerDecay, deref(Ctx, Val), nullptr,
+          ExprValueKind::VK_PRValue, FPOptionsOverride()));
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
           deref(Ctx, Val), Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
           clang::SourceLocation());
@@ -832,7 +836,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
     auto ElemTy = Ctx.getCanonicalType(ValTy->getPointeeType().getTypePtr());
     auto ElemSize = llvm::expectedToOptional(getTypeSizeInChars(ElemTy));
     // TODO if it is multiple of OffsetNum, try divide Index by ElemSize
-    if (ElemSize && OffsetNum && *OffsetNum > *ElemSize) {
+    if (ElemSize && *ElemSize != 0 && OffsetNum && *OffsetNum > *ElemSize) {
       // try to divide the index by ElemSize.
       auto NewIndex = *OffsetNum / *ElemSize;
       auto RemainIndex = *OffsetNum % *ElemSize;

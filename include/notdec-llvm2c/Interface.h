@@ -84,10 +84,11 @@ struct HTypeResult {
 };
 
 // main interface
-void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM, llvm::raw_fd_ostream &os, Options opts,
+void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
+                     llvm::raw_fd_ostream &os, Options opts,
                      std::unique_ptr<HTypeResult> HT = nullptr);
 
-void demoteSSA(llvm::Module &M);
+void demoteSSA(llvm::Module &M, llvm::ModuleAnalysisManager &MAM);
 
 } // namespace notdec::llvm2c
 
