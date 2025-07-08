@@ -1,11 +1,11 @@
 #include <cassert>
 #include <cstddef>
-#include <llvm/Transforms/Scalar/GVN.h>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include <llvm/Transforms/Scalar/GVN.h>
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/MemorySSA.h"
@@ -376,7 +376,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
       auto VTy = toLValueType(Ctx, V->getType());
       auto Pte = VTy->getPointeeType();
       // 检查类型是否符合store的大小
-      if (Pte->isArrayType()) {
+      if (Pte->isArrayType() || Pte->isRecordType()) {
         continue;
       }
       auto TS = expectedToOptional(getTypeBuilder().getTypeSize(Pte));
@@ -417,6 +417,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
 
 void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   clang::Expr *Ptr = EB.visitValue(I.getPointerOperand(), &I, 0);
+  Ptr = getNoCast(Ptr);
   // implicit inttoptr
   if (!Ptr->getType()->isPointerType()) {
     Ptr = createCStyleCastExpr(
@@ -444,7 +445,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
       // VTy = toLValueType(Ctx, VTy);
       auto Pte = VTy->getPointeeType();
       // 检查类型是否符合store的大小
-      if (Pte->isArrayType()) {
+      if (Pte->isArrayType() || Pte->isRecordType()) {
         continue;
       }
       auto TS = expectedToOptional(getTypeBuilder().getTypeSize(Pte));
@@ -1255,13 +1256,12 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
   if (CT != nullptr) {
     CT->declareDecls();
   }
-
-  SAContext Ctx(const_cast<llvm::Module &>(M), MAM, AM, opts, CT);
-  Ctx.createDecls();
-
   if (CT != nullptr) {
     CT->defineDecls();
   }
+
+  SAContext Ctx(const_cast<llvm::Module &>(M), MAM, AM, opts, CT);
+  Ctx.createDecls();
 
   for (const llvm::Function &F : M) {
     if (F.isDeclaration()) {
@@ -1501,8 +1501,7 @@ void SAContext::createDecls() {
   // create global variable decls
   for (llvm::GlobalVariable &GV : M.globals()) {
     if (CT) {
-      if (GV.getName() == "__stack_pointer" ||
-          GV.getName().startswith("__notdec_mem")) {
+      if (isSPByMetadata(&GV)) {
         if (GV.getNumUses() == 0) {
           continue;
         }

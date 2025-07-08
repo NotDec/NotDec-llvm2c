@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -45,6 +46,9 @@ struct SimpleRange {
     auto Start1 = std::max(this->Start, R.Start);
     auto End1 = std::min(R.end(), end());
     return {.Start = Start1, .Size = std::max(0l, End1 - Start1)};
+  }
+  std::string str() const {
+    return "@" + std::to_string(Start) + "-" + std::to_string(end());
   }
 };
 

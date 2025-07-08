@@ -23,7 +23,6 @@ class ClangTypeResult {
   std::shared_ptr<HTypeResult> Result;
   std::shared_ptr<ASTManager> AM;
   clang::ASTContext &Ctx;
-  bool expandStack = false;
   bool createNonFreeStandingStruct = false;
 
   // if not expandMemory, MemoryVar stores memory var with ElaboratedType;

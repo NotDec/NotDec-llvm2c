@@ -30,6 +30,21 @@
 
 namespace notdec::llvm2c {
 
+const char *KIND_STACK_POINTER = "notdec.stackpointer";
+
+bool isSPByMetadata(llvm::GlobalVariable *GV) {
+  if (llvm::MDNode *MD = GV->getMetadata(KIND_STACK_POINTER)) {
+    if (MD->getNumOperands() > 0) {
+      if (auto *SizeMD = llvm::dyn_cast<llvm::MDString>(MD->getOperand(0))) {
+        if (SizeMD->getString() == "true") {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 clang::QualType getBoolTy(clang::ASTContext &Ctx) {
   static std::map<clang::ASTContext *, clang::TypedefNameDecl *> BoolDecls;
   if (BoolDecls.count(&Ctx)) {
@@ -410,13 +425,13 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
     }
     assert(B->hasNPredecessors(0));
     assert(B->getNumUses() == 0);
-    std::vector<Instruction *> Vec;
-    for (auto &I : *B) {
-      Vec.push_back(&I);
-    }
-    for (auto I : Vec) {
-      I->eraseFromParent();
-    }
+    // std::vector<Instruction *> Vec;
+    // for (auto &I : *B) {
+    //   Vec.push_back(&I);
+    // }
+    // for (auto It = Vec.rbegin(); It != Vec.rend(); It++) {
+    //   (*It)->eraseFromParent();
+    // }
     B->eraseFromParent();
   }
   return PreservedAnalyses::none();

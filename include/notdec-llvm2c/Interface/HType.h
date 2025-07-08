@@ -256,11 +256,13 @@ public:
   bool isConst() const { return IsConst; }
   HType *getCanonicalType() const { return CanonicalType; }
 
+  bool isIntType() const { return Kind == TK_Integer; }
+  bool isFloatType() const { return Kind == TK_Float; }
   bool isPointerType() const { return Kind == TK_Pointer; }
+  bool isFunctionType() const { return Kind == TK_Function; }
   bool isRecordType() const { return Kind == TK_Record; }
   bool isUnionType() const { return Kind == TK_Union; }
   bool isArrayType() const { return Kind == TK_Array; }
-  bool isFunctionType() const { return Kind == TK_Function; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
   bool isCharType() const;
   bool isCharArrayType() const;
@@ -397,7 +399,7 @@ public:
   HType *getElementType() const { return ElementType; }
   std::optional<unsigned> getNumElements() const { return NumElements; }
 
-  HType* withSize(HTypeContext& Ctx, std::optional<unsigned> NumElements);
+  HType *withSize(HTypeContext &Ctx, std::optional<unsigned> NumElements);
 };
 
 class TypedefType : public HType {
@@ -572,6 +574,10 @@ public:
       OS << "\n";
     }
   }
+
+  HTypeContext(const HTypeContext &) = delete;
+  HTypeContext &operator=(const HTypeContext &) = delete;
+  HTypeContext(){};
 
   // static HTypeContext Instance;
   // static HTypeContext &getInstance() { return Instance; }

@@ -14,6 +14,8 @@
 #include <llvm/Support/Debug.h>
 
 namespace notdec::llvm2c {
+extern const char *KIND_STACK_POINTER;
+bool isSPByMetadata(llvm::GlobalVariable *GV);
 
 unsigned getLLVMTypeSize(llvm::Type *Ty, unsigned PointerSizeInBits = 0);
 std::string join(std::string path, std::string elem);
