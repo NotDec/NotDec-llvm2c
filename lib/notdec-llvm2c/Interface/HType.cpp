@@ -110,7 +110,7 @@ std::string HType::getAsString() const {
     auto *AT = llvm::cast<ArrayType>(this);
     bool hasSize = AT->getNumElements().has_value();
     return AT->getElementType()->getAsString() + "[" +
-           (hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
+           (!hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
   }
   case TK_Typedef:
     return llvm::cast<TypedefType>(this)->getDecl()->getName();

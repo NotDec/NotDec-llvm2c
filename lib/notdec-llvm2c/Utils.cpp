@@ -547,7 +547,7 @@ clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
     useArrow = true;
   }
   return clang::MemberExpr::Create(
-      Ctx, Base, useArrow, clang::SourceLocation(),
+      Ctx, addParenthesis<clang::MemberExpr>(Ctx, Base, true), useArrow, clang::SourceLocation(),
       clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Field,
       clang::DeclAccessPair::make(Field, Field->getAccess()),
       clang::DeclarationNameInfo(), nullptr, Field->getType(), clang::VK_LValue,
