@@ -1063,7 +1063,7 @@ void CFGBuilder::visitReturnInst(llvm::ReturnInst &I) {
 /// If the usage matches the and/or logical operator, then convert to && or ||
 void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
   auto &TB = FCtx.getTypeBuilder();
-  auto RTy = TB.getType(&I, nullptr, -1);
+  auto RTy = TB.getTypeL(&I, nullptr, -1);
   clang::Expr *cond = EB.visitValue(I.getCondition(), &I, 0);
   if (I.getType()->isIntegerTy(1)) {
     // select i1 expr1, i1 true, i1 expr2 -> expr1 || expr2
