@@ -2168,9 +2168,18 @@ llvm::StringRef ValueNamer::getValueName(llvm::Value &Val, const char *prefix,
   Buf.clear();
   llvm::raw_svector_ostream OS(Buf);
   if (Val.hasName() && !SAContext::isKeyword(Val.getName())) {
+    if (std::isdigit(Val.getName().front())) {
+      OS << "_";
+    }
     OS << Val.getName();
     escapeBuf();
-  } else {
+
+    if (isAllUnderline()) {
+      // not a useful name
+      Buf.clear();
+    }
+  }
+  if (Buf.empty()) {
     OS << prefix << id++;
   }
   return OS.str();

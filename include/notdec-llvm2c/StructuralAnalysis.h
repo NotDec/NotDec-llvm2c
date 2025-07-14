@@ -109,6 +109,14 @@ protected:
   llvm::StringRef getValueName(llvm::Value &Val, const char *prefix,
                                unsigned int &id);
   void escapeBuf();
+  bool isAllUnderline() {
+    for (auto c: Buf) {
+      if (c != '_') {
+        return false;
+      }
+    }
+    return true;
+  }
 };
 
 template <class SetTy>
