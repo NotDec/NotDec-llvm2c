@@ -395,7 +395,7 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
       continue;
     }
     std::vector<llvm::BasicBlock *> preds(pred_begin(B), pred_end(B));
-    if (!preds.empty()) {
+    if (preds.size() > 1) {
       for (auto pred : preds) {
         if (pred->getSingleSuccessor() == B) {
           auto br = pred->getTerminator();
@@ -412,8 +412,12 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
           BasicBlock *N = BasicBlock::Create(C, B->getName() + "_dup", &F, B);
           builder.SetInsertPoint(N);
           if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
-            auto rv = p->getIncomingValueForBlock(pred);
-            builder.CreateRet(rv);
+            if (p->getParent() == B) {
+              auto rv = p->getIncomingValueForBlock(pred);
+              builder.CreateRet(rv);
+            } else {
+              builder.CreateRet(r);
+            }
           } else {
             builder.CreateRet(r);
           }
@@ -422,17 +426,18 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
           pred->getTerminator()->replaceSuccessorWith(B, N);
         }
       }
+
+      assert(B->hasNPredecessors(0));
+      assert(B->getNumUses() == 0);
+      // std::vector<Instruction *> Vec;
+      // for (auto &I : *B) {
+      //   Vec.push_back(&I);
+      // }
+      // for (auto It = Vec.rbegin(); It != Vec.rend(); It++) {
+      //   (*It)->eraseFromParent();
+      // }
+      B->eraseFromParent();
     }
-    assert(B->hasNPredecessors(0));
-    assert(B->getNumUses() == 0);
-    // std::vector<Instruction *> Vec;
-    // for (auto &I : *B) {
-    //   Vec.push_back(&I);
-    // }
-    // for (auto It = Vec.rbegin(); It != Vec.rend(); It++) {
-    //   (*It)->eraseFromParent();
-    // }
-    B->eraseFromParent();
   }
   return PreservedAnalyses::none();
 }
@@ -547,8 +552,9 @@ clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
     useArrow = true;
   }
   return clang::MemberExpr::Create(
-      Ctx, addParenthesis<clang::MemberExpr>(Ctx, Base, true), useArrow, clang::SourceLocation(),
-      clang::NestedNameSpecifierLoc(), clang::SourceLocation(), Field,
+      Ctx, addParenthesis<clang::MemberExpr>(Ctx, Base, true), useArrow,
+      clang::SourceLocation(), clang::NestedNameSpecifierLoc(),
+      clang::SourceLocation(), Field,
       clang::DeclAccessPair::make(Field, Field->getAccess()),
       clang::DeclarationNameInfo(), nullptr, Field->getType(), clang::VK_LValue,
       clang::OK_Ordinary, clang::NOUR_None);
