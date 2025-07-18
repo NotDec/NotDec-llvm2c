@@ -5,7 +5,6 @@
 #include <string>
 #include <utility>
 
-#include <llvm/Transforms/Scalar/GVN.h>
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/MemorySSA.h"
@@ -32,6 +31,7 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/Scalar/GVN.h>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Comment.h>
@@ -204,14 +204,19 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
     // create a local variable
     auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(I));
     auto PTy = FCtx.getTypeBuilder().getType(&I, nullptr, -1);
+
+    // for array type, we do not need to get pointee type.
+    auto VDTy = toLValueType(
+        Ctx, PTy->getPointeeType().isNull() ? PTy : PTy->getPointeeType());
+
+    if (VDTy->isVoidType()) {
+      VDTy = FCtx.getTypeBuilder().visitType(*I.getType())->getPointeeType();
+    }
+
     // TODO: ensure that type size is the same to ensure semantic.
     clang::VarDecl *VD = clang::VarDecl::Create(
         Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
-        clang::SourceLocation(), II,
-        // for array type, we do not need to get pointee type.
-        toLValueType(
-            Ctx, PTy->getPointeeType().isNull() ? PTy : PTy->getPointeeType()),
-        nullptr, clang::SC_None);
+        clang::SourceLocation(), II, VDTy, nullptr, clang::SC_None);
 
     // Create a decl statement.
     clang::DeclStmt *DS = new (Ctx)
@@ -690,6 +695,12 @@ convertOp(llvm::Instruction::BinaryOps op) {
 }
 
 void CFGBuilder::visitCallInst(llvm::CallInst &I) {
+  if (auto Target = I.getCalledFunction()) {
+    if (Target->getName().startswith("llvm.dbg") ||
+        Target->getName().startswith("llvm.lifetime")) {
+      return;
+    }
+  }
   // See also:
   // https://github.com/llvm/llvm-project/blob/d8e5a0c42bd8796cce9caa53aacab88c7cb2a3eb/clang/lib/Analysis/BodyFarm.cpp#L245
   llvm::SmallVector<clang::Expr *, 16> Args(I.arg_size());
@@ -1489,6 +1500,10 @@ void SAContext::createDecls() {
 
   // handle intrinsic functions
   for (llvm::Function &F : M) {
+    if (F.getName().startswith("llvm.dbg") ||
+        F.getName().startswith("llvm.lifetime")) {
+      continue;
+    }
     if (!F.isIntrinsic()) {
       continue;
     }
