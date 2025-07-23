@@ -13,7 +13,6 @@
 #ifndef LLVM_CLANG_LIB_SEMA_TREETRANSFORM_H
 #define LLVM_CLANG_LIB_SEMA_TREETRANSFORM_H
 
-#include "CoroutineStmtBuilder.h"
 #include "TypeLocBuilder.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclObjC.h"
@@ -7792,125 +7791,8 @@ TreeTransform<Derived>::TransformMSAsmStmt(MSAsmStmt *S) {
 template<typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
-  auto *ScopeInfo = SemaRef.getCurFunction();
-  auto *FD = cast<FunctionDecl>(SemaRef.CurContext);
-  assert(FD && ScopeInfo && !ScopeInfo->CoroutinePromise &&
-         ScopeInfo->NeedsCoroutineSuspends &&
-         ScopeInfo->CoroutineSuspends.first == nullptr &&
-         ScopeInfo->CoroutineSuspends.second == nullptr &&
-         "expected clean scope info");
-
-  // Set that we have (possibly-invalid) suspend points before we do anything
-  // that may fail.
-  ScopeInfo->setNeedsCoroutineSuspends(false);
-
-  // We re-build the coroutine promise object (and the coroutine parameters its
-  // type and constructor depend on) based on the types used in our current
-  // function. We must do so, and set it on the current FunctionScopeInfo,
-  // before attempting to transform the other parts of the coroutine body
-  // statement, such as the implicit suspend statements (because those
-  // statements reference the FunctionScopeInfo::CoroutinePromise).
-  if (!SemaRef.buildCoroutineParameterMoves(FD->getLocation()))
-    return StmtError();
-  auto *Promise = SemaRef.buildCoroutinePromise(FD->getLocation());
-  if (!Promise)
-    return StmtError();
-  getDerived().transformedLocalDecl(S->getPromiseDecl(), {Promise});
-  ScopeInfo->CoroutinePromise = Promise;
-
-  // Transform the implicit coroutine statements constructed using dependent
-  // types during the previous parse: initial and final suspensions, the return
-  // object, and others. We also transform the coroutine function's body.
-  StmtResult InitSuspend = getDerived().TransformStmt(S->getInitSuspendStmt());
-  if (InitSuspend.isInvalid())
-    return StmtError();
-  StmtResult FinalSuspend =
-      getDerived().TransformStmt(S->getFinalSuspendStmt());
-  if (FinalSuspend.isInvalid() ||
-      !SemaRef.checkFinalSuspendNoThrow(FinalSuspend.get()))
-    return StmtError();
-  ScopeInfo->setCoroutineSuspends(InitSuspend.get(), FinalSuspend.get());
-  assert(isa<Expr>(InitSuspend.get()) && isa<Expr>(FinalSuspend.get()));
-
-  StmtResult BodyRes = getDerived().TransformStmt(S->getBody());
-  if (BodyRes.isInvalid())
-    return StmtError();
-
-  CoroutineStmtBuilder Builder(SemaRef, *FD, *ScopeInfo, BodyRes.get());
-  if (Builder.isInvalid())
-    return StmtError();
-
-  Expr *ReturnObject = S->getReturnValueInit();
-  assert(ReturnObject && "the return object is expected to be valid");
-  ExprResult Res = getDerived().TransformInitializer(ReturnObject,
-                                                     /*NoCopyInit*/ false);
-  if (Res.isInvalid())
-    return StmtError();
-  Builder.ReturnValue = Res.get();
-
-  // If during the previous parse the coroutine still had a dependent promise
-  // statement, we may need to build some implicit coroutine statements
-  // (such as exception and fallthrough handlers) for the first time.
-  if (S->hasDependentPromiseType()) {
-    // We can only build these statements, however, if the current promise type
-    // is not dependent.
-    if (!Promise->getType()->isDependentType()) {
-      assert(!S->getFallthroughHandler() && !S->getExceptionHandler() &&
-             !S->getReturnStmtOnAllocFailure() && !S->getDeallocate() &&
-             "these nodes should not have been built yet");
-      if (!Builder.buildDependentStatements())
-        return StmtError();
-    }
-  } else {
-    if (auto *OnFallthrough = S->getFallthroughHandler()) {
-      StmtResult Res = getDerived().TransformStmt(OnFallthrough);
-      if (Res.isInvalid())
-        return StmtError();
-      Builder.OnFallthrough = Res.get();
-    }
-
-    if (auto *OnException = S->getExceptionHandler()) {
-      StmtResult Res = getDerived().TransformStmt(OnException);
-      if (Res.isInvalid())
-        return StmtError();
-      Builder.OnException = Res.get();
-    }
-
-    if (auto *OnAllocFailure = S->getReturnStmtOnAllocFailure()) {
-      StmtResult Res = getDerived().TransformStmt(OnAllocFailure);
-      if (Res.isInvalid())
-        return StmtError();
-      Builder.ReturnStmtOnAllocFailure = Res.get();
-    }
-
-    // Transform any additional statements we may have already built
-    assert(S->getAllocate() && S->getDeallocate() &&
-           "allocation and deallocation calls must already be built");
-    ExprResult AllocRes = getDerived().TransformExpr(S->getAllocate());
-    if (AllocRes.isInvalid())
-      return StmtError();
-    Builder.Allocate = AllocRes.get();
-
-    ExprResult DeallocRes = getDerived().TransformExpr(S->getDeallocate());
-    if (DeallocRes.isInvalid())
-      return StmtError();
-    Builder.Deallocate = DeallocRes.get();
-
-    assert(S->getResultDecl() && "ResultDecl must already be built");
-    StmtResult ResultDecl = getDerived().TransformStmt(S->getResultDecl());
-    if (ResultDecl.isInvalid())
-      return StmtError();
-    Builder.ResultDecl = ResultDecl.get();
-
-    if (auto *ReturnStmt = S->getReturnStmt()) {
-      StmtResult Res = getDerived().TransformStmt(ReturnStmt);
-      if (Res.isInvalid())
-        return StmtError();
-      Builder.ReturnStmt = Res.get();
-    }
-  }
-
-  return getDerived().RebuildCoroutineBodyStmt(Builder);
+  assert(false && "Unsupported!");
+  return StmtError();
 }
 
 template<typename Derived>
