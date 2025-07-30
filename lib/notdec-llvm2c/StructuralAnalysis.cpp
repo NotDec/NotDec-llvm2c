@@ -1,7 +1,11 @@
 #include <cassert>
+#include <cctype>
+#include <clang/Sema/Ownership.h>
 #include <cstddef>
+#include <llvm/IR/Instruction.h>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -468,7 +472,45 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   }
 
   Ptr1 = deref(Ctx, Ptr1);
-  addExprOrStmt(I, *Ptr1);
+
+  // 获取一个槽位用来放临时表达式
+  auto Ind = allocateSlot();
+
+  // 调用专用函数，暂存到Map同时，存储相关Info
+  LoadExprCreater LEC(Ind, *this, I, Ptr1);
+  FCtx.addLoadExpr(I, Ptr1, LEC);
+
+  // TODO然后去改addExprOrStmt里面加入语句的地方，都wrap起来。
+  // addExprOrStmt(I, *Ptr1);
+}
+
+bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
+  auto &FCtx = Parent.getFCtx();
+  // 获得MemorySSA，然后分析
+  auto &MSSAR =
+      FCtx.getFAM().getResult<llvm::MemorySSAAnalysis>(FCtx.getFunction());
+  auto &MSSA = MSSAR.getMSSA();
+  auto Walker = MSSA.getWalker();
+  llvm::MemoryUse *LoadMU = cast<llvm::MemoryUse>(MSSA.getMemoryAccess(&Load));
+  llvm::MemoryAccess *UserMA = MSSA.getMemoryAccess(InsertLoc);
+  auto *UserMU = dyn_cast<llvm::MemoryUse>(UserMA);
+  llvm::MemoryAccess *DefAtLoad = Walker->getClobberingMemoryAccess(LoadMU);
+  llvm::MemoryAccess *DefAtUser = Walker->getClobberingMemoryAccess(UserMU);
+  if (DefAtLoad == DefAtUser) {
+    return true; // Good to reuse
+  } else {
+    return false; // Value updated!
+  }
+}
+
+clang::Expr *LoadExprCreater::getSafeExpr() {
+  if (Cached) {
+    return Cached;
+  }
+  auto &FCtx = Parent.getFCtx();
+  auto DRef = FCtx.cacheExpr(Load, E, *Parent.getBlk(), Ind);
+  this->Cached = DRef;
+  return DRef;
 }
 
 clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
@@ -800,16 +842,77 @@ ValueNamer &SAFuncContext::getValueNamer() {
   return getSAContext().getValueNamer();
 }
 
+clang::Expr *SAFuncContext::cacheExpr(llvm::Instruction &Inst,
+                                      clang::Expr *Expr, CFGBlock &block,
+                                      std::optional<size_t> Slot) {
+  // Create a local variable for it, in order to be faithful to the IR.
+  auto Name = getValueNamer().getTempName(Inst);
+
+  llvm::SmallString<128> Buf;
+  clang::IdentifierInfo *II2 = getIdentifierInfo(Name);
+  auto Ty = toLValueType(getASTContext(), Expr->getType());
+  if (Ty->canDecayToPointerType()) {
+    Ty = Ctx.getASTContext().getDecayedType(Ty);
+  }
+  clang::VarDecl *Decl = clang::VarDecl::Create(
+      getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
+      II2, Ty, nullptr, clang::SC_None);
+
+  clang::DeclStmt *DS = new (getASTContext())
+      clang::DeclStmt(clang::DeclGroupRef(Decl), clang::SourceLocation(),
+                      clang::SourceLocation());
+  VarDecls.push_back(DS);
+  clang::Expr *assign = createBinaryOperator(
+      getASTContext(), makeDeclRefExpr(Decl), TB.checkCast(Expr, Ty),
+      clang::BO_Assign, Decl->getType(), clang::VK_LValue);
+
+  addStmt(block, *assign, Inst, Slot);
+  return makeDeclRefExpr(Decl);
+}
+
+void SAFuncContext::addStmt(CFGBlock &Block, clang::Stmt &Stmt,
+                            llvm::Instruction &InsertLoc,
+                            std::optional<size_t> Slot) {
+  LoadCloneRewriter R(getASTContext(), LoadInfoMap, InsertLoc);
+  auto NewStmt = R.TransformStmt(&Stmt);
+  assert(NewStmt.get() != nullptr);
+
+  if (Slot) {
+    assert(isa<llvm::LoadInst>(&InsertLoc));
+    Block.updateStmt(*Slot, NewStmt.get());
+  } else {
+    Block.appendStmt(NewStmt.get());
+  }
+}
+
+void SAFuncContext::setTerminator(CFGBlock &block, CFGTerminator Term,
+                                  llvm::Instruction &InsertLoc) {
+  LoadCloneRewriter R(getASTContext(), LoadInfoMap, InsertLoc);
+  StmtResult NewCond;
+  if (auto *BT = std::get_if<BranchTerminator>(&Term)) {
+    NewCond = R.TransformStmt(BT->getStmt());
+    assert(NewCond.get() != nullptr);
+    block.setTerminator(NewCond.get());
+  } else if (auto ST = std::get_if<SwitchTerminator>(&Term)) {
+    NewCond = R.TransformStmt(ST->getStmt());
+    assert(NewCond.get() != nullptr);
+    block.setTerminator(SwitchTerminator(NewCond.get()));
+  } else {
+    assert(false && "Unreachable");
+  }
+}
+
 void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
-                                  CFGBlock &block) {
+                                  CFGBlock &Block) {
   // non-instruction or expr-like instruction.
   if (!llvm::isa<llvm::Instruction>(&V) || llvm::isa<llvm::Argument>(&V)) {
     ExprMap[&V] = &llvm::cast<clang::Expr>(Stmt);
     return;
   }
+  auto &I = llvm::cast<llvm::Instruction>(V);
   if (V.getNumUses() == 0) {
     // Treat as stmt
-    block.appendStmt(&Stmt);
+    addStmt(Block, Stmt, I);
     return;
   }
   assert(llvm::isa<clang::Expr>(&Stmt) &&
@@ -821,39 +924,42 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
 
   using namespace llvm;
   if (auto LI = dyn_cast<LoadInst>(&Inst)) {
-    auto &MSSAR = FAM.getResult<llvm::MemorySSAAnalysis>(Func);
-    auto &MSSA = MSSAR.getMSSA();
-    auto Walker = MSSA.getWalker();
-    MemoryUse *LoadMU = cast<MemoryUse>(MSSA.getMemoryAccess(LI));
+    canCache = false;
 
-    bool allUserGood = true;
-    for (User *U : LI->users()) {
-      if (Instruction *UsrI = dyn_cast<Instruction>(U)) {
-        // 只关心再次访问内存的指令（比如另一个 load/store/atomicrmw/...）
-        MemoryAccess *UserMA = MSSA.getMemoryAccess(UsrI);
-        if (!UserMA)
-          continue;
+    // auto &MSSAR = FAM.getResult<llvm::MemorySSAAnalysis>(Func);
+    // auto &MSSA = MSSAR.getMSSA();
+    // auto Walker = MSSA.getWalker();
+    // MemoryUse *LoadMU = cast<MemoryUse>(MSSA.getMemoryAccess(LI));
 
-        // 确定 UserMA 也是一个 MemoryUse（读）或 MemoryDef（写）
-        // 对于“读后读”一致性检查，我们比较它们背后的“最近写入”是不是同一个。
-        if (auto *UserMU = dyn_cast<MemoryUse>(UserMA)) {
-          MemoryAccess *DefAtLoad = Walker->getClobberingMemoryAccess(LoadMU);
-          MemoryAccess *DefAtUser = Walker->getClobberingMemoryAccess(UserMU);
+    // bool allUserGood = true;
+    // for (User *U : LI->users()) {
+    //   if (Instruction *UsrI = dyn_cast<Instruction>(U)) {
+    //     // 只关心再次访问内存的指令（比如另一个 load/store/atomicrmw/...）
+    //     MemoryAccess *UserMA = MSSA.getMemoryAccess(UsrI);
+    //     if (!UserMA)
+    //       continue;
 
-          if (DefAtLoad == DefAtUser) {
-            // ——在 LI 和 UsrI 之间，没有其他 Store 改写这块内存——
-            // LI 加载的值和 UsrI 处读取的值是相同的
-          } else {
-            // 之间被某个 Store（或 MemoryDef）修改过
-            allUserGood = false;
-          }
-        }
-      }
-    }
+    //     // 确定 UserMA 也是一个 MemoryUse（读）或 MemoryDef（写）
+    //     // 对于“读后读”一致性检查，我们比较它们背后的“最近写入”是不是同一个。
+    //     if (auto *UserMU = dyn_cast<MemoryUse>(UserMA)) {
+    //       MemoryAccess *DefAtLoad =
+    //       Walker->getClobberingMemoryAccess(LoadMU); MemoryAccess *DefAtUser
+    //       = Walker->getClobberingMemoryAccess(UserMU);
 
-    if (allUserGood) {
-      canCache = true;
-    }
+    //       if (DefAtLoad == DefAtUser) {
+    //         // ——在 LI 和 UsrI 之间，没有其他 Store 改写这块内存——
+    //         // LI 加载的值和 UsrI 处读取的值是相同的
+    //       } else {
+    //         // 之间被某个 Store（或 MemoryDef）修改过
+    //         allUserGood = false;
+    //       }
+    //     }
+    //   }
+    // }
+
+    // if (allUserGood) {
+    //   canCache = true;
+    // }
 
   } else if (onlyUsedInCurrentBlock(Inst) || isAddrOf(&Expr)) {
     canCache = true;
@@ -862,40 +968,8 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
   if (canCache) {
     ExprMap[&V] = &Expr; // wait to be folded
   } else {
-    // Create a local variable for it, in order to be faithful to the IR.
-    auto Name = getValueNamer().getTempName(Inst);
-
-    llvm::SmallString<128> Buf;
-    clang::IdentifierInfo *II2 = getIdentifierInfo(Name);
-    auto Ty = TB.getTypeL(&Inst, nullptr, -1);
-    if (Ty->canDecayToPointerType()) {
-      Ty = Ctx.getASTContext().getDecayedType(Ty);
-    }
-    clang::VarDecl *Decl = clang::VarDecl::Create(
-        getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
-        II2, Ty, nullptr, clang::SC_None);
-
-    // Decl->setInit(&Expr);
-    clang::DeclStmt *DS = new (getASTContext())
-        clang::DeclStmt(clang::DeclGroupRef(Decl), clang::SourceLocation(),
-                        clang::SourceLocation());
-    VarDecls.push_back(DS);
-    clang::Expr *assign = createBinaryOperator(
-        getASTContext(), makeDeclRefExpr(Decl), TB.checkCast(&Expr, Ty),
-        clang::BO_Assign, Decl->getType(), clang::VK_LValue);
-
-    // Use Assign stmt
-    // clang::DeclRefExpr *ref = clang::DeclRefExpr::Create(
-    //     getASTContext(), clang::NestedNameSpecifierLoc(),
-    //     clang::SourceLocation(), decl, false,
-    //     clang::DeclarationNameInfo(II2, clang::SourceLocation()),
-    //     expr->getType(), clang::VK_LValue);
-    // // assign stmt
-    // clang::Stmt *DS = createBinaryOperator(
-    //     getASTContext(), ref, expr, clang::BO_Assign,
-    //     expr->getType(), clang::VK_PRValue);
-    block.appendStmt(assign);
-    ExprMap[&V] = makeDeclRefExpr(Decl);
+    auto Cache = cacheExpr(Inst, &Expr, Block);
+    ExprMap[&V] = Cache;
   }
 }
 
@@ -1109,7 +1183,8 @@ void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
 void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {
   assert(I.getNumSuccessors() > 2 &&
          "CFGBuilder.visitSwitchInst: SwitchInst with less than 2 successors?");
-  Blk->setTerminator(SwitchTerminator(EB.visitValue(I.getCondition(), &I, 0)));
+  FCtx.setTerminator(
+      *Blk, SwitchTerminator(EB.visitValue(I.getCondition(), &I, 0)), I);
   // Add case expressions
   auto cases = std::get_if<SwitchTerminator>(&Blk->getTerminator());
   long ind = 0;

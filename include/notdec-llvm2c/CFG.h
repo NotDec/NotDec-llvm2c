@@ -14,6 +14,7 @@
 #include <cassert>
 #include <deque>
 #include <list>
+#include <llvm/Support/Casting.h>
 #include <memory>
 #include <set>
 #include <utility>
@@ -437,6 +438,14 @@ public:
   void appendElement(CFGElement statement) { Elements.push_back(statement); }
   bool has_switch() const {
     return std::holds_alternative<SwitchTerminator>(Terminator);
+  }
+
+  // allows load inst to create tmp var lazily
+  void updateStmt(size_t Ind, Stmt* St) {
+    assert(Ind < Elements.size());
+    assert(Elements[Ind].getKind() == CFGStmt::Statement);
+    assert(llvm::isa<clang::NullStmt>(Elements[Ind].getAs<CFGStmt>()->getStmt()));
+    Elements[Ind] = CFGStmt(St);
   }
 };
 

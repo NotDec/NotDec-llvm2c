@@ -2,9 +2,10 @@
 #define _NOTDEC_BACKEND_STRUCTURAL_H_
 
 #include <cassert>
-#include <llvm/IR/PassManager.h>
+#include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include <clang/Analysis/CFG.h>
 #include <clang/Basic/LLVM.h>
 #include <clang/Basic/LangOptions.h>
+#include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
 #include <clang/Tooling/Tooling.h>
 #include <llvm/ADT/BitVector.h>
@@ -31,11 +33,14 @@
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/Value.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include "ASTManager.h"
+#include "notdec-llvm2c/CCodeTransform.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Interface.h"
 #include "notdec-llvm2c/TypeManager.h"
@@ -43,6 +48,7 @@
 
 namespace notdec::llvm2c {
 class ExprBuilder;
+class CFGBuilder;
 
 void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                     HTypeResult &HT, const char *DebugDir);
@@ -110,7 +116,7 @@ protected:
                                unsigned int &id);
   void escapeBuf();
   bool isAllUnderline() {
-    for (auto c: Buf) {
+    for (auto c : Buf) {
       if (c != '_') {
         return false;
       }
@@ -316,6 +322,51 @@ public:
                                          long OpInd);
 };
 
+class LoadExprCreater {
+  clang::Expr *Cached = nullptr;
+  CFGBuilder &Parent;
+  size_t Ind;
+  llvm::LoadInst &Load;
+  clang::Expr *E;
+
+public:
+  LoadExprCreater(size_t Ind, CFGBuilder &Parent, llvm::LoadInst &Load,
+                  clang::Expr *E)
+      : Parent(Parent), Ind(Ind), Load(Load), E(E) {}
+
+  clang::Expr *getSafeExpr();
+  bool canClone(llvm::Instruction *InsertLoc);
+};
+
+class LoadCloneRewriter : public StmtTransform<LoadCloneRewriter> {
+  std::map<clang::Expr *, LoadExprCreater> &LoadInfoMap;
+  llvm::Instruction &InsertFor;
+
+public:
+  LoadCloneRewriter(ASTContext &Ctx,
+                    std::map<clang::Expr *, LoadExprCreater> &LoadInfoMap,
+                    llvm::Instruction &InsertFor)
+      : StmtTransform(Ctx), LoadInfoMap(LoadInfoMap), InsertFor(InsertFor) {}
+
+  StmtResult TransformStmt(Stmt *S, StmtDiscardKind SDK = SDK_Discarded) {
+    // 如果对应的是Load指令
+    if (!llvm::isa<Expr>(S)) {
+      return StmtTransform<LoadCloneRewriter>::TransformStmt(S, SDK);
+    }
+    auto *E = llvm::cast<Expr>(S);
+    if (!LoadInfoMap.count(E)) {
+      return StmtTransform<LoadCloneRewriter>::TransformStmt(S, SDK);
+    }
+    auto &LEC = LoadInfoMap.at(E);
+    // 判断是否可以clone到当前位置。
+    if (LEC.canClone(&InsertFor)) {
+      return StmtTransform<LoadCloneRewriter>::TransformStmt(S, SDK);
+    } else {
+      return LEC.getSafeExpr();
+    }
+  }
+};
+
 /// Structural analysis context for a function.
 class SAFuncContext {
   SAContext &Ctx;
@@ -333,6 +384,7 @@ class SAFuncContext {
   // For checking local names (of variables, labels) are used or not.
   std::unique_ptr<llvm::StringSet<>> Names;
   std::vector<clang::Stmt *> VarDecls;
+  std::map<clang::Expr *, LoadExprCreater> LoadInfoMap;
 
 public:
   SAFuncContext(SAContext &ctx, llvm::Function &func,
@@ -340,6 +392,20 @@ public:
 
   // Main interface for CFGBuilder to add an expression for an instruction.
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block);
+  // Special Logic for LoadInst: MemorySSA when expr inserted. lazy tmp
+  // variable.
+  void addLoadExpr(llvm::LoadInst &I, clang::Expr *Exp, LoadExprCreater &C) {
+    auto It = LoadInfoMap.insert({Exp, C});
+    assert(It.second);
+    addMapping(&I, *Exp);
+  }
+  clang::Expr *cacheExpr(llvm::Instruction &Inst, clang::Expr *ToCache,
+                         CFGBlock &block,
+                         std::optional<size_t> Slot = std::nullopt);
+  void addStmt(CFGBlock &block, clang::Stmt &Stmt, llvm::Instruction &InsertLoc,
+               std::optional<size_t> Slot = std::nullopt);
+  void setTerminator(CFGBlock &block, CFGTerminator Term,
+                     llvm::Instruction &InsertLoc);
   /// Directly register the mapping from llvm value to clang expr. Do not use
   /// this and use addExprOrStmt instead most of the time.
   void addMapping(ExtValuePtr V, clang::Expr &Expr) {
@@ -369,6 +435,7 @@ public:
     return *b;
   }
   llvm::BasicBlock *getBlock(CFGBlock &bb) { return cfg2ll.at(&bb); }
+  llvm::FunctionAnalysisManager &getFAM() { return FAM; }
   const Options &getOpts() const;
   void run();
 };
@@ -771,7 +838,8 @@ public:
   // edges are added separately
   void visitBranchInst(llvm::BranchInst &I) {
     if (I.isConditional()) {
-      Blk->setTerminator(EB.visitValue(I.getCondition(), &I, 0));
+      FCtx.setTerminator(
+          *Blk, BranchTerminator(EB.visitValue(I.getCondition(), &I, 0)), I);
     }
   }
   void visitBinaryOperator(llvm::BinaryOperator &I);
@@ -795,6 +863,13 @@ public:
   CFGBuilder(SAFuncContext &FCtx, std::vector<clang::Stmt *> &VarDecls)
       : Ctx(FCtx.getASTContext()), FCtx(FCtx), EB(FCtx), VarDecls(VarDecls) {}
   void setBlock(CFGBlock *blk) { Blk = blk; }
+
+  SAFuncContext &getFCtx() { return FCtx; }
+  CFGBlock *getBlk() { return Blk; }
+  size_t allocateSlot() {
+    Blk->appendStmt(new (Ctx) clang::NullStmt(clang::SourceLocation()));
+    return Blk->size() - 1;
+  }
 };
 
 // ============
