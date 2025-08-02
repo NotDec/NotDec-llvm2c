@@ -82,18 +82,18 @@ public:
 
 #define STMT(Node, Parent)                                                     \
   StmtResult Transform##Node(Node *S) {                                        \
-    llvm::errs() << "Unimplemented: Transform##Node";                          \
+    llvm::errs() << "Unimplemented: Transform##Node\n";                        \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #define VALUESTMT(Node, Parent)                                                \
   StmtResult Transform##Node(Node *S, StmtDiscardKind SDK) {                   \
-    llvm::errs() << "Unimplemented: Transform##Node";                          \
+    llvm::errs() << "Unimplemented: Transform##Node\n";                        \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #define ABSTRACT_STMT(Stmt)
 #define EXPR(Node, Parent)                                                     \
   ExprResult Transform##Node(Node *E) {                                        \
-    llvm::errs() << "Unimplemented: Transform##Node";                          \
+    llvm::errs() << "Unimplemented: Transform##Node\n";                        \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #include "clang/AST/StmtNodes.inc"
@@ -161,10 +161,47 @@ ExprResult StmtTransformBase<Derived>::TransformExpr(Expr *E) {
 // For all stmts, recursive transform its sub-stmt or sub-expr, check if is old
 // value(pointer equal), if not, we reconstruct the node using
 // getDerived().TransformStmt.
+// !! Use TransformStmt instead of TransformExpr
 template <typename Derived>
 class StmtTransform : public StmtTransformBase<Derived> {
 public:
   StmtTransform(ASTContext &Context) : StmtTransformBase<Derived>(Context) {}
+  bool AlwaysRebuild() { return false; }
+
+  StmtResult TransformReturnStmt(clang::ReturnStmt *S) {
+    auto OldVal = S->getRetValue();
+    ActionResult<clang::Expr *> ValR = this->getDerived().TransformStmt(OldVal);
+    if (ValR.isInvalid())
+      return StmtError();
+    auto Val = ValR.get();
+    if (OldVal == Val) {
+      return S;
+    } else {
+      return clang::ReturnStmt::Create(this->Context, S->getReturnLoc(), Val,
+                                       S->getNRVOCandidate());
+    }
+  }
+
+  ExprResult TransformDeclRefExpr(clang::DeclRefExpr *E) { return E; }
+
+  ExprResult TransformBinaryOperator(clang::BinaryOperator *E) {
+    ExprResult LHS = this->getDerived().TransformStmt(E->getLHS());
+    if (LHS.isInvalid())
+      return ExprError();
+    ExprResult RHS = this->getDerived().TransformStmt(E->getRHS());
+    if (RHS.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && LHS.get() == E->getLHS() &&
+        RHS.get() == E->getRHS())
+      return E;
+
+    return BinaryOperator::Create(this->Context, LHS.get(), RHS.get(), E->getOpcode(), E->getType(), E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(), E->getStoredFPFeatures());
+  }
+
+  ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) {
+    return E;
+  }
 };
 
 } // namespace notdec::llvm2c

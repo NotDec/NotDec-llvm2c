@@ -473,6 +473,8 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
 
   Ptr1 = deref(Ctx, Ptr1);
 
+  // TODO: 尝试重写Ptr1，确保其指针唯一。
+
   // 获取一个槽位用来放临时表达式
   auto Ind = allocateSlot();
 

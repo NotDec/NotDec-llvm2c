@@ -28,7 +28,10 @@ void StmtPrinter::PrintRawDeclStmt(const DeclStmt *S) {
   Decl::printGroup(Decls.data(), Decls.size(), OS, Policy, IndentLevel);
 }
 
-void StmtPrinter::VisitNullStmt(NullStmt *Node) { Indent() << ";" << NL; }
+void StmtPrinter::VisitNullStmt(NullStmt *Node) { 
+  // used by load inst slot allocation.
+  // Indent() << ";" << NL;
+}
 
 void StmtPrinter::VisitDeclStmt(DeclStmt *Node) {
   Indent();
