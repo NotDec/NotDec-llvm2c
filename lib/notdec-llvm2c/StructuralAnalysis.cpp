@@ -474,6 +474,11 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   Ptr1 = deref(Ctx, Ptr1);
 
   // TODO: 尝试重写Ptr1，确保其指针唯一。
+  SimpleRewriter SR(Ctx);
+  auto R = SR.TransformExpr(Ptr1);
+  assert(!R.isInvalid());
+  Ptr1 = R.get();
+  assert(Ptr1 != nullptr);
 
   // 获取一个槽位用来放临时表达式
   auto Ind = allocateSlot();

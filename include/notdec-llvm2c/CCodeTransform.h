@@ -164,13 +164,16 @@ ExprResult StmtTransformBase<Derived>::TransformExpr(Expr *E) {
 // !! Use TransformStmt instead of TransformExpr
 template <typename Derived>
 class StmtTransform : public StmtTransformBase<Derived> {
+  bool IsAlwaysRebuild = false;
+
 public:
-  StmtTransform(ASTContext &Context) : StmtTransformBase<Derived>(Context) {}
-  bool AlwaysRebuild() { return false; }
+  StmtTransform(ASTContext &Context, bool IsAlwaysRebuild = false)
+      : StmtTransformBase<Derived>(Context), IsAlwaysRebuild(IsAlwaysRebuild) {}
+  bool AlwaysRebuild() { return IsAlwaysRebuild; }
 
   StmtResult TransformReturnStmt(clang::ReturnStmt *S) {
     auto OldVal = S->getRetValue();
-    ActionResult<clang::Expr *> ValR = this->getDerived().TransformStmt(OldVal);
+    ActionResult<clang::Expr *> ValR = this->getDerived().TransformExpr(OldVal);
     if (ValR.isInvalid())
       return StmtError();
     auto Val = ValR.get();
@@ -185,10 +188,10 @@ public:
   ExprResult TransformDeclRefExpr(clang::DeclRefExpr *E) { return E; }
 
   ExprResult TransformBinaryOperator(clang::BinaryOperator *E) {
-    ExprResult LHS = this->getDerived().TransformStmt(E->getLHS());
+    ExprResult LHS = this->getDerived().TransformExpr(E->getLHS());
     if (LHS.isInvalid())
       return ExprError();
-    ExprResult RHS = this->getDerived().TransformStmt(E->getRHS());
+    ExprResult RHS = this->getDerived().TransformExpr(E->getRHS());
     if (RHS.isInvalid())
       return ExprError();
 
@@ -196,12 +199,20 @@ public:
         RHS.get() == E->getRHS())
       return E;
 
-    return BinaryOperator::Create(this->Context, LHS.get(), RHS.get(), E->getOpcode(), E->getType(), E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(), E->getStoredFPFeatures());
+    return BinaryOperator::Create(
+        this->Context, LHS.get(), RHS.get(), E->getOpcode(), E->getType(),
+        E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
+        E->getStoredFPFeatures());
   }
 
-  ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) {
-    return E;
-  }
+  ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
+};
+
+// a simple class that always rewrite the stmt;
+class SimpleRewriter : public StmtTransform<SimpleRewriter> {
+public:
+  SimpleRewriter(ASTContext &Context)
+      : StmtTransform<SimpleRewriter>(Context, true) {}
 };
 
 } // namespace notdec::llvm2c

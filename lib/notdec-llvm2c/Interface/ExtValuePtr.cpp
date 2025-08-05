@@ -1,5 +1,7 @@
 #include "notdec-llvm2c/Interface/ExtValuePtr.h"
 #include "notdec-llvm2c/Interface/ValueNamer.h"
+#include <llvm/IR/Function.h>
+#include <llvm/Support/Casting.h>
 
 namespace notdec {
 
@@ -9,7 +11,14 @@ std::string toString(const ExtValuePtr &Val, bool Verbose) {
   std::string Ret;
   llvm::raw_string_ostream OS(Ret);
   if (auto V = std::get_if<llvm::Value *>(&Val)) {
-    OS << "Value: " << **V;
+    if (*V == nullptr) {
+      return "Value: nullptr";
+    }
+    if (auto F = llvm::dyn_cast<llvm::Function>(*V)) {
+      OS << "Func: " << F->getName();
+    } else {
+      OS << "Value: " << **V;
+    }
     if (Verbose) {
       llvm::Function *F = nullptr;
       if (auto I = llvm::dyn_cast<llvm::Instruction>(*V)) {
