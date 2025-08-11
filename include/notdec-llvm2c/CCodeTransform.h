@@ -82,18 +82,18 @@ public:
 
 #define STMT(Node, Parent)                                                     \
   StmtResult Transform##Node(Node *S) {                                        \
-    llvm::errs() << "Unimplemented: Transform##Node\n";                        \
+    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";                        \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #define VALUESTMT(Node, Parent)                                                \
   StmtResult Transform##Node(Node *S, StmtDiscardKind SDK) {                   \
-    llvm::errs() << "Unimplemented: Transform##Node\n";                        \
+    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";                        \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #define ABSTRACT_STMT(Stmt)
 #define EXPR(Node, Parent)                                                     \
   ExprResult Transform##Node(Node *E) {                                        \
-    llvm::errs() << "Unimplemented: Transform##Node\n";                        \
+    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";                        \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #include "clang/AST/StmtNodes.inc"
