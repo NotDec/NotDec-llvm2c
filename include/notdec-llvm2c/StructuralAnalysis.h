@@ -348,19 +348,15 @@ public:
                     llvm::Instruction &InsertFor)
       : StmtTransform(Ctx), LoadInfoMap(LoadInfoMap), InsertFor(InsertFor) {}
 
-  StmtResult TransformStmt(Stmt *S, StmtDiscardKind SDK = SDK_Discarded) {
+  ExprResult TransformExpr(Expr *E) {
     // 如果对应的是Load指令
-    if (!llvm::isa<Expr>(S)) {
-      return StmtTransform<LoadCloneRewriter>::TransformStmt(S, SDK);
-    }
-    auto *E = llvm::cast<Expr>(S);
     if (!LoadInfoMap.count(E)) {
-      return StmtTransform<LoadCloneRewriter>::TransformStmt(S, SDK);
+      return StmtTransform<LoadCloneRewriter>::TransformExpr(E);
     }
     auto &LEC = LoadInfoMap.at(E);
     // 判断是否可以clone到当前位置。
     if (LEC.canClone(&InsertFor)) {
-      return StmtTransform<LoadCloneRewriter>::TransformStmt(S, SDK);
+      return StmtTransform<LoadCloneRewriter>::TransformExpr(E);
     } else {
       return LEC.getSafeExpr();
     }

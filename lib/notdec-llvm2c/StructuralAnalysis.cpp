@@ -491,18 +491,53 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   // addExprOrStmt(I, *Ptr1);
 }
 
+// Checks if this->Load can be moved to InsertLoc
 bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
+  if (this->Load.isVolatile()) {
+    return false;
+  }
   auto &FCtx = Parent.getFCtx();
   // 获得MemorySSA，然后分析
   auto &MSSAR =
       FCtx.getFAM().getResult<llvm::MemorySSAAnalysis>(FCtx.getFunction());
   auto &MSSA = MSSAR.getMSSA();
+  // MSSA.ensureOptimizedUses();
   auto Walker = MSSA.getWalker();
+
+  llvm::MemoryLocation Loc = llvm::MemoryLocation::get(&Load);
+
   llvm::MemoryUse *LoadMU = cast<llvm::MemoryUse>(MSSA.getMemoryAccess(&Load));
-  llvm::MemoryAccess *UserMA = MSSA.getMemoryAccess(InsertLoc);
-  auto *UserMU = dyn_cast<llvm::MemoryUse>(UserMA);
+  llvm::MemoryAccess *UserMA = nullptr;
+  auto UserMA1 = MSSA.getMemoryAccess(InsertLoc);
+  if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
+    UserMA = UserMA1;
+  }
+  if (UserMA == nullptr) {
+    // Walk backward to find the most recent memory access in the block
+    llvm::BasicBlock *BB = InsertLoc->getParent();
+    auto It = InsertLoc->getIterator();
+    while (It != BB->begin()) {
+      --It;
+      auto UserMA1 = MSSA.getMemoryAccess(&*It);
+      if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
+        UserMA = UserMA1;
+      }
+      if (UserMA)
+        break;
+    }
+    // If still nullptr, get the MemoryPhi for the block (if any)
+    if (!UserMA) {
+      auto UserMA1 = MSSA.getMemoryAccess(BB);
+      if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
+        UserMA = UserMA1;
+      }
+    }
+    assert(UserMA != nullptr);
+  }
+  // auto *UserMU = dyn_cast<llvm::MemoryUse>(UserMA);
   llvm::MemoryAccess *DefAtLoad = Walker->getClobberingMemoryAccess(LoadMU);
-  llvm::MemoryAccess *DefAtUser = Walker->getClobberingMemoryAccess(UserMU);
+  llvm::MemoryAccess *DefAtUser =
+      Walker->getClobberingMemoryAccess(UserMA, Loc);
   if (DefAtLoad == DefAtUser) {
     return true; // Good to reuse
   } else {

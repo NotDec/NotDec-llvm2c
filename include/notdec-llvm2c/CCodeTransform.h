@@ -82,18 +82,18 @@ public:
 
 #define STMT(Node, Parent)                                                     \
   StmtResult Transform##Node(Node *S) {                                        \
-    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";                        \
+    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";               \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #define VALUESTMT(Node, Parent)                                                \
   StmtResult Transform##Node(Node *S, StmtDiscardKind SDK) {                   \
-    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";                        \
+    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";               \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #define ABSTRACT_STMT(Stmt)
 #define EXPR(Node, Parent)                                                     \
   ExprResult Transform##Node(Node *E) {                                        \
-    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";                        \
+    llvm::errs() << "Unimplemented: Transform" << #Node << "\n";               \
     assert(false && "Unimplemented StmtTransform!");                           \
   }
 #include "clang/AST/StmtNodes.inc"
@@ -185,7 +185,17 @@ public:
     }
   }
 
-  ExprResult TransformDeclRefExpr(clang::DeclRefExpr *E) { return E; }
+  ExprResult TransformDeclRefExpr(clang::DeclRefExpr *E) {
+    if (!this->getDerived().AlwaysRebuild())
+      return E;
+    clang::ValueDecl *D = E->getDecl();
+    clang::QualType Type = D->getType().getNonReferenceType();
+    clang::DeclRefExpr *NewE = clang::DeclRefExpr::Create(
+        this->Context, E->getQualifierLoc(), E->getTemplateKeywordLoc(), D,
+        E->refersToEnclosingVariableOrCapture(),
+        E->getLocation(), Type, E->getValueKind());
+    return NewE;
+  }
 
   ExprResult TransformBinaryOperator(clang::BinaryOperator *E) {
     ExprResult LHS = this->getDerived().TransformExpr(E->getLHS());
@@ -202,7 +212,104 @@ public:
     return BinaryOperator::Create(
         this->Context, LHS.get(), RHS.get(), E->getOpcode(), E->getType(),
         E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
-        E->getStoredFPFeatures());
+        E->getFPFeatures(this->Context.getLangOpts()));
+  }
+
+  ExprResult TransformMemberExpr(clang::MemberExpr *E) {
+    ExprResult B = this->getDerived().TransformExpr(E->getBase());
+    if (B.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && B.get() == E->getBase())
+      return E;
+
+    return MemberExpr::Create(
+        this->Context, B.get(), E->isArrow(), E->getOperatorLoc(),
+        E->getQualifierLoc(), E->getTemplateKeywordLoc(), E->getMemberDecl(),
+        E->getFoundDecl(), E->getMemberNameInfo(), nullptr, E->getType(),
+        E->getValueKind(), E->getObjectKind(), E->isNonOdrUse());
+  }
+
+  ExprResult TransformUnaryOperator(clang::UnaryOperator *E) {
+    ExprResult SE = this->getDerived().TransformExpr(E->getSubExpr());
+    if (SE.isInvalid())
+      return ExprError();
+    if (!this->getDerived().AlwaysRebuild() && SE.get() == E->getSubExpr())
+      return E;
+    return UnaryOperator::Create(
+        this->Context, SE.get(), E->getOpcode(), E->getType(),
+        E->getValueKind(), E->getObjectKind(), E->getSourceRange().getBegin(),
+        E->canOverflow(), E->getFPOptionsOverride());
+  }
+
+  ExprResult TransformCallExpr(clang::CallExpr *E) {
+    SmallVector<Expr *, 8> Args;
+    bool AllArgsEqual = true;
+    for (auto *Arg : E->arguments()) {
+      ExprResult R = this->getDerived().TransformExpr(Arg);
+      if (R.isInvalid())
+        return ExprError();
+      if (R.get() != Arg) {
+        AllArgsEqual = false;
+      }
+      Args.push_back(R.get());
+    }
+
+    ExprResult C = this->getDerived().TransformExpr(E->getCallee());
+    if (C.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && C.get() == E->getCallee() &&
+        AllArgsEqual)
+      return E;
+
+    return CallExpr::Create(this->Context, C.get(), Args, E->getType(),
+                            E->getValueKind(), E->getRParenLoc(),
+                            E->getFPFeatures(), 0, E->getADLCallKind());
+  }
+
+  ExprResult TransformCStyleCastExpr(clang::CStyleCastExpr *E) {
+    ExprResult Sub = this->getDerived().TransformExpr(E->getSubExpr());
+    if (Sub.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && Sub.get() == E->getSubExpr())
+      return E;
+
+    return CStyleCastExpr::Create(
+        this->Context, E->getType(), E->getValueKind(), E->getCastKind(),
+        Sub.get(), nullptr, E->getFPFeatures(), E->getTypeInfoAsWritten(),
+        E->getLParenLoc(), E->getRParenLoc());
+  }
+
+  ExprResult TransformImplicitCastExpr(clang::ImplicitCastExpr *E) {
+    ExprResult Sub = this->getDerived().TransformExpr(E->getSubExpr());
+    if (Sub.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && Sub.get() == E->getSubExpr())
+      return E;
+
+    return ImplicitCastExpr::Create(this->Context, E->getType(),
+                                    E->getCastKind(), Sub.get(), nullptr,
+                                    E->getValueKind(), E->getFPFeatures());
+  }
+
+  ExprResult TransformArraySubscriptExpr(clang::ArraySubscriptExpr *E) {
+    ExprResult Base = this->getDerived().TransformExpr(E->getBase());
+    if (Base.isInvalid())
+      return ExprError();
+    ExprResult Idx = this->getDerived().TransformExpr(E->getIdx());
+    if (Idx.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && Base.get() == E->getBase() &&
+        Idx.get() == E->getIdx())
+      return E;
+
+    return new (this->Context) ArraySubscriptExpr(
+        Base.get(), Idx.get(), E->getType(), E->getValueKind(),
+        E->getObjectKind(), E->getRBracketLoc());
   }
 
   ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
