@@ -9,9 +9,12 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
 #include <clang/Frontend/ASTUnit.h>
+#include <llvm/Analysis/MemorySSA.h>
+#include <llvm/IR/AssemblyAnnotationWriter.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/Debug.h>
+#include <llvm/Support/FormattedStream.h>
 
 namespace notdec::llvm2c {
 extern const char *KIND_STACK_POINTER;
@@ -21,7 +24,7 @@ unsigned getLLVMTypeSize(llvm::Type *Ty, unsigned PointerSizeInBits = 0);
 std::string join(std::string path, std::string elem);
 void printModule(llvm::Module &M, const char *path);
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName);
-clang::QualType getBoolTy(clang::ASTContext& Ctx);
+clang::QualType getBoolTy(clang::ASTContext &Ctx);
 
 // ===============
 // Pass
@@ -284,7 +287,8 @@ clang::Expr *createMemberExpr(clang::ASTContext &Ctx, clang::Expr *Base,
 clang::Expr *getDerefInner(clang::Expr *E);
 clang::Expr *getAddrofInner(clang::Expr *E);
 
-clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E, bool NoElimMember = false);
+clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E,
+                    bool NoElimMember = false);
 clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E);
 
 // dump LLVM object to string
@@ -316,6 +320,54 @@ inline std::string clangObjToString(clang::QualType Ty) {
   Ty.print(outstream, clang::PrintingPolicy(lo));
   return out_str;
 }
+
+/// An assembly annotator class to print Memory SSA information in
+/// comments.
+class MemorySSAAnnotatedWriter : public llvm::AssemblyAnnotationWriter {
+  const llvm::MemorySSA *MSSA;
+
+public:
+  MemorySSAAnnotatedWriter(const llvm::MemorySSA *M) : MSSA(M) {}
+
+  void emitBasicBlockStartAnnot(const llvm::BasicBlock *BB,
+                                llvm::formatted_raw_ostream &OS) override {
+    if (llvm::MemoryAccess *MA = MSSA->getMemoryAccess(BB))
+      OS << "; " << *MA << "\n";
+  }
+
+  void emitInstructionAnnot(const llvm::Instruction *I,
+                            llvm::formatted_raw_ostream &OS) override {
+    if (llvm::MemoryAccess *MA = MSSA->getMemoryAccess(I))
+      OS << "; " << *MA << "\n";
+  }
+};
+
+/// An assembly annotator class to print Memory SSA information in
+/// comments.
+class MemorySSAWalkerAnnotatedWriter : public llvm::AssemblyAnnotationWriter {
+  llvm::MemorySSA *MSSA;
+  llvm::MemorySSAWalker *Walker;
+
+public:
+  MemorySSAWalkerAnnotatedWriter(llvm::MemorySSA *M)
+      : MSSA(M), Walker(M->getWalker()) {}
+
+  void emitInstructionAnnot(const llvm::Instruction *I,
+                            llvm::formatted_raw_ostream &OS) override {
+    if (llvm::MemoryAccess *MA = MSSA->getMemoryAccess(I)) {
+      llvm::MemoryAccess *Clobber = Walker->getClobberingMemoryAccess(MA);
+      OS << "; " << *MA;
+      if (Clobber) {
+        OS << " - clobbered by ";
+        if (MSSA->isLiveOnEntryDef(Clobber))
+          OS << "liveOnEntry";
+        else
+          OS << *Clobber;
+      }
+      OS << "\n";
+    }
+  }
+};
 
 } // namespace notdec::llvm2c
 #endif

@@ -491,8 +491,11 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   // addExprOrStmt(I, *Ptr1);
 }
 
-// Checks if this->Load can be moved to InsertLoc
+// Checks if this->Load can be moved before InsertLoc
 bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
+  if (&this->Load == InsertLoc) {
+     return true;
+  }
   if (this->Load.isVolatile()) {
     return false;
   }
@@ -518,6 +521,10 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
     auto It = InsertLoc->getIterator();
     while (It != BB->begin()) {
       --It;
+      // if we met the load inst without any memory def in the middle.
+      if (&*It == &this->Load) {
+        return true;
+      }
       auto UserMA1 = MSSA.getMemoryAccess(&*It);
       if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
         UserMA = UserMA1;
@@ -525,12 +532,22 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
       if (UserMA)
         break;
     }
-    // If still nullptr, get the MemoryPhi for the block (if any)
+    // If still nullptr, get for the block (if any)
     if (!UserMA) {
       auto UserMA1 = MSSA.getMemoryAccess(BB);
-      if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
-        UserMA = UserMA1;
+      if (UserMA1) {
+        if (isa<llvm::MemoryUse>(UserMA1)) {
+          UserMA = Walker->getClobberingMemoryAccess(UserMA1);
+        } else {
+          UserMA = UserMA1;
+        }
       }
+    }
+    if (UserMA == nullptr) {
+      llvm::errs() << "Cannot find memory SSA for this inst!\n";
+      MemorySSAAnnotatedWriter MSSAW(&MSSA);
+      BB->getParent()->print(llvm::errs(), &MSSAW);
+      llvm::errs() << "We are checking if " << this->Load << " can be moved before " << *InsertLoc << "!\n";
     }
     assert(UserMA != nullptr);
   }
