@@ -312,6 +312,17 @@ public:
         E->getObjectKind(), E->getRBracketLoc());
   }
 
+  ExprResult TransformParenExpr(clang::ParenExpr *E) {
+    ExprResult Sub = this->getDerived().TransformExpr(E->getSubExpr());
+    if (Sub.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && Sub.get() == E->getSubExpr())
+      return E;
+
+    return new (this->Context) ParenExpr(E->getLParen(), E->getRParen(), Sub.get());
+  }
+
   ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
 };
 
