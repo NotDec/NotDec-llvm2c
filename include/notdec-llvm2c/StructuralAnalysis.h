@@ -324,18 +324,18 @@ public:
 
 class LoadExprCreater {
   clang::Expr *Cached = nullptr;
-  CFGBuilder &Parent;
+  SAFuncContext &FCtx;
+  CFGBlock &Blk;
   size_t Ind;
   llvm::LoadInst &Load;
   clang::Expr *E;
 
 public:
-  LoadExprCreater(size_t Ind, CFGBuilder &Parent, llvm::LoadInst &Load,
-                  clang::Expr *E)
-      : Parent(Parent), Ind(Ind), Load(Load), E(E) {}
+  LoadExprCreater(size_t Ind, SAFuncContext &FCtx, CFGBlock &blk,
+                  llvm::LoadInst &Load, clang::Expr *E);
 
   clang::Expr *getSafeExpr();
-  bool canClone(llvm::Instruction *InsertLoc);
+  bool canClone(llvm::Instruction *InsertBefore);
 };
 
 class LoadCloneRewriter : public StmtTransform<LoadCloneRewriter> {

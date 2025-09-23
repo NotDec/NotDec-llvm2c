@@ -484,22 +484,27 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   auto Ind = allocateSlot();
 
   // 调用专用函数，暂存到Map同时，存储相关Info
-  LoadExprCreater LEC(Ind, *this, I, Ptr1);
+  LoadExprCreater LEC(Ind, getFCtx(), *getBlk(), I, Ptr1);
   FCtx.addLoadExpr(I, Ptr1, LEC);
 
   // TODO然后去改addExprOrStmt里面加入语句的地方，都wrap起来。
   // addExprOrStmt(I, *Ptr1);
 }
 
+LoadExprCreater::LoadExprCreater(size_t Ind, SAFuncContext &FCtx, CFGBlock &Blk,
+                                 llvm::LoadInst &Load, clang::Expr *E)
+    : FCtx(FCtx), Blk(Blk), Ind(Ind), Load(Load), E(E) {
+  assert(Ind < Blk.size());
+}
+
 // Checks if this->Load can be moved before InsertLoc
 bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
   if (&this->Load == InsertLoc) {
-     return true;
+    return true;
   }
   if (this->Load.isVolatile()) {
     return false;
   }
-  auto &FCtx = Parent.getFCtx();
   // 获得MemorySSA，然后分析
   auto &MSSAR =
       FCtx.getFAM().getResult<llvm::MemorySSAAnalysis>(FCtx.getFunction());
@@ -511,14 +516,15 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
 
   llvm::MemoryUse *LoadMU = cast<llvm::MemoryUse>(MSSA.getMemoryAccess(&Load));
   llvm::MemoryAccess *UserMA = nullptr;
-  auto UserMA1 = MSSA.getMemoryAccess(InsertLoc);
-  if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
-    UserMA = UserMA1;
-  }
-  if (UserMA == nullptr) {
-    // Walk backward to find the most recent memory access in the block
-    llvm::BasicBlock *BB = InsertLoc->getParent();
-    auto It = InsertLoc->getIterator();
+  // Because we insert before, we do not need to consider it.
+  // auto UserMA1 = MSSA.getMemoryAccess(InsertLoc);
+  // if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
+  //   UserMA = UserMA1;
+  // }
+  // Walk backward to find the most recent memory access in the block
+  llvm::BasicBlock *BB = InsertLoc->getParent();
+  auto It = InsertLoc->getIterator();
+  while (UserMA == nullptr) {
     while (It != BB->begin()) {
       --It;
       // if we met the load inst without any memory def in the middle.
@@ -534,20 +540,25 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
     }
     // If still nullptr, get for the block (if any)
     if (!UserMA) {
-      auto UserMA1 = MSSA.getMemoryAccess(BB);
-      if (UserMA1) {
-        if (isa<llvm::MemoryUse>(UserMA1)) {
-          UserMA = Walker->getClobberingMemoryAccess(UserMA1);
-        } else {
-          UserMA = UserMA1;
-        }
+      UserMA = MSSA.getMemoryAccess(BB);
+    }
+    // If still nullptr, get from only dominator
+    if (!UserMA) {
+      if (auto Pred = BB->getSinglePredecessor()) {
+        BB = Pred;
+        It = Pred->end();
+        continue;
       }
+    }
+    if (UserMA) {
+      break;
     }
     if (UserMA == nullptr) {
       llvm::errs() << "Cannot find memory SSA for this inst!\n";
       MemorySSAAnnotatedWriter MSSAW(&MSSA);
       BB->getParent()->print(llvm::errs(), &MSSAW);
-      llvm::errs() << "We are checking if " << this->Load << " can be moved before " << *InsertLoc << "!\n";
+      llvm::errs() << "We are checking if " << this->Load
+                   << " can be moved before " << *InsertLoc << "!\n";
     }
     assert(UserMA != nullptr);
   }
@@ -558,7 +569,7 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
   if (DefAtLoad == DefAtUser) {
     return true; // Good to reuse
   } else {
-    return false; // Value updated!
+    return false; // Value updated! Cannot reuse.
   }
 }
 
@@ -566,8 +577,7 @@ clang::Expr *LoadExprCreater::getSafeExpr() {
   if (Cached) {
     return Cached;
   }
-  auto &FCtx = Parent.getFCtx();
-  auto DRef = FCtx.cacheExpr(Load, E, *Parent.getBlk(), Ind);
+  auto DRef = FCtx.cacheExpr(Load, E, Blk, Ind);
   this->Cached = DRef;
   return DRef;
 }

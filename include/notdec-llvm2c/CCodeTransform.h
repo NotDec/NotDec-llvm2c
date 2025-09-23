@@ -324,6 +324,8 @@ public:
   }
 
   ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
+
+  ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) { return E; }
 };
 
 // a simple class that always rewrite the stmt;

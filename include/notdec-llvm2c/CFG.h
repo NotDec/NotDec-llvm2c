@@ -442,7 +442,7 @@ public:
 
   // allows load inst to create tmp var lazily
   void updateStmt(size_t Ind, Stmt* St) {
-    assert(Ind < Elements.size());
+    assert(Ind < size());
     assert(Elements[Ind].getKind() == CFGStmt::Statement);
     assert(llvm::isa<clang::NullStmt>(Elements[Ind].getAs<CFGStmt>()->getStmt()));
     Elements[Ind] = CFGStmt(St);
