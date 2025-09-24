@@ -329,10 +329,11 @@ class LoadExprCreater {
   size_t Ind;
   llvm::LoadInst &Load;
   clang::Expr *E;
+  QualType Ty;
 
 public:
   LoadExprCreater(size_t Ind, SAFuncContext &FCtx, CFGBlock &blk,
-                  llvm::LoadInst &Load, clang::Expr *E);
+                  llvm::LoadInst &Load, clang::Expr *E, QualType Ty);
 
   clang::Expr *getSafeExpr();
   bool canClone(llvm::Instruction *InsertBefore);
@@ -387,7 +388,7 @@ public:
                 llvm::FunctionAnalysisManager &FAM);
 
   // Main interface for CFGBuilder to add an expression for an instruction.
-  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block);
+  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block, QualType Ty);
   // Special Logic for LoadInst: MemorySSA when expr inserted. lazy tmp
   // variable.
   void addLoadExpr(llvm::LoadInst &I, clang::Expr *Exp, LoadExprCreater &C) {
@@ -397,6 +398,7 @@ public:
   }
   clang::Expr *cacheExpr(llvm::Instruction &Inst, clang::Expr *ToCache,
                          CFGBlock &block,
+                         QualType Ty,
                          std::optional<size_t> Slot = std::nullopt);
   void addStmt(CFGBlock &block, clang::Stmt &Stmt, llvm::Instruction &InsertLoc,
                std::optional<size_t> Slot = std::nullopt);
@@ -779,9 +781,9 @@ protected:
     return FCtx.getTypeBuilder().getType(Val, User, OpInd);
   }
 
-  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt) {
+  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, QualType Ty = QualType()) {
     assert(Blk != nullptr && "Block can't be null!");
-    FCtx.addExprOrStmt(v, Stmt, *Blk);
+    FCtx.addExprOrStmt(v, Stmt, *Blk, Ty);
   }
 
 public:

@@ -621,7 +621,12 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E, bool NoElimMember) {
 
 clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
   // eliminate deref + addrOf
-  clang::Expr *ENoCast = getNoCast(E);
+  clang::Expr *ENoCast = E;
+  clang::CastExpr* Cast = nullptr;
+  // only when same size.
+  while ((Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) && (Ctx.getTypeSize(Cast->getType()) == Ctx.getTypeSize(ENoCast->getType()))) {
+    ENoCast = Cast->getSubExpr();
+  }
   if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
       llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
           clang::UO_AddrOf) {
@@ -636,6 +641,7 @@ clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
   // }
   clang::QualType Ty = E->getType();
   if (Ty->isPointerType()) {
+    assert(!Ty->isVoidPointerType());
     Ty = Ty->getPointeeType();
   } else if (Ty->isArrayType()) {
     Ty = Ty->castAsArrayTypeUnsafe()->getElementType();

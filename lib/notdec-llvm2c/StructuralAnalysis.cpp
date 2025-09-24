@@ -471,6 +471,8 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
     Ty = Ctx.getIntTypeForBitwidth(Size, true);
   }
 
+  assert(!Ty->isVoidType());
+  Ptr1 = getTypeBuilder().checkCast(Ptr1, Ctx.getPointerType(Ty));
   Ptr1 = deref(Ctx, Ptr1);
 
   // TODO: 尝试重写Ptr1，确保其指针唯一。
@@ -484,7 +486,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   auto Ind = allocateSlot();
 
   // 调用专用函数，暂存到Map同时，存储相关Info
-  LoadExprCreater LEC(Ind, getFCtx(), *getBlk(), I, Ptr1);
+  LoadExprCreater LEC(Ind, getFCtx(), *getBlk(), I, Ptr1, Ty);
   FCtx.addLoadExpr(I, Ptr1, LEC);
 
   // TODO然后去改addExprOrStmt里面加入语句的地方，都wrap起来。
@@ -492,8 +494,9 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
 }
 
 LoadExprCreater::LoadExprCreater(size_t Ind, SAFuncContext &FCtx, CFGBlock &Blk,
-                                 llvm::LoadInst &Load, clang::Expr *E)
-    : FCtx(FCtx), Blk(Blk), Ind(Ind), Load(Load), E(E) {
+                                 llvm::LoadInst &Load, clang::Expr *E,
+                                 QualType Ty)
+    : FCtx(FCtx), Blk(Blk), Ind(Ind), Load(Load), E(E), Ty(Ty) {
   assert(Ind < Blk.size());
 }
 
@@ -521,7 +524,8 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
   // if (UserMA1 && !isa<llvm::MemoryUse>(UserMA1)) {
   //   UserMA = UserMA1;
   // }
-  // Walk backward to find the most recent memory access in the block
+  // Walk backward to find the most recent memory access (non-MemoryUse) in the
+  // block. Because getClobberingMemoryAccess assert arg is not MemoryUse.
   llvm::BasicBlock *BB = InsertLoc->getParent();
   auto It = InsertLoc->getIterator();
   while (UserMA == nullptr) {
@@ -577,7 +581,7 @@ clang::Expr *LoadExprCreater::getSafeExpr() {
   if (Cached) {
     return Cached;
   }
-  auto DRef = FCtx.cacheExpr(Load, E, Blk, Ind);
+  auto DRef = FCtx.cacheExpr(Load, E, Blk, Ty, Ind);
   this->Cached = DRef;
   return DRef;
 }
@@ -641,6 +645,15 @@ clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
     lhs = castSigned(Ctx, TB, lhs);
   } else if (cv == Unsigned) {
     lhs = castUnsigned(Ctx, TB, lhs);
+  }
+  // ensure both pointer type or integer type, for eq and ne.
+  if (op == clang::BO_EQ || op == clang::BO_NE) {
+    if (lhs->getType()->isAnyPointerType() && !rhs->getType()->isAnyPointerType()) {
+      rhs = TB.checkCast(rhs, lhs->getType());
+    }
+    if (!lhs->getType()->isAnyPointerType() && rhs->getType()->isAnyPointerType()) {
+      lhs = TB.checkCast(lhs, rhs->getType());
+    }
   }
   cmp = createBinaryOperator(
       Ctx, lhs, rhs, *op, TB.getType(Result, nullptr, -1), clang::VK_PRValue);
@@ -913,13 +926,15 @@ ValueNamer &SAFuncContext::getValueNamer() {
 
 clang::Expr *SAFuncContext::cacheExpr(llvm::Instruction &Inst,
                                       clang::Expr *Expr, CFGBlock &block,
-                                      std::optional<size_t> Slot) {
+                                      QualType Ty, std::optional<size_t> Slot) {
   // Create a local variable for it, in order to be faithful to the IR.
   auto Name = getValueNamer().getTempName(Inst);
 
   llvm::SmallString<128> Buf;
   clang::IdentifierInfo *II2 = getIdentifierInfo(Name);
-  auto Ty = toLValueType(getASTContext(), Expr->getType());
+  if (Ty.isNull()) {
+    Ty = toLValueType(getASTContext(), Expr->getType());
+  }
   if (Ty->canDecayToPointerType()) {
     Ty = Ctx.getASTContext().getDecayedType(Ty);
   }
@@ -972,7 +987,7 @@ void SAFuncContext::setTerminator(CFGBlock &block, CFGTerminator Term,
 }
 
 void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
-                                  CFGBlock &Block) {
+                                  CFGBlock &Block, QualType Ty) {
   // non-instruction or expr-like instruction.
   if (!llvm::isa<llvm::Instruction>(&V) || llvm::isa<llvm::Argument>(&V)) {
     ExprMap[&V] = &llvm::cast<clang::Expr>(Stmt);
@@ -1037,7 +1052,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
   if (canCache) {
     ExprMap[&V] = &Expr; // wait to be folded
   } else {
-    auto Cache = cacheExpr(Inst, &Expr, Block);
+    auto Cache = cacheExpr(Inst, &Expr, Block, Ty);
     ExprMap[&V] = Cache;
   }
 }

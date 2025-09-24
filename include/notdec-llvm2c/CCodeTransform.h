@@ -326,6 +326,26 @@ public:
   ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
 
   ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) { return E; }
+
+  ExprResult TransformConditionalOperator(clang::ConditionalOperator *E) {
+    ExprResult Cond = this->getDerived().TransformExpr(E->getCond());
+    if (Cond.isInvalid())
+      return ExprError();
+    ExprResult LHS = this->getDerived().TransformExpr(E->getTrueExpr());
+    if (LHS.isInvalid())
+      return ExprError();
+    ExprResult RHS = this->getDerived().TransformExpr(E->getFalseExpr());
+    if (RHS.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() && Cond.get() == E->getCond() &&
+        LHS.get() == E->getTrueExpr() && RHS.get() == E->getFalseExpr())
+      return E;
+
+    return new (this->Context) ConditionalOperator(
+        Cond.get(), E->getQuestionLoc(), LHS.get(), E->getColonLoc(), RHS.get(),
+        E->getType(), E->getValueKind(), E->getObjectKind());
+  }
 };
 
 // a simple class that always rewrite the stmt;
