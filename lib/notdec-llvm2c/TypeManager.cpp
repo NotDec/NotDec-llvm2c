@@ -830,6 +830,10 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
   clang::QualType ValQTy = Base->getType();
   const clang::Type *ValTy = Base->getType().getTypePtr();
 
+  if (Base->getType()->isVoidPointerType()) {
+    return nullptr;
+  }
+
   // 1. pointer arithmetic is only allowed in the beginning, and only once.
   std::optional<int64_t> OffsetNum = getIntValue(Index);
   if (ValTy->isPointerType()) {
