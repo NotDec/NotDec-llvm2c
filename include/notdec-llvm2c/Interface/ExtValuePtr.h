@@ -1,3 +1,5 @@
+#include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instructions.h>
 #include <variant>
 
 #include <llvm/IR/Constants.h>
@@ -48,6 +50,28 @@ struct ConstantAddr {
   }
 };
 
+struct StackObject {
+  llvm::AllocaInst *Allocator;
+
+  bool operator<(const StackObject &rhs) const {
+    return std::tie(Allocator) < std::tie(rhs.Allocator);
+  }
+  bool operator==(const StackObject &rhs) const {
+    return !(*this < rhs) && !(rhs < *this);
+  }
+};
+
+struct HeapObject {
+  llvm::CallBase *Allocator;
+
+  bool operator<(const HeapObject &rhs) const {
+    return std::tie(Allocator) < std::tie(rhs.Allocator);
+  }
+  bool operator==(const HeapObject &rhs) const {
+    return !(*this < rhs) && !(rhs < *this);
+  }
+};
+
 // We cannot directly map llvm::Value* to Node, because we need to
 // differentiate/merge different constants. Extend Value* with some special
 // values.
@@ -58,7 +82,7 @@ struct ConstantAddr {
 // So, in general, for constant expr, we probably should always convert to
 // NodeKey instead of maintain the mapping
 using ExtValuePtr =
-    std::variant<llvm::Value *, ReturnValue, UConstant, ConstantAddr>;
+    std::variant<llvm::Value *, ReturnValue, UConstant, ConstantAddr, StackObject, HeapObject>;
 
 ExtValuePtr getExtValuePtr(llvm::Value *Val, llvm::User *User, long OpInd = -1);
 std::string getName(const ExtValuePtr &Val);
@@ -107,7 +131,7 @@ inline bool checkWrapped(ExtValuePtr &Val) {
   }
   return true;
 }
-} // namespace notdec
 
+} // namespace notdec
 
 #endif
