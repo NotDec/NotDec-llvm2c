@@ -111,9 +111,9 @@ inline void llvmValue2ExtVal(ExtValuePtr &Val, llvm::User *User, long OpInd) {
           }
         }
       }
-      assert(User != nullptr && "RetypdGenerator::getTypeVar: User is Null!");
+      assert(User != nullptr && "llvmValue2ExtVal: Constant User is Null!");
       assert(hasUser(*V, User) &&
-             "convertTypeVarVal: constant not used by user");
+             "llvmValue2ExtVal: constant not used by user");
       Val = UConstant{.Val = cast<Constant>(*V), .User = User, .OpInd = OpInd};
     }
   }

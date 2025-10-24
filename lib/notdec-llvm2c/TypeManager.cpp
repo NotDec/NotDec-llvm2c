@@ -89,7 +89,12 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
       if (IT->getBitSize() == 8) {
         return Ctx.CharTy;
       }
-      return Ctx.getIntTypeForBitwidth(IT->getBitSize(), IT->isSigned());
+      auto Ret = Ctx.getIntTypeForBitwidth(IT->getBitSize(), IT->isSigned());
+      if (Ret.isNull()) {
+        Ret = Ctx.getConstantArrayType(Ctx.CharTy, llvm::APInt(32, IT->getBitSize() / 8),
+                                       nullptr, clang::ArrayType::Normal, 0);
+      }
+      return Ret;
     } else if (auto *FT = llvm::dyn_cast<ast::FloatingType>(T)) {
       if (FT->getBitSize() == 32) {
         return Ctx.FloatTy;
