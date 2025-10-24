@@ -24,6 +24,7 @@ struct ReturnValue {
     return !(*this < rhs) && !(rhs < *this);
   }
 };
+
 /// Differentiate pointer-sized int constant. It can be pointer or int under
 /// different context.
 struct UConstant {
@@ -81,8 +82,8 @@ struct HeapObject {
 // 3. For Index into global variables like env.table@4, the case is the same.
 // So, in general, for constant expr, we probably should always convert to
 // NodeKey instead of maintain the mapping
-using ExtValuePtr =
-    std::variant<llvm::Value *, ReturnValue, UConstant, ConstantAddr, StackObject, HeapObject>;
+using ExtValuePtr = std::variant<llvm::Value *, ReturnValue, UConstant,
+                                 ConstantAddr, StackObject, HeapObject>;
 
 ExtValuePtr getExtValuePtr(llvm::Value *Val, llvm::User *User, long OpInd = -1);
 std::string getName(const ExtValuePtr &Val);

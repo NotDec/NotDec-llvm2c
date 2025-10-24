@@ -36,6 +36,10 @@ std::string toString(const ExtValuePtr &Val, bool Verbose) {
     OS << "IntConstant: " << *IC->Val << ", User: " << *IC->User;
   } else if (auto CA = std::get_if<ConstantAddr>(&Val)) {
     OS << "ConstantAddr: " << *CA->Val;
+  } else if (auto SO = std::get_if<StackObject>(&Val)) {
+    return "StackObject: " + ValueNamer::getName(*SO->Allocator);
+  } else if (auto HO = std::get_if<HeapObject>(&Val)) {
+    return "HeapObject: " + ValueNamer::getName(*HO->Allocator);
   } else {
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                  << "ERROR: getName: unhandled type of ExtValPtr\n";
@@ -59,7 +63,12 @@ llvm::Type *getType(const ExtValuePtr &Val) {
     return IC->Val->getType();
   } else if (auto CA = std::get_if<ConstantAddr>(&Val)) {
     return CA->Val->getType();
+  } else if (auto SO = std::get_if<StackObject>(&Val)) {
+    return SO->Allocator->getAllocatedType();
   }
+  // else if (auto HO = std::get_if<HeapObject>(&Val)) {
+  //   return HO->Allocator->getType()->getPointerElementType();
+  // }
   llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                << "ERROR: getType: unhandled type of ExtValPtr\n";
   std::abort();
@@ -111,9 +120,14 @@ std::string getName(const ExtValuePtr &Val) {
     }
   } else if (auto CA = std::get_if<ConstantAddr>(&Val)) {
     return "ConstantAddr_" + int_to_hex(CA->Val->getSExtValue());
+  } else if (auto SO = std::get_if<StackObject>(&Val)) {
+    return "StackObj_" + ValueNamer::getName(*SO->Allocator);
+  } else if (auto HO = std::get_if<HeapObject>(&Val)) {
+    return "HeapObj_" + ValueNamer::getName(*HO->Allocator);
   }
   llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                << "ERROR: getName: unhandled type of ExtValPtr\n";
   std::abort();
 }
+
 } // namespace notdec
