@@ -327,6 +327,8 @@ public:
 
   ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) { return E; }
 
+  ExprResult TransformFloatingLiteral(clang::FloatingLiteral *E) { return E; }
+
   ExprResult TransformConditionalOperator(clang::ConditionalOperator *E) {
     ExprResult Cond = this->getDerived().TransformExpr(E->getCond());
     if (Cond.isInvalid())

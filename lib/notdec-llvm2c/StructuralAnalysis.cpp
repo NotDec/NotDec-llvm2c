@@ -203,6 +203,10 @@ bool isEntryLikeBlock(llvm::BasicBlock &bb) {
 }
 
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
+  // if (I.getFunction()->getName() == "find_matches") {
+  //   std::cerr << "here\n";
+  // }
+
   // check if the instruction is in the entry block.
   if (isEntryLikeBlock(*I.getParent()) && !I.isArrayAllocation()) {
     // create a local variable
@@ -334,11 +338,18 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
                        llvm::GEPOperator &I) {
   clang::Expr *Val = EB.visitValue(I.getPointerOperand(), &I, 0);
   llvm::SmallVector<clang::Expr *, 8> Indices;
+
+  if (I.hasAllZeroIndices()) {
+    return Val;
+  }
+  // convert the gep to ptr add, then solve using ptr add offset.
+
   for (unsigned i = 0; i < I.getNumIndices(); i++) {
     llvm::Value *LIndex = *(I.idx_begin() + i);
     clang::Expr *Index = EB.visitValue(LIndex, &I, i + 1);
     Indices.push_back(Index);
   }
+
   return handleGEP(Ctx, Val, Indices);
 }
 
@@ -512,6 +523,8 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
   auto &MSSAR =
       FCtx.getFAM().getResult<llvm::MemorySSAAnalysis>(FCtx.getFunction());
   auto &MSSA = MSSAR.getMSSA();
+  auto &DT =
+      FCtx.getFAM().getResult<llvm::DominatorTreeAnalysis>(FCtx.getFunction());
   // MSSA.ensureOptimizedUses();
   auto Walker = MSSA.getWalker();
 
@@ -552,6 +565,19 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
         BB = Pred;
         It = Pred->end();
         continue;
+      }
+    }
+    // If still nullptr, walk to direct dominator
+    if (!UserMA) {
+      auto *BBNode =DT.getNode(BB);
+      if (BBNode) {
+        auto *IDomNode = BBNode->getIDom();
+        if (IDomNode) {
+            auto *ImmediateDominator = IDomNode->getBlock();
+            BB = ImmediateDominator;
+            It = ImmediateDominator->end();
+            continue;
+        }
       }
     }
     if (UserMA) {
@@ -648,10 +674,12 @@ clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
   }
   // ensure both pointer type or integer type, for eq and ne.
   if (op == clang::BO_EQ || op == clang::BO_NE) {
-    if (lhs->getType()->isAnyPointerType() && !rhs->getType()->isAnyPointerType()) {
+    if (lhs->getType()->isAnyPointerType() &&
+        !rhs->getType()->isAnyPointerType()) {
       rhs = TB.checkCast(rhs, lhs->getType());
     }
-    if (!lhs->getType()->isAnyPointerType() && rhs->getType()->isAnyPointerType()) {
+    if (!lhs->getType()->isAnyPointerType() &&
+        rhs->getType()->isAnyPointerType()) {
       lhs = TB.checkCast(lhs, rhs->getType());
     }
   }

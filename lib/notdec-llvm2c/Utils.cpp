@@ -394,7 +394,7 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
     if (r == nullptr) {
       continue;
     }
-    std::vector<llvm::BasicBlock *> preds(pred_begin(B), pred_end(B));
+    std::set<llvm::BasicBlock *> preds(pred_begin(B), pred_end(B));
     if (preds.size() > 1) {
       for (auto pred : preds) {
         if (pred->getSingleSuccessor() == B) {
