@@ -987,7 +987,7 @@ clang::Expr *ClangTypeResult::handlePtrAdd(clang::Expr *Val,
   if (Result != nullptr) {
     return Result;
   }
-  // create cast to void* and add.
+  // create cast to char* and add.
   auto CharPtrTy = Ctx.getPointerType(Ctx.CharTy);
   auto Casted = createCStyleCastExpr(Ctx, CharPtrTy, clang::VK_LValue,
                                      clang::CK_BitCast, Val);

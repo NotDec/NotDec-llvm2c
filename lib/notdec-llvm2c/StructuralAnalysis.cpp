@@ -63,6 +63,7 @@
 #include "ASTManager.h"
 #include "ASTPrinter/DeclPrinter.h"
 #include "Interface/HType.h"
+#include "Interface/Utils.h"
 #include "TypeManager.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
@@ -203,10 +204,6 @@ bool isEntryLikeBlock(llvm::BasicBlock &bb) {
 }
 
 void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
-  // if (I.getFunction()->getName() == "find_matches") {
-  //   std::cerr << "here\n";
-  // }
-
   // check if the instruction is in the entry block.
   if (isEntryLikeBlock(*I.getParent()) && !I.isArrayAllocation()) {
     // create a local variable
@@ -327,7 +324,17 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
 }
 
 clang::Expr *TypeBuilder::ptrAdd(clang::Expr *Val, clang::Expr *Index) {
-  return CT->handlePtrAdd(Val, Index);
+  if (CT) {
+    return CT->handlePtrAdd(Val, Index);
+  } else {
+    // create cast to char* and add.
+    auto CharPtrTy = Ctx.getPointerType(Ctx.CharTy);
+    auto Casted = createCStyleCastExpr(Ctx, CharPtrTy, clang::VK_LValue,
+                                       clang::CK_BitCast, Val);
+    auto Add = createBinaryOperator(Ctx, Casted, Index, clang::BO_Add,
+                                    CharPtrTy, clang::VK_LValue);
+    return Add;
+  }
 }
 
 std::vector<clang::Expr *> TypeBuilder::tryGepZero(clang::Expr *Val) {
@@ -569,14 +576,14 @@ bool LoadExprCreater::canClone(llvm::Instruction *InsertLoc) {
     }
     // If still nullptr, walk to direct dominator
     if (!UserMA) {
-      auto *BBNode =DT.getNode(BB);
+      auto *BBNode = DT.getNode(BB);
       if (BBNode) {
         auto *IDomNode = BBNode->getIDom();
         if (IDomNode) {
-            auto *ImmediateDominator = IDomNode->getBlock();
-            BB = ImmediateDominator;
-            It = ImmediateDominator->end();
-            continue;
+          auto *ImmediateDominator = IDomNode->getBlock();
+          BB = ImmediateDominator;
+          It = ImmediateDominator->end();
+          continue;
         }
       }
     }
@@ -852,6 +859,10 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
         Target->getName().startswith("llvm.lifetime")) {
       return;
     }
+    if (Target->getName().startswith("llvm.umul.with.overflow")) {
+      // handle it at the intrinsic function.
+      return;
+    }
   }
   // See also:
   // https://github.com/llvm/llvm-project/blob/d8e5a0c42bd8796cce9caa53aacab88c7cb2a3eb/clang/lib/Analysis/BodyFarm.cpp#L245
@@ -931,6 +942,48 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
   addExprOrStmt(I, *Call);
 }
 
+void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
+  if (auto Call = llvm::dyn_cast<llvm::CallInst>(I.getAggregateOperand())) {
+    if (auto Target = Call->getCalledFunction()) {
+      if (Target->getName().startswith("llvm.umul.with.overflow")) {
+        assert(I.getNumIndices() == 1);
+        auto Ind = *I.idx_begin();
+        auto Op0 = Call->getArgOperand(0);
+        auto Op1 = Call->getArgOperand(1);
+        if (Ind == 0) {
+          // create unsigned multiply
+          auto binop = handleBinary(
+              Ctx, EB, FCtx.getTypeBuilder(), llvm::Instruction::Mul, *Call,
+              Op0, Op1,
+              nullptr // &FCtx.getSAContext().getHighTypes().StructInfos
+          );
+          addExprOrStmt(I, *binop);
+          return;
+        } else if (Ind == 1) {
+          // create call to fake library function llvm_umul_is_overflow_ty()
+          auto BitWidth = Target->getReturnType()->getIntegerBitWidth();
+          auto FD = FCtx.getSAContext().getIntrinsic("llvm_umul_is_overflow_i" +
+                                                     std::to_string(BitWidth));
+          auto Ty = Ctx.getIntTypeForBitwidth(BitWidth, 1);
+          auto Arg0 = EB.visitValue(Op0, Call, 0);
+          Arg0 = getTypeBuilder().checkCast(Arg0, Ty);
+          auto Arg1 = EB.visitValue(Op0, Call, 1);
+          Arg1 = getTypeBuilder().checkCast(Arg1, Ty);
+          auto Call = clang::CallExpr::Create(
+              Ctx, makeDeclRefExpr(FD), {Arg0, Arg1}, FD->getReturnType(),
+              clang::VK_PRValue, clang::SourceLocation(),
+              clang::FPOptionsOverride());
+          addExprOrStmt(I, *Call);
+          return;
+        } else {
+          assert(false);
+        }
+      }
+    }
+  }
+  assert(false && "Unhandled ExtractValueInst!");
+}
+
 clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
   // remove any cast expr
   while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Val)) {
@@ -940,8 +993,10 @@ clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
   if (isTypeCompatible(Val->getType(), To)) {
     return Val;
   }
-  if (auto R = CT->gepCast(Val, To)) {
-    return R;
+  if (CT) {
+    if (auto R = CT->gepCast(Val, To)) {
+      return R;
+    }
   }
   // TODO should we use CK_Bitcast here?
   return createCStyleCastExpr(Ctx, To, clang::VK_PRValue, clang::CK_BitCast,
@@ -1571,6 +1626,42 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
 
     FD = createFunctionDecl(TUD, "alloca", Names, ParamTys, RetTy);
     TUD->addDecl(FD);
+  } else if (startswith(FName, "llvm_umul_is_overflow_")) {
+    // Check if already declared
+    if (auto F1 = AM->getFuncDeclaration(FName.c_str())) {
+      return F1;
+    }
+    // support i8 i16 i32 i64 suffix
+    std::string suffix = FName.substr(strlen("llvm_umul_is_overflow_"));
+    unsigned bitwidth = 0;
+    if (suffix == "i8") {
+      bitwidth = 8;
+    } else if (suffix == "i16") {
+      bitwidth = 16;
+    } else if (suffix == "i32") {
+      bitwidth = 32;
+    } else if (suffix == "i64") {
+      bitwidth = 64;
+    } else {
+      assert(false &&
+             "unsupported bitwidth for llvm_umul_is_overflow_ intrinsic");
+    }
+
+    // Get integer type for the given bitwidth (signed)
+    QualType IntTy =
+        getASTContext().getIntTypeForBitwidth(bitwidth, /*Signed=*/1);
+    if (IntTy.isNull()) {
+      assert(false && "failed to get integer type for bitwidth");
+    }
+
+    // Parameters: (T, T)
+    constexpr int ParamSize = 2;
+    const char *Names[ParamSize] = {"a", "b"};
+    QualType ParamTys[ParamSize] = {IntTy, IntTy};
+
+    FD = createFunctionDecl(TUD, FName.c_str(), Names, ParamTys,
+                            getASTContext().BoolTy);
+    TUD->addDecl(FD);
   } else {
     assert(false && "unhandled intrinsic.");
   }
@@ -1688,7 +1779,12 @@ void SAContext::createDecls() {
   // handle intrinsic functions
   for (llvm::Function &F : M) {
     if (F.getName().startswith("llvm.dbg") ||
-        F.getName().startswith("llvm.lifetime")) {
+        F.getName().startswith("llvm.lifetime") ||
+        F.getName().startswith("llvm.assume")) {
+      continue;
+    }
+    if (F.getName().startswith("llvm.umul.with.overflow")) {
+      // handle it at the extractvalue inst.
       continue;
     }
     if (!F.isIntrinsic()) {

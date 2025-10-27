@@ -309,6 +309,7 @@ static bool simplifyCondBrSameLabel(llvm::Function &F) {
   return Changed;
 }
 
+// eliminate a block with only uncond br.
 static bool eliminateEmptyBr(llvm::Function &F) {
   using namespace llvm;
   bool Changed = false;
@@ -338,10 +339,17 @@ static bool eliminateEmptyBr(llvm::Function &F) {
       BB.eraseFromParent();
       Changed = true;
     } else {
-      for (BasicBlock *Pred : make_early_inc_range(predecessors(&BB))) {
-        Pred->getTerminator()->replaceSuccessorWith(&BB, Succ);
-      }
+      BB.replaceAllUsesWith(Succ);
+      // for (BasicBlock *Pred : make_early_inc_range(predecessors(&BB))) {
+      //   Pred->getTerminator()->replaceSuccessorWith(&BB, Succ);
+      // }
 
+      if (!BB.materialized_use_empty()) {
+        errs() << "While deleting BasicBlock: %" << BB.getName() << "\n";
+        for (auto *U : BB.users())
+          errs() << "Use still stuck around after Def is destroyed:" << *U
+                 << "\n";
+      }
       BB.eraseFromParent();
       Changed = true;
     }
@@ -622,9 +630,11 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E, bool NoElimMember) {
 clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
   // eliminate deref + addrOf
   clang::Expr *ENoCast = E;
-  clang::CastExpr* Cast = nullptr;
+  clang::CastExpr *Cast = nullptr;
   // only when same size.
-  while ((Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) && (Ctx.getTypeSize(Cast->getType()) == Ctx.getTypeSize(ENoCast->getType()))) {
+  while ((Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) &&
+         (Ctx.getTypeSize(Cast->getType()) ==
+          Ctx.getTypeSize(ENoCast->getType()))) {
     ENoCast = Cast->getSubExpr();
   }
   if (llvm::isa<clang::UnaryOperator>(ENoCast) &&

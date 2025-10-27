@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <llvm/IR/Instructions.h>
 #include <map>
 #include <memory>
 #include <optional>
@@ -388,7 +389,8 @@ public:
                 llvm::FunctionAnalysisManager &FAM);
 
   // Main interface for CFGBuilder to add an expression for an instruction.
-  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block, QualType Ty);
+  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, CFGBlock &block,
+                     QualType Ty);
   // Special Logic for LoadInst: MemorySSA when expr inserted. lazy tmp
   // variable.
   void addLoadExpr(llvm::LoadInst &I, clang::Expr *Exp, LoadExprCreater &C) {
@@ -397,8 +399,7 @@ public:
     addMapping(&I, *Exp);
   }
   clang::Expr *cacheExpr(llvm::Instruction &Inst, clang::Expr *ToCache,
-                         CFGBlock &block,
-                         QualType Ty,
+                         CFGBlock &block, QualType Ty,
                          std::optional<size_t> Slot = std::nullopt);
   void addStmt(CFGBlock &block, clang::Stmt &Stmt, llvm::Instruction &InsertLoc,
                std::optional<size_t> Slot = std::nullopt);
@@ -781,7 +782,8 @@ protected:
     return FCtx.getTypeBuilder().getType(Val, User, OpInd);
   }
 
-  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt, QualType Ty = QualType()) {
+  void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt,
+                     QualType Ty = QualType()) {
     assert(Blk != nullptr && "Block can't be null!");
     FCtx.addExprOrStmt(v, Stmt, *Blk, Ty);
   }
@@ -857,6 +859,7 @@ public:
   }
   void visitSelectInst(llvm::SelectInst &I);
   void visitSwitchInst(llvm::SwitchInst &I);
+  void visitExtractValueInst(llvm::ExtractValueInst &I);
 
   CFGBuilder(SAFuncContext &FCtx, std::vector<clang::Stmt *> &VarDecls)
       : Ctx(FCtx.getASTContext()), FCtx(FCtx), EB(FCtx), VarDecls(VarDecls) {}
@@ -905,6 +908,11 @@ clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,
 /// Ensure the expression is unsigned, or insert a cast.
 clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
                           clang::Expr *E);
+
+clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
+                          TypeBuilder &TB, llvm::Instruction::BinaryOps OpCode,
+                          llvm::User &Result, llvm::Value *L, llvm::Value *R,
+                          std::map<clang::Decl *, StructInfo> *StructInfos);
 
 } // namespace notdec::llvm2c
 
