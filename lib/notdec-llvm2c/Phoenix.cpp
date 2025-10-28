@@ -360,8 +360,10 @@ std::set<CFGBlock *> Phoenix::getLexicalNodes(CFGBlock *head, CFGBlock *follow,
   findReachableBlocks(follow, head, excluded);
   std::set<CFGBlock *> lexNodes;
   // starting from loopNodes.
+  std::set<CFGBlock *> pushed;
   std::queue<CFGBlock *> queue;
   for (auto node : loopNodes) {
+    pushed.insert(node);
     queue.push(node);
   }
   while (!queue.empty()) {
@@ -371,15 +373,19 @@ std::set<CFGBlock *> Phoenix::getLexicalNodes(CFGBlock *head, CFGBlock *follow,
       // if in loopNodes, insert and push succs to queue.
       lexNodes.insert(fr);
       for (auto &succ : fr->succs()) {
-        if (lexNodes.count(succ.getBlock()) == 0) {
-          queue.push(succ.getBlock());
+        auto succBlock = succ.getBlock();
+        if (lexNodes.count(succBlock) == 0 && !pushed.count(succ.getBlock())) {
+          pushed.insert(succBlock);
+          queue.push(succBlock);
         }
       }
     } else if (Dom.properlyDominates(head, fr) && (excluded.count(fr) == 0)) {
       // if dominated by head, and not in exclude list
       lexNodes.insert(fr);
       for (auto &succ : fr->succs()) {
-        if (lexNodes.count(succ.getBlock()) == 0) {
+        auto succBlock = succ.getBlock();
+        if (lexNodes.count(succBlock) == 0 && !pushed.count(succBlock)) {
+          pushed.insert(succBlock);
           queue.push(succ.getBlock());
         }
       }
@@ -981,6 +987,9 @@ CFGBlock *Phoenix::getSwitchFollow(CFGBlock *n) {
         return nullptr;
       }
     }
+  }
+  if (follow == n) {
+    return nullptr;
   }
   return follow;
 }

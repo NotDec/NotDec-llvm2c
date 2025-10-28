@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -33,6 +34,7 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Use.h>
 #include <llvm/IR/Value.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Scalar/GVN.h>
@@ -76,6 +78,15 @@
 #define DEBUG_TYPE "structural-analysis"
 
 namespace notdec::llvm2c {
+
+static std::string escapeName(std::string Name) {
+  for (auto &c : Name) {
+    if (!std::isalnum(c) && c != '_') {
+      c = '_';
+    }
+  }
+  return Name;
+}
 
 bool canIgnore(llvm::Instruction::CastOps OpCode) {
   switch (OpCode) {
@@ -962,7 +973,7 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
           return;
         } else if (Ind == 1) {
           // create call to fake library function llvm_umul_is_overflow_ty()
-          auto BitWidth = Target->getReturnType()->getIntegerBitWidth();
+          auto BitWidth = Target->getArg(0)->getType()->getIntegerBitWidth();
           auto FD = FCtx.getSAContext().getIntrinsic("llvm_umul_is_overflow_i" +
                                                      std::to_string(BitWidth));
           auto Ty = Ctx.getIntTypeForBitwidth(BitWidth, 1);
@@ -1493,6 +1504,10 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
     llvm::sys::fs::create_directories(DebugDir);
   }
 
+  if (llvm::verifyModule(M, &llvm::errs())) {
+    assert(false && "Broken Module!");
+  }
+
   if (!opts.noDemoteSSA) {
     if (HT) {
       demoteSSAFixHT(M, MAM, *HT, DebugDir);
@@ -1500,6 +1515,11 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
       demoteSSA(M, MAM);
     }
   }
+
+  if (llvm::verifyModule(M, &llvm::errs())) {
+    assert(false && "Broken Module!");
+  }
+
   LLVM_DEBUG(
       llvm::dbgs() << "\n========= IR before structural analysis =========\n");
   LLVM_DEBUG(llvm::dbgs() << M);
@@ -1681,6 +1701,9 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
 }
 
 clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
+  std::set<llvm::Intrinsic::ID> GeneralHandlingIntrinsicID = {
+      llvm::Intrinsic::fshl, llvm::Intrinsic::fshr};
+
   auto *TUD = AM->getFunctionDeclarations();
   clang::FunctionDecl *FD = nullptr;
   if (F.getIntrinsicID() == llvm::Intrinsic::memset) {
@@ -1733,6 +1756,30 @@ clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
     QualType ParamTys[1] = {RetTy};
 
     FD = createFunctionDecl(TUD, "abs", Names, ParamTys, RetTy);
+    TUD->addDecl(FD);
+  } else if (GeneralHandlingIntrinsicID.count(F.getIntrinsicID())) {
+    // general handling
+    auto CFName = escapeName(F.getName().str());
+    if (auto F1 = AM->getFuncDeclaration(CFName.c_str())) {
+      return F1;
+    }
+    QualType RetTy = getTypeBuilder().visitType(*F.getReturnType());
+    std::list<std::array<char, 3>> NamesBuf;
+    llvm::SmallVector<const char *> Names;
+    llvm::SmallVector<QualType> ParamTys;
+    long i = 1;
+    for (auto &Arg : F.args()) {
+      assert(i <= 9);
+      NamesBuf.emplace_back();
+      NamesBuf.back()[0] = 'a';
+      NamesBuf.back()[1] = static_cast<char>(('0' + i));
+      NamesBuf.back()[2] = '\x00';
+      Names.push_back(NamesBuf.back().data());
+      ParamTys.push_back(getTypeBuilder().visitType(*Arg.getType()));
+      i++;
+    }
+
+    FD = createFunctionDecl(TUD, CFName.c_str(), Names, ParamTys, RetTy);
     TUD->addDecl(FD);
   } else {
     assert(false && "unhandled intrinsic.");

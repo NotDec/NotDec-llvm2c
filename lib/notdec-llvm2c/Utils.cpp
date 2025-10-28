@@ -1,6 +1,7 @@
 #include <cassert>
 #include <clang/AST/Decl.h>
 #include <iostream>
+#include <llvm/IR/Verifier.h>
 #include <type_traits>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Transforms/Scalar/Reg2Mem.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
@@ -102,12 +104,17 @@ std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
 
 /// Run the RegToMemPass to demote SSA to memory, i.e., eliminate Phi nodes.
 void demoteSSA(llvm::Module &M, llvm::ModuleAnalysisManager &MAM) {
+  llvm::errs() << "demoteSSA\n";
   using namespace llvm;
+
   ModulePassManager MPM;
 
   MPM.addPass(createModuleToFunctionPassAdaptor(AdjustCFGPass()));
+  // MPM.addPass(VerifierPass());
   MPM.addPass(createModuleToFunctionPassAdaptor(RetDupPass()));
+  // MPM.addPass(VerifierPass());
   MPM.addPass(createModuleToFunctionPassAdaptor(DemotePhiPass()));
+  // MPM.addPass(VerifierPass());
   MPM.addPass(createModuleToFunctionPassAdaptor(AdjustCFGPass()));
   MPM.run(M, MAM);
 }
@@ -125,8 +132,11 @@ llvm::Value *PhiHaveAddress(llvm::PHINode *P) {
   if (auto SI = llvm::dyn_cast<llvm::StoreInst>(P->getNextNode())) {
     if (SI->getValueOperand() == P) {
       auto Ret = SI->getPointerOperand();
-      SI->eraseFromParent();
-      return Ret;
+      llvm::AllocaInst* AI = nullptr;
+      if ((AI = llvm::dyn_cast<llvm::AllocaInst>(Ret)) && AI->getParent()->isEntryBlock()) {
+        SI->eraseFromParent();
+        return Ret;
+      }
     }
   }
   return nullptr;
@@ -146,7 +156,7 @@ llvm::Value *DemotePHIToStack2(llvm::PHINode *P,
   const DataLayout &DL = P->getModule()->getDataLayout();
 
   // Create a stack slot to hold the value.
-  Value *Slot;
+  Value *Slot = nullptr;
   if ((Slot = PhiHaveAddress(P))) {
   } else if (AllocaPoint) {
     Slot = new AllocaInst(P->getType(), DL.getAllocaAddrSpace(), nullptr,
@@ -276,6 +286,7 @@ static bool mergeIntoSinglePredecessor_v1(llvm::Function &F) {
     BB.replaceAllUsesWith(Pred);
     // PHI nodes in BB can only have a single incoming value. Remove them.
     for (PHINode &PN : make_early_inc_range(BB.phis())) {
+      assert(PN.getNumIncomingValues() == 1);
       PN.replaceAllUsesWith(PN.getIncomingValue(0));
       PN.eraseFromParent();
     }
@@ -334,6 +345,22 @@ static bool eliminateEmptyBr(llvm::Function &F) {
         continue;
       }
       auto Pred = *pred_begin(&BB);
+      // Check if Succ's phi, have different incoming values for BB and
+      // Pred, then we cannot eliminate the block
+      bool canEliminate = true;
+      for (PHINode &PN : Succ->phis()) {
+        auto BBVal = PN.getIncomingValueForBlock(&BB);
+        auto PredVal = PN.getIncomingValueForBlock(Pred);
+
+        if (BBVal != nullptr && PredVal != nullptr) {
+          canEliminate = false;
+        }
+        if (!canEliminate)
+          break;
+      }
+      if (!canEliminate)
+        continue;
+
       Pred->getTerminator()->replaceSuccessorWith(&BB, Succ);
       Succ->replacePhiUsesWith(&BB, Pred);
       BB.eraseFromParent();
