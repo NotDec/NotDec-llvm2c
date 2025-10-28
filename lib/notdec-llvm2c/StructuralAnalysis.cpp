@@ -856,7 +856,8 @@ convertOp(llvm::Instruction::BinaryOps op) {
 void CFGBuilder::visitCallInst(llvm::CallInst &I) {
   if (auto Target = I.getCalledFunction()) {
     if (Target->getName().startswith("llvm.dbg") ||
-        Target->getName().startswith("llvm.lifetime")) {
+        Target->getName().startswith("llvm.lifetime") ||
+        Target->getName().startswith("llvm.assume")) {
       return;
     }
     if (Target->getName().startswith("llvm.umul.with.overflow")) {
@@ -982,6 +983,12 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
     }
   }
   assert(false && "Unhandled ExtractValueInst!");
+}
+
+void CFGBuilder::visitFreezeInst(llvm::FreezeInst &I) {
+  auto Arg = EB.visitValue(I.getOperand(0), &I, 0);
+  addExprOrStmt(I, *Arg);
+  return;
 }
 
 clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
@@ -1522,6 +1529,11 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
     }
     SAFuncContext &FuncCtx =
         Ctx.getFuncContext(const_cast<llvm::Function &>(F));
+
+    if (F.getName() == "fgrep_to_grep_pattern") {
+      std::cerr << "here\n";
+    }
+
     FuncCtx.run();
     LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
@@ -2051,7 +2063,7 @@ clang::RecordDecl *TypeBuilder::createRecordDecl(llvm::StructType &Ty,
     II = getIdentifierInfo(VN->getStructName(Ty));
   }
 
-  auto TUD = CT->getASTManager()->getGlobalDefinitions();
+  auto TUD = AM->getGlobalDefinitions();
   clang::RecordDecl *prev = nullptr;
   clang::RecordDecl *decl = clang::RecordDecl::Create(
       Ctx, clang::TagDecl::TagKind::TTK_Struct, TUD, clang::SourceLocation(),
@@ -2308,7 +2320,8 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
         return getNull(Ty);
       }
       // try to get global variable
-      if (auto Ret = TB.CT->getGlobal(Val.getZExtValue())) {
+      clang::Expr *Ret = nullptr;
+      if (TB.CT && (Ret = TB.CT->getGlobal(Val.getZExtValue()))) {
         return Ret;
       } else {
         return createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue,

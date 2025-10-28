@@ -490,6 +490,7 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
     // To fold a switch branch, we need to create a new block
     auto newBlock = CFG.createBlock();
+    FCtx.mapRedirectBlock(**newBlock, *To);
     (*newBlock)->appendStmt(stm);
     From->replaceAllSucc(To, *newBlock);
     (*newBlock)->addPred(From);
