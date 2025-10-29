@@ -435,7 +435,8 @@ llvm::PreservedAnalyses RetDupPass::run(llvm::Function &F,
         if (pred->getSingleSuccessor() == B) {
           auto br = pred->getTerminator();
           builder.SetInsertPoint(br);
-          if (auto *p = llvm::dyn_cast<llvm::PHINode>(r)) {
+          PHINode *p = nullptr;
+          if ((p = llvm::dyn_cast<llvm::PHINode>(r)) && p->getParent() == B) {
             auto rv = p->getIncomingValueForBlock(pred);
             builder.CreateRet(rv);
           } else {

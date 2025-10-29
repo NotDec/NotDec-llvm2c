@@ -1550,10 +1550,6 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
     SAFuncContext &FuncCtx =
         Ctx.getFuncContext(const_cast<llvm::Function &>(F));
 
-    if (F.getName() == "fgrep_to_grep_pattern") {
-      std::cerr << "here\n";
-    }
-
     FuncCtx.run();
     LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
     LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
@@ -1701,8 +1697,11 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
 }
 
 clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
+  using namespace llvm;
   std::set<llvm::Intrinsic::ID> GeneralHandlingIntrinsicID = {
-      llvm::Intrinsic::fshl, llvm::Intrinsic::fshr};
+      Intrinsic::fshl, Intrinsic::fshr, Intrinsic::bswap, 
+      Intrinsic::ctlz, Intrinsic::ctpop, Intrinsic::cttz,
+      Intrinsic::ushl_sat, Intrinsic::usub_sat, Intrinsic::uadd_sat};
 
   auto *TUD = AM->getFunctionDeclarations();
   clang::FunctionDecl *FD = nullptr;
