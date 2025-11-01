@@ -725,8 +725,7 @@ public:
   bool doRemoveBlocks() {
     bool changed = false;
     for (auto block : toRemove) {
-      assert(block->succ_size() == 0);
-      assert(block->pred_size() == 0);
+
       CFG.remove(block);
       changed = true;
     }

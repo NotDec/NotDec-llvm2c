@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/Support/Error.h>
@@ -91,7 +92,8 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
       }
       auto Ret = Ctx.getIntTypeForBitwidth(IT->getBitSize(), IT->isSigned());
       if (Ret.isNull()) {
-        Ret = Ctx.getConstantArrayType(Ctx.CharTy, llvm::APInt(32, IT->getBitSize() / 8),
+        Ret = Ctx.getConstantArrayType(Ctx.CharTy,
+                                       llvm::APInt(32, IT->getBitSize() / 8),
                                        nullptr, clang::ArrayType::Normal, 0);
       }
       return Ret;
@@ -364,6 +366,67 @@ void ClangTypeResult::increaseArraySize(ValueDecl *Decl, int64_t Size) {
   Decl->setType(NewAT);
 }
 
+static llvm::APFloat apFloatFromBytes(const std::string &data,
+                                      size_t floatSize) {
+  // 检查数据大小是否足够
+  if (data.size() < floatSize) {
+    assert(false && "Insufficient data");
+  }
+
+  // 根据浮点数大小选择合适的语义
+  const llvm::fltSemantics *semantics = nullptr;
+
+  switch (floatSize) {
+  case 2: // 半精度 (16位)
+    semantics = &llvm::APFloat::IEEEhalf();
+    break;
+  case 4: // 单精度 (32位)
+    semantics = &llvm::APFloat::IEEEsingle();
+    break;
+  case 8: // 双精度 (64位)
+    semantics = &llvm::APFloat::IEEEdouble();
+    break;
+  case 16: // 四精度 (128位)
+    semantics = &llvm::APFloat::IEEEquad();
+    break;
+  default:
+    assert(false);
+  }
+
+  // 使用llvm::support::endian读取小端序数据
+  uint64_t rawBits = 0;
+
+  switch (floatSize) {
+  case 2: {
+    // 读取16位半精度浮点数
+    rawBits = llvm::support::endian::read<uint16_t,
+                                          llvm::support::endianness::little>(
+        data.data());
+    break;
+  }
+  case 4: {
+    // 读取32位单精度浮点数
+    rawBits = llvm::support::endian::read<uint32_t,
+                                          llvm::support::endianness::little>(
+        data.data());
+    break;
+  }
+  case 8: {
+    // 读取64位双精度浮点数
+    rawBits = llvm::support::endian::read<uint64_t,
+                                          llvm::support::endianness::little>(
+        data.data());
+    break;
+  }
+  default:
+    assert(false);
+  }
+
+  // 创建APInt并转换为APFloat
+  llvm::APInt apInt(floatSize * 8, rawBits);
+  return llvm::APFloat(*semantics, apInt);
+}
+
 clang::Expr *
 ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
                                    BytesManager &Bytes) {
@@ -496,6 +559,17 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
     }
     return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), Inits,
                                          clang::SourceLocation());
+  } else if (Ty->isFloatingType()) {
+    auto Size = Ctx.getTypeSizeInChars(Ty).getQuantity();
+    auto Val = Bytes.getRange(SimpleRange{.Start = 0, .Size = Size});
+    if (!Val) {
+      return FloatingLiteral::Create(
+          Ctx, llvm::APFloat::getZero(llvm::APFloat::IEEEsingle()), true, Ty,
+          clang::SourceLocation());
+    } else {
+      return FloatingLiteral::Create(Ctx, apFloatFromBytes(*Val, Size), true,
+                                     Ty, clang::SourceLocation());
+    }
   } else {
     assert(false && "Unsupported type for initializer");
   }

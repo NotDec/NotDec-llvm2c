@@ -441,10 +441,11 @@ public:
   }
 
   // allows load inst to create tmp var lazily
-  void updateStmt(size_t Ind, Stmt* St) {
+  void updateStmt(size_t Ind, Stmt *St) {
     assert(Ind < size());
     assert(Elements[Ind].getKind() == CFGStmt::Statement);
-    assert(llvm::isa<clang::NullStmt>(Elements[Ind].getAs<CFGStmt>()->getStmt()));
+    assert(
+        llvm::isa<clang::NullStmt>(Elements[Ind].getAs<CFGStmt>()->getStmt()));
     Elements[Ind] = CFGStmt(St);
   }
 };
@@ -490,11 +491,16 @@ public:
   const_reverse_iterator rbegin() const { return Blocks.rbegin(); }
   const_reverse_iterator rend() const { return Blocks.rend(); }
 
-  void remove(CFGBlock *I) {
-    auto loc = std::remove(Blocks.begin(), Blocks.end(), I);
+  void remove(CFGBlock *block) {
+    assert(block != nullptr);
+    assert(block->succ_size() == 0);
+    assert(block->pred_size() == 0);
+    assert(block != Entry);
+    assert(block != Exit);
+    auto loc = std::remove(Blocks.begin(), Blocks.end(), block);
     assert(loc != Blocks.end());
     Blocks.erase(loc, Blocks.end());
-    delete I;
+    delete block;
   }
 
   CFGBlock &getEntry() { return *Entry; }
