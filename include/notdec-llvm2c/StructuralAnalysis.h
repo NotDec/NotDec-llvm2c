@@ -177,7 +177,8 @@ public:
     return getTypeSizeInChars(Ty.getTypePtr());
   }
 
-  TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names, std::shared_ptr<ASTManager> AM,
+  TypeBuilder(clang::ASTContext &Ctx, ValueNamer &VN, llvm::StringSet<> &Names,
+              std::shared_ptr<ASTManager> AM,
               std::shared_ptr<ClangTypeResult> CT, const llvm::DataLayout &DL)
       : Ctx(Ctx), VN(&VN), Names(Names), AM(AM), CT(CT), DL(DL) {}
   clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
@@ -671,12 +672,10 @@ public:
   /// Move all successors of From to To.
   void replaceSuccessors(CFGBlock *From, CFGBlock *To) {
     assert(To->succ_size() == 0);
-    for (auto &Succ : From->succs()) {
-      Succ->removePred(From);
-      addEdge(To, Succ);
-      // replace pred of succ
+    To->moveSuccFrom(From);
+    for (auto Ent : std::set<CFGBlock *>(To->succ_begin(), To->succ_end())) {
+      Ent->replacePred(From, To);
     }
-    From->succ_clear();
   }
   // void replaceAllSuccessorsWith(CFGBlock *From, CFGBlock *To,
   //                               CFGBlock *Target) {
@@ -724,11 +723,13 @@ public:
   /// after free.
   bool doRemoveBlocks() {
     bool changed = false;
+    CFG.sanityCheck();
     for (auto block : toRemove) {
-
       CFG.remove(block);
+      CFG.sanityCheck();
       changed = true;
     }
+    CFG.sanityCheck();
     toRemove.clear();
     return changed;
   }
@@ -748,12 +749,16 @@ public:
       if (Block->size() == 0 && Block->succ_size() == 1 &&
           Block->pred_size() > 0) {
         auto succ = linearSuccessor(Block);
-        succ->removePred(Block);
+        if (succ == Block) {
+          continue;
+        }
+        removeEdge(Block, succ);
         for (auto pred : Block->preds()) {
-          pred->replaceSucc(Block, succ);
+          pred->replaceAllSucc(Block, succ);
           succ->addPredecessor(pred);
         }
         deferredRemove(Block);
+        CFG.sanityCheck();
       }
     }
     doRemoveBlocks();

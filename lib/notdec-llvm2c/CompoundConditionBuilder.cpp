@@ -37,10 +37,11 @@ void CompoundConditionBuilder::rebuildGraph(CFGBlock *head, CFGBlock *redundant,
                                             CFGBlock *common) {
   removeEdge(redundant, replacement);
   removeEdge(redundant, common);
-  head->replaceSucc(redundant, replacement);
+  head->replaceAllSucc(redundant, replacement);
   replacement->addPred(head);
   redundant->removePred(head);
   deferredRemove(redundant);
+  CFG.sanityCheck();
 }
 
 bool CompoundConditionBuilder::maybeCoalesce(CFGBlock *Head) {

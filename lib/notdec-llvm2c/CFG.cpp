@@ -758,6 +758,33 @@ CFG::iterator CFG::createBlock() {
   return it;
 }
 
+int CFG::sanityCheck() {
+  if (false) {
+    std::set<CFGBlock *> Blocks(begin(), end());
+    for (auto B : Blocks) {
+      // check successor validity;
+      // if (auto BT = std::get_if<BranchTerminator>(&B->getTerminator())) {
+
+      // } else if (auto ST =
+      // std::get_if<SwitchTerminator>(&B->getTerminator())) {
+
+      // } else {
+      //   assert(false);
+      // }
+      for (auto E : B->succs()) {
+        assert(E->getParent() == this);
+        assert(Blocks.count(E));
+        assert(E->hasPred(B));
+      }
+      for (auto E : B->preds()) {
+        assert(Blocks.count(E));
+        assert(E->hasSucc(B));
+      }
+    }
+  }
+  return 1;
+}
+
 void addEdge(CFGBlock *From, CFGBlock *To) {
   From->addSuccessor(CFGBlock::AdjacentBlock(To));
   To->addPredecessor(CFGBlock::AdjacentBlock(From));

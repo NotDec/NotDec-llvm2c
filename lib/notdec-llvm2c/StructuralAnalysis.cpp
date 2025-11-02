@@ -1936,6 +1936,7 @@ void SAFuncContext::run() {
     // Terminators) to Clang AST
     Builder.run(*bb);
   }
+  Cfg->sanityCheck();
 
   // connect the edges
   // for if block, the true edge comes first in the successor list.
@@ -1951,6 +1952,7 @@ void SAFuncContext::run() {
       addEdge(src, dst);
     }
   }
+  Cfg->sanityCheck();
 
   // // Create the stub exit block.
   // // TODO the exit block is currently not used. Edges to exit block are not

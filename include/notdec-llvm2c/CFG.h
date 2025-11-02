@@ -268,6 +268,10 @@ public:
     assert(succ_size() == 2);
     return Succs[1] == To;
   }
+  void moveSuccFrom(CFGBlock *From) {
+    Succs = From->Succs;
+    From->succ_clear();
+  }
   unsigned int replaceAllSucc(CFGBlock *Old, CFGBlock *New) {
     unsigned int count = 0;
     for (auto &succ : Succs) {
@@ -276,17 +280,8 @@ public:
         count += 1;
       }
     }
+    assert(count > 0);
     return count;
-  }
-  void replaceSucc(CFGBlock *From, CFGBlock *To) {
-    assert(std::find(Succs.begin(), Succs.end(), To) == Succs.end());
-    for (auto &succ : Succs) {
-      if (succ == From) {
-        succ.setBlock(To);
-        return;
-      }
-    }
-    assert(false && "replaceSucc failed!");
   }
   void replacePred(CFGBlock *From, CFGBlock *To) {
     assert(Preds.erase(AdjacentBlock(From)) == 1);
@@ -382,6 +377,9 @@ public:
   const CFGTerminator &getTerminator() const { return Terminator; }
   CFGTerminator &getTerminator() { return Terminator; }
   void removeSucc(CFGBlock *B) {
+    if (BlockID == 9 && B->getBlockID() == 268) {
+      llvm::errs() << "here\n";
+    }
     Succs.erase(
         std::remove_if(Succs.begin(), Succs.end(),
                        [B](AdjacentBlock &AB) { return AB.getBlock() == B; }),
@@ -389,6 +387,10 @@ public:
   }
   void removePred(CFGBlock *B) { Preds.erase(AdjacentBlock(B)); }
   void addPred(CFGBlock *B) { Preds.insert(AdjacentBlock(B)); }
+  bool hasPred(CFGBlock *B) { return Preds.count(B); }
+  bool hasSucc(CFGBlock *B) {
+    return std::find(Succs.begin(), Succs.end(), B) != Succs.end();
+  }
 
   Stmt *getTerminatorStmt() {
     if (std::holds_alternative<BranchTerminator>(Terminator)) {
@@ -493,6 +495,7 @@ public:
 
   void remove(CFGBlock *block) {
     assert(block != nullptr);
+    assert(block->getParent() == this);
     assert(block->succ_size() == 0);
     assert(block->pred_size() == 0);
     assert(block != Entry);
