@@ -558,28 +558,32 @@ bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
                                        std::set<CFGBlock *> &lexicalNodes) {
   bool changed = false;
   Phoenix::LoopType loopType = determineLoopType(head, latch, follow);
-  std::vector<Phoenix::VirtualEdge> vEdges;
+  std::map<std::pair<CFGBlock *, CFGBlock *>, Phoenix::VirtualEdge> vEdges;
   for (auto n : lexicalNodes) {
     vEdges.clear();
     for (auto &s : n->succs()) {
       if (s == head) {
         if (n != latch) {
-          vEdges.emplace_back(n, s, Phoenix::VirtualEdgeType::Continue);
+          vEdges.insert_or_assign(
+              {n, s},
+              Phoenix::VirtualEdge{n, s, Phoenix::VirtualEdgeType::Continue});
         }
       } else if (lexicalNodes.count(s) == 0) {
         if (s == follow) {
           if ((loopType == Phoenix::DoWhile && n != latch) ||
               (loopType == Phoenix::While && n != head)) {
-            vEdges.emplace_back(n, s, Phoenix::VirtualEdgeType::Break);
+            vEdges.insert_or_assign(
+                {n, s},
+                Phoenix::VirtualEdge{n, s, Phoenix::VirtualEdgeType::Break});
           }
         } else {
-          vEdges.emplace_back(n, s, Phoenix::VirtualEdgeType::Goto);
+          vEdges.insert({{n, s}, {n, s, Phoenix::VirtualEdgeType::Goto}});
         }
       }
     }
-    for (auto &edge : vEdges) {
+    for (auto &Ent : vEdges) {
       changed = true;
-      virtualizeEdge(edge);
+      virtualizeEdge(Ent.second);
     }
   }
   return changed;
