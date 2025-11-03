@@ -1638,13 +1638,31 @@ SAContext::createFunctionDecl(TranslationUnitDecl *TUD, const char *Name,
   return FD;
 }
 
+static unsigned getIntBitWidth(std::string suffix) {
+  unsigned bitwidth = 0;
+  if (suffix == "i8") {
+    bitwidth = 8;
+  } else if (suffix == "i16") {
+    bitwidth = 16;
+  } else if (suffix == "i32") {
+    bitwidth = 32;
+  } else if (suffix == "i64") {
+    bitwidth = 64;
+  } else {
+    assert(false &&
+           "unsupported bitwidth for llvm_umul_is_overflow_ intrinsic");
+  }
+  return bitwidth;
+}
+
 clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
+  // Check if already declared
+  if (auto F1 = AM->getFuncDeclaration(FName.c_str())) {
+    return F1;
+  }
   auto *TUD = AM->getFunctionDeclarations();
   clang::FunctionDecl *FD = nullptr;
   if (FName == "alloca") {
-    if (auto F1 = AM->getFuncDeclaration("alloca")) {
-      return F1;
-    }
     // create a declaration
     // void * alloca ( size_t size );
     constexpr int ParamSize = 1;
@@ -1655,25 +1673,9 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
     FD = createFunctionDecl(TUD, "alloca", Names, ParamTys, RetTy);
     TUD->addDecl(FD);
   } else if (startswith(FName, "llvm_umul_is_overflow_")) {
-    // Check if already declared
-    if (auto F1 = AM->getFuncDeclaration(FName.c_str())) {
-      return F1;
-    }
     // support i8 i16 i32 i64 suffix
     std::string suffix = FName.substr(strlen("llvm_umul_is_overflow_"));
-    unsigned bitwidth = 0;
-    if (suffix == "i8") {
-      bitwidth = 8;
-    } else if (suffix == "i16") {
-      bitwidth = 16;
-    } else if (suffix == "i32") {
-      bitwidth = 32;
-    } else if (suffix == "i64") {
-      bitwidth = 64;
-    } else {
-      assert(false &&
-             "unsupported bitwidth for llvm_umul_is_overflow_ intrinsic");
-    }
+    unsigned bitwidth = getIntBitWidth(suffix);
 
     // Get integer type for the given bitwidth (signed)
     QualType IntTy =
@@ -1690,6 +1692,15 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
     FD = createFunctionDecl(TUD, FName.c_str(), Names, ParamTys,
                             getASTContext().BoolTy);
     TUD->addDecl(FD);
+  } else if (startswith(FName, "llvm_undef_")) {
+    std::string suffix = FName.substr(strlen("llvm_undef_"));
+    unsigned bitwidth = getIntBitWidth(suffix);
+    // Get integer type for the given bitwidth (signed)
+    QualType IntTy =
+        getASTContext().getIntTypeForBitwidth(bitwidth, /*Signed=*/1);
+
+    FD = createFunctionDecl(TUD, FName.c_str(), {}, {}, IntTy);
+    TUD->addDecl(FD);
   } else {
     assert(false && "unhandled intrinsic.");
   }
@@ -1699,8 +1710,8 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
 clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
   using namespace llvm;
   std::set<llvm::Intrinsic::ID> GeneralHandlingIntrinsicID = {
-      Intrinsic::fshl, Intrinsic::fshr, Intrinsic::bswap, 
-      Intrinsic::ctlz, Intrinsic::ctpop, Intrinsic::cttz,
+      Intrinsic::fshl,     Intrinsic::fshr,     Intrinsic::bswap,
+      Intrinsic::ctlz,     Intrinsic::ctpop,    Intrinsic::cttz,
       Intrinsic::ushl_sat, Intrinsic::usub_sat, Intrinsic::uadd_sat};
 
   auto *TUD = AM->getFunctionDeclarations();
@@ -2257,6 +2268,18 @@ clang::Expr *ExprBuilder::visitInitializer(llvm::Value *Val, llvm::User *User,
   return visitValue(Val, User, OpInd, Ty);
 }
 
+clang::Expr *ExprBuilder::getUndef(clang::QualType Ty) {
+  if (Ty->isIntegerType()) {
+    auto Size = Ctx.getTypeSize(Ty);
+    auto Target = SCtx.getIntrinsic("llvm_undef_i" + std::to_string(Size));
+    assert(Target != nullptr);
+    return clang::CallExpr::Create(Ctx, makeDeclRefExpr(Target), {}, Ty, clang::VK_PRValue,
+                                        clang::SourceLocation(),
+                                        clang::FPOptionsOverride());
+  }
+  assert(false && "TODO");
+}
+
 clang::Expr *ExprBuilder::getNull(clang::QualType Ty) {
   bool isCpp = false;
   if (isCpp) {
@@ -2290,7 +2313,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     if (Ty.isNull()) {
       Ty = TB.visitType(*UV->getType());
     }
-    return getNull(Ty);
+    return getUndef(Ty);
   } else if (llvm::GlobalObject *GO = llvm::dyn_cast<llvm::GlobalObject>(&C)) {
     // global variables and functions
     return addrOf(Ctx, makeDeclRefExpr(SCtx.getGlobalDecl(*GO)));

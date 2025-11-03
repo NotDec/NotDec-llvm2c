@@ -307,6 +307,7 @@ protected:
   }
 
   clang::Expr *getNull(clang::QualType Ty);
+  clang::Expr *getUndef(clang::QualType Ty);
 
 public:
   ExprBuilder(SAContext &SCtx, clang::ASTContext &Ctx, TypeBuilder &TB)

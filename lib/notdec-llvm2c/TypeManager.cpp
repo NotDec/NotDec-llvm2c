@@ -549,10 +549,13 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
       }
       auto BM1 = BytesManager::fromOneString(*Bs);
       auto Init = decodeInitializer(ElemTy, *BM1);
+      if (Init == nullptr) {
+        Init = new (Ctx) clang::ImplicitValueInitExpr(Ty);
+      }
       Inits.push_back(Init);
     }
     if (Inits.size() == 0) {
-      return nullptr;
+      return new (Ctx) clang::ImplicitValueInitExpr(Ty);
     }
     if (Decl) {
       increaseArraySize(Decl, Inits.size());
@@ -596,7 +599,14 @@ void ClangTypeResult::createMemoryDecls() {
             Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
             CType, nullptr, clang::SC_None);
 
-        // handle initializer
+        TUD->addDecl(VD);
+        Field.setASTDecl(VD);
+        FieldDeclMap[VD] = &Field;
+      }
+      // handle initializer later, may depend on undeclared global.
+      for (size_t i = 0; i < FS.size(); i++) {
+        auto &Field = FS[i];
+        auto VD = llvm::cast<clang::VarDecl>(Field.ASTDecl);
         if (MDecl->getBytesManager()) {
           auto EndRange = std::numeric_limits<int64_t>::max();
           if (i + 1 < FS.size()) {
@@ -607,10 +617,6 @@ void ClangTypeResult::createMemoryDecls() {
           clang::Expr *Init = decodeInitializer(VD, SubBytes);
           VD->setInit(Init);
         }
-
-        TUD->addDecl(VD);
-        Field.setASTDecl(VD);
-        FieldDeclMap[VD] = &Field;
       }
     } else {
       // create non-freestanding memory type.
@@ -1002,9 +1008,10 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
       // divide the offset by the size of the type.
       auto ElemSize = getTypeSizeInChars(ElemTy);
       if (auto Err = ElemSize.takeError()) {
-        llvm::errs() << "Failed to get ArrayElem Size "
+        llvm::errs() << "Failed to get ArrayElem Size: "
                      << toString(std::move(Err)) << "\n";
-        std::abort();
+        // std::abort();
+        return nullptr;
       }
 
       clang::Expr *CurrentIndex = nullptr;

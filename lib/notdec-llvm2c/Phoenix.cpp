@@ -509,7 +509,10 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
   CFG.sanityCheck();
 }
 
-void Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
+bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
+  if (!CFG.hasEdge(Edge.From, Edge.To)) {
+    return false;
+  }
   clang::Stmt *Stmt;
   auto To = Edge.To;
   if (isPureReturn(To)) {
@@ -556,6 +559,7 @@ void Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
     }
   }
   CFG.sanityCheck();
+  return true;
 }
 
 bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
@@ -756,18 +760,19 @@ bool Phoenix::virtualizeIrregularSwitchExits(
 bool Phoenix::virtualizeIrregularCaseExits(
     CFGBlock *follow, const std::set<CFGBlock *> &caseBody) {
   bool virtualized = false;
-  std::vector<VirtualEdge> VEdges;
+  std::map<std::pair<CFGBlock *, CFGBlock *>, Phoenix::VirtualEdge> vEdges;
   for (auto n : caseBody) {
     for (auto &s : n->succs()) {
       // find leaving nodes.
       if (caseBody.count(s) == 0 && s != follow) {
-        VEdges.emplace_back(n, s, VirtualEdgeType::Goto);
+        vEdges.insert({{n, s}, {n, s, VirtualEdgeType::Goto}});
       }
     }
   }
-  for (auto &vEdge : VEdges) {
-    virtualizeEdge(vEdge);
-    virtualized = true;
+  for (auto &Ent : vEdges) {
+    if (virtualizeEdge(Ent.second)) {
+      virtualized = true;
+    }
   }
   return virtualized;
 }

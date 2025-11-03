@@ -62,7 +62,7 @@ protected:
   bool isBackEdge(CFGBlock *A, CFGBlock *B);
   std::pair<CFGBlock *, CFGBlock *>
   determineFollowLatch(CFGBlock *head, std::set<CFGBlock *> &loopNodes);
-  void virtualizeEdge(const VirtualEdge &edge);
+  bool virtualizeEdge(const VirtualEdge &edge);
   void collapseToTailRegion(CFGBlock *From, CFGBlock *To, clang::Stmt *stm);
   bool virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
                                 CFGBlock *follow,

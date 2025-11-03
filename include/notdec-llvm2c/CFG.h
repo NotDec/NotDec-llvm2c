@@ -547,6 +547,12 @@ public:
     }
   }
 
+  bool hasEdge(CFGBlock *From, CFGBlock *To) {
+    assert(From->getParent() == this);
+    assert(To->getParent() == this);
+    return To->hasPred(From);
+  }
+
 private:
   CFGBlock *Entry = nullptr;
   CFGBlock *Exit = nullptr;

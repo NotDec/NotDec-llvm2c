@@ -28,7 +28,7 @@ void StmtPrinter::PrintRawDeclStmt(const DeclStmt *S) {
   Decl::printGroup(Decls.data(), Decls.size(), OS, Policy, IndentLevel);
 }
 
-void StmtPrinter::VisitNullStmt(NullStmt *Node) { 
+void StmtPrinter::VisitNullStmt(NullStmt *Node) {
   // used by load inst slot allocation.
   // Indent() << ";" << NL;
 }
@@ -1568,19 +1568,10 @@ void StmtPrinter::VisitDesignatedInitUpdateExpr(
 void StmtPrinter::VisitNoInitExpr(NoInitExpr *Node) { OS << "/*no init*/"; }
 
 void StmtPrinter::VisitImplicitValueInitExpr(ImplicitValueInitExpr *Node) {
-  if (Node->getType()->getAsCXXRecordDecl()) {
-    OS << "/*implicit*/";
-    Node->getType().print(OS, Policy);
-    OS << "()";
-  } else {
-    OS << "/*implicit*/(";
-    Node->getType().print(OS, Policy);
-    OS << ')';
-    if (Node->getType()->isRecordType())
-      OS << "{}";
-    else
-      OS << 0;
-  }
+  if (Node->getType()->isRecordType() || Node->getType()->isArrayType())
+    OS << "{}";
+  else
+    OS << 0;
 }
 
 void StmtPrinter::VisitVAArgExpr(VAArgExpr *Node) {
