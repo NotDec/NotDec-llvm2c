@@ -1655,6 +1655,27 @@ static unsigned getIntBitWidth(std::string suffix) {
   return bitwidth;
 }
 
+static QualType getSimpleTypeFromIRName(clang::ASTContext &Ctx,
+                                        std::string suffix,
+                                        unsigned int Signed) {
+  if (suffix == "i8") {
+    return Ctx.getIntTypeForBitwidth(8, Signed);
+  } else if (suffix == "i16") {
+    return Ctx.getIntTypeForBitwidth(16, Signed);
+  } else if (suffix == "i32") {
+    return Ctx.getIntTypeForBitwidth(32, Signed);
+  } else if (suffix == "i64") {
+    return Ctx.getIntTypeForBitwidth(64, Signed);
+  } else if (suffix == "f16") {
+    return Ctx.Float16Ty;
+  } else if (suffix == "f32") {
+    return Ctx.FloatTy;
+  } else if (suffix == "f64") {
+    return Ctx.DoubleTy;
+  }
+  assert(false && "unsupported type name!");
+}
+
 clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
   // Check if already declared
   if (auto F1 = AM->getFuncDeclaration(FName.c_str())) {
@@ -1694,12 +1715,9 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
     TUD->addDecl(FD);
   } else if (startswith(FName, "llvm_undef_")) {
     std::string suffix = FName.substr(strlen("llvm_undef_"));
-    unsigned bitwidth = getIntBitWidth(suffix);
     // Get integer type for the given bitwidth (signed)
-    QualType IntTy =
-        getASTContext().getIntTypeForBitwidth(bitwidth, /*Signed=*/1);
-
-    FD = createFunctionDecl(TUD, FName.c_str(), {}, {}, IntTy);
+    QualType RetTy = getSimpleTypeFromIRName(getASTContext(), suffix, 0);
+    FD = createFunctionDecl(TUD, FName.c_str(), {}, {}, RetTy);
     TUD->addDecl(FD);
   } else {
     assert(false && "unhandled intrinsic.");
@@ -2273,9 +2291,16 @@ clang::Expr *ExprBuilder::getUndef(clang::QualType Ty) {
     auto Size = Ctx.getTypeSize(Ty);
     auto Target = SCtx.getIntrinsic("llvm_undef_i" + std::to_string(Size));
     assert(Target != nullptr);
-    return clang::CallExpr::Create(Ctx, makeDeclRefExpr(Target), {}, Ty, clang::VK_PRValue,
-                                        clang::SourceLocation(),
-                                        clang::FPOptionsOverride());
+    return clang::CallExpr::Create(Ctx, makeDeclRefExpr(Target), {}, Ty,
+                                   clang::VK_PRValue, clang::SourceLocation(),
+                                   clang::FPOptionsOverride());
+  } else if (Ty->isFloatingType()) {
+    auto Target =
+        SCtx.getIntrinsic("llvm_undef_f" + std::to_string(Ctx.getTypeSize(Ty)));
+    assert(Target != nullptr);
+    return clang::CallExpr::Create(Ctx, makeDeclRefExpr(Target), {}, Ty,
+                                   clang::VK_PRValue, clang::SourceLocation(),
+                                   clang::FPOptionsOverride());
   }
   assert(false && "TODO");
 }
@@ -2312,6 +2337,9 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
   if (llvm::UndefValue *UV = llvm::dyn_cast<llvm::UndefValue>(&C)) {
     if (Ty.isNull()) {
       Ty = TB.visitType(*UV->getType());
+    }
+    if (Ty->isPointerType()) {
+      return getNull(Ty);
     }
     return getUndef(Ty);
   } else if (llvm::GlobalObject *GO = llvm::dyn_cast<llvm::GlobalObject>(&C)) {

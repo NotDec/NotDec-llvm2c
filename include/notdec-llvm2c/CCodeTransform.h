@@ -378,8 +378,9 @@ public:
     auto IntVal = E->getValue().getSExtValue();
     if (IntVal % Size == 0) {
       return clang::IntegerLiteral::Create(
-          Context, llvm::APInt(64, IntVal / Size, false), Context.IntTy,
-          clang::SourceLocation());
+          Context,
+          llvm::APInt(Context.getIntWidth(E->getType()), IntVal / Size, false),
+          E->getType(), clang::SourceLocation());
     } else {
       return ExprError();
     }
@@ -437,8 +438,9 @@ public:
         } else if (Mul % Size == 0) {
           Mul = Mul / Size;
           auto MulC = clang::IntegerLiteral::Create(
-              Context, llvm::APInt(64, Mul, false), RHS->getType(),
-              clang::SourceLocation());
+              Context,
+              llvm::APInt(Context.getIntWidth(RHS->getType()), Mul, false),
+              RHS->getType(), clang::SourceLocation());
           // convert to multiply
           return BinaryOperator::Create(
               this->Context, E->getLHS(), MulC, BO_Mul, E->getType(),
