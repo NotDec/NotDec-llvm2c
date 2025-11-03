@@ -27,6 +27,9 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/OperationKinds.h>
+#include <cstdint>
+#include <functional>
 #include <llvm/Support/raw_ostream.h>
 
 namespace notdec::llvm2c {
@@ -192,8 +195,8 @@ public:
     clang::QualType Type = D->getType().getNonReferenceType();
     clang::DeclRefExpr *NewE = clang::DeclRefExpr::Create(
         this->Context, E->getQualifierLoc(), E->getTemplateKeywordLoc(), D,
-        E->refersToEnclosingVariableOrCapture(),
-        E->getLocation(), Type, E->getValueKind());
+        E->refersToEnclosingVariableOrCapture(), E->getLocation(), Type,
+        E->getValueKind());
     return NewE;
   }
 
@@ -320,12 +323,15 @@ public:
     if (!this->getDerived().AlwaysRebuild() && Sub.get() == E->getSubExpr())
       return E;
 
-    return new (this->Context) ParenExpr(E->getLParen(), E->getRParen(), Sub.get());
+    return new (this->Context)
+        ParenExpr(E->getLParen(), E->getRParen(), Sub.get());
   }
 
   ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
 
-  ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) { return E; }
+  ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) {
+    return E;
+  }
 
   ExprResult TransformFloatingLiteral(clang::FloatingLiteral *E) { return E; }
 
@@ -355,6 +361,215 @@ class SimpleRewriter : public StmtTransform<SimpleRewriter> {
 public:
   SimpleRewriter(ASTContext &Context)
       : StmtTransform<SimpleRewriter>(Context, true) {}
+};
+
+// transform index expr to subscript by divide expected size. Used by
+// tryDivideBySize.
+class DivideTransform : public StmtTransformBase<DivideTransform> {
+  int Size = 0;
+
+public:
+  DivideTransform(ASTContext &Context, int Size)
+      : StmtTransformBase<DivideTransform>(Context), Size(Size) {
+    assert(Size != 0 && Size != 1);
+  }
+
+  ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) {
+    auto IntVal = E->getValue().getSExtValue();
+    if (IntVal % Size == 0) {
+      return clang::IntegerLiteral::Create(
+          Context, llvm::APInt(64, IntVal / Size, false), Context.IntTy,
+          clang::SourceLocation());
+    } else {
+      return ExprError();
+    }
+  }
+
+  // static std::set<> UnsupportedOps;
+
+  ExprResult TransformBinaryOperator(clang::BinaryOperator *E) {
+    if (E->getOpcode() == clang::BO_Mul) {
+      // either op can be divided is ok.
+      Expr *LHS = E->getLHS();
+      Expr *RHS = E->getRHS();
+      // try divide left
+      ExprResult LHSR = this->getDerived().TransformExpr(LHS);
+      if (!LHSR.isInvalid()) {
+        LHS = LHSR.get();
+        return BinaryOperator::Create(
+            this->Context, LHS, RHS, E->getOpcode(), E->getType(),
+            E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
+            E->getFPFeatures(this->Context.getLangOpts()));
+      }
+
+      ExprResult RHSR = this->getDerived().TransformExpr(RHS);
+      if (!RHSR.isInvalid()) {
+        RHS = RHSR.get();
+        return BinaryOperator::Create(
+            this->Context, LHS, RHS, E->getOpcode(), E->getType(),
+            E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
+            E->getFPFeatures(this->Context.getLangOpts()));
+      }
+    } else if (E->getOpcode() == clang::BO_Shl) {
+      clang::Expr *RHS = E->getRHS();
+      while (auto Cast = llvm::dyn_cast<clang::CastExpr>(RHS)) {
+        RHS = Cast->getSubExpr();
+      }
+      if (auto IL = llvm::dyn_cast<clang::IntegerLiteral>(RHS)) {
+        auto Val = IL->getValue().getZExtValue();
+        assert(Val < 64);
+        std::function<uint64_t(uint64_t, uint64_t)> intPow =
+            [&](uint64_t x, uint64_t p) -> uint64_t {
+          if (p == 0)
+            return 1;
+          if (p == 1)
+            return x;
+
+          int tmp = intPow(x, p / 2);
+          if (p % 2 == 0)
+            return tmp * tmp;
+          else
+            return x * tmp * tmp;
+        };
+        uint64_t Mul = intPow(2, Val);
+        if (Mul == Size) {
+          return E->getLHS();
+        } else if (Mul % Size == 0) {
+          Mul = Mul / Size;
+          auto MulC = clang::IntegerLiteral::Create(
+              Context, llvm::APInt(64, Mul, false), RHS->getType(),
+              clang::SourceLocation());
+          // convert to multiply
+          return BinaryOperator::Create(
+              this->Context, E->getLHS(), MulC, BO_Mul, E->getType(),
+              E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
+              E->getFPFeatures(this->Context.getLangOpts()));
+        }
+      }
+      // cannot divide RHS, try divide LHS
+      ExprResult LHSR = this->getDerived().TransformExpr(E->getLHS());
+      if (!LHSR.isInvalid()) {
+        return BinaryOperator::Create(
+            this->Context, LHSR.get(), E->getRHS(), E->getOpcode(),
+            E->getType(), E->getValueKind(), E->getObjectKind(),
+            E->getOperatorLoc(), E->getFPFeatures(this->Context.getLangOpts()));
+      }
+    } else if (E->getOpcode() == clang::BO_Add ||
+               E->getOpcode() == clang::BO_Sub) {
+      // both need to be divided.
+      ExprResult LHSR = this->getDerived().TransformExpr(E->getLHS());
+      if (!LHSR.isInvalid()) {
+        ExprResult RHSR = this->getDerived().TransformExpr(E->getRHS());
+        if (!RHSR.isInvalid()) {
+          return BinaryOperator::Create(
+              this->Context, LHSR.get(), RHSR.get(), E->getOpcode(),
+              E->getType(), E->getValueKind(), E->getObjectKind(),
+              E->getOperatorLoc(),
+              E->getFPFeatures(this->Context.getLangOpts()));
+        }
+      }
+    } else if (E->getOpcode() == clang::BO_Div ||
+               E->getOpcode() == clang::BO_Shr) {
+      // only LHS need to be divided.
+      ExprResult LHSR = this->getDerived().TransformExpr(E->getLHS());
+      if (!LHSR.isInvalid()) {
+        return BinaryOperator::Create(
+            this->Context, LHSR.get(), E->getRHS(), E->getOpcode(),
+            E->getType(), E->getValueKind(), E->getObjectKind(),
+            E->getOperatorLoc(), E->getFPFeatures(this->Context.getLangOpts()));
+      }
+    } else if (E->getOpcode() == clang::BO_And ||
+               E->getOpcode() == clang::BO_Or ||
+               E->getOpcode() == clang::BO_Xor) {
+      bool powerOfTwo = !(Size == 0) && !(Size & (Size - 1));
+      if (powerOfTwo) {
+        // try divide both.
+        ExprResult LHSR = this->getDerived().TransformExpr(E->getLHS());
+        if (!LHSR.isInvalid()) {
+          ExprResult RHSR = this->getDerived().TransformExpr(E->getRHS());
+          if (!RHSR.isInvalid()) {
+            return BinaryOperator::Create(
+                this->Context, LHSR.get(), RHSR.get(), E->getOpcode(),
+                E->getType(), E->getValueKind(), E->getObjectKind(),
+                E->getOperatorLoc(),
+                E->getFPFeatures(this->Context.getLangOpts()));
+          }
+        }
+      }
+    }
+    return ExprError();
+  }
+
+  ExprResult TransformUnaryOperator(clang::UnaryOperator *E) {
+    if (E->getOpcode() == clang::UO_Plus || E->getOpcode() == clang::UO_Minus) {
+      ExprResult Op = this->getDerived().TransformExpr(E->getSubExpr());
+      if (Op.isInvalid()) {
+        return ExprError();
+      }
+      return UnaryOperator::Create(
+          this->Context, Op.get(), E->getOpcode(), E->getType(),
+          E->getValueKind(), E->getObjectKind(), E->getSourceRange().getBegin(),
+          E->canOverflow(), E->getFPOptionsOverride());
+    }
+    return ExprError();
+  }
+  ExprResult TransformCStyleCastExpr(clang::CStyleCastExpr *E) {
+    ExprResult Op = this->getDerived().TransformExpr(E->getSubExpr());
+    if (Op.isInvalid()) {
+      return ExprError();
+    }
+    return CStyleCastExpr::Create(
+        this->Context, E->getType(), E->getValueKind(), E->getCastKind(),
+        Op.get(), nullptr, E->getFPFeatures(), E->getTypeInfoAsWritten(),
+        E->getLParenLoc(), E->getRParenLoc());
+  }
+  ExprResult TransformImplicitCastExpr(clang::ImplicitCastExpr *E) {
+    ExprResult Op = this->getDerived().TransformExpr(E->getSubExpr());
+    if (Op.isInvalid()) {
+      return ExprError();
+    }
+    return ImplicitCastExpr::Create(this->Context, E->getType(),
+                                    E->getCastKind(), Op.get(), nullptr,
+                                    E->getValueKind(), E->getFPFeatures());
+  }
+  ExprResult TransformParenExpr(clang::ParenExpr *E) {
+    ExprResult Op = this->getDerived().TransformExpr(E->getSubExpr());
+    if (Op.isInvalid()) {
+      return ExprError();
+    }
+    return new (this->Context)
+        ParenExpr(E->getLParen(), E->getRParen(), Op.get());
+  }
+  ExprResult TransformConditionalOperator(clang::ConditionalOperator *E) {
+    // both op should be divided.
+    ExprResult LHS = this->getDerived().TransformExpr(E->getTrueExpr());
+    if (LHS.isInvalid()) {
+      return ExprError();
+    }
+
+    ExprResult RHS = this->getDerived().TransformExpr(E->getFalseExpr());
+    if (RHS.isInvalid()) {
+      return ExprError();
+    }
+
+    return new (this->Context) ConditionalOperator(
+        E->getCond(), E->getQuestionLoc(), LHS.get(), E->getColonLoc(),
+        RHS.get(), E->getType(), E->getValueKind(), E->getObjectKind());
+  }
+
+  // for all unsupported expr, return error.
+  ExprResult TransformDeclRefExpr(clang::DeclRefExpr *E) { return ExprError(); }
+  ExprResult TransformMemberExpr(clang::MemberExpr *E) { return ExprError(); }
+  ExprResult TransformCallExpr(clang::CallExpr *E) { return ExprError(); }
+  ExprResult TransformArraySubscriptExpr(clang::ArraySubscriptExpr *E) {
+    return ExprError();
+  }
+  ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) {
+    return ExprError();
+  }
+  ExprResult TransformFloatingLiteral(clang::FloatingLiteral *E) {
+    return ExprError();
+  }
 };
 
 } // namespace notdec::llvm2c

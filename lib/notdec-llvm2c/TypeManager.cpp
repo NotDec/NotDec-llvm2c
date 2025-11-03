@@ -1,4 +1,5 @@
 #include "notdec-llvm2c/TypeManager.h"
+#include "CCodeTransform.h"
 #include "Interface/HType.h"
 #include "Interface/StructManager.h"
 #include "StructuralAnalysis.h"
@@ -845,36 +846,17 @@ int myPow(int x, unsigned int p) {
 
 clang::Expr *tryDivideBySize(clang::ASTContext &Ctx, clang::Expr *Index,
                              int Size) {
-  if (auto IntVal = getIntValue(Index)) {
-    if (*IntVal % Size == 0) {
-      return clang::IntegerLiteral::Create(
-          Ctx, llvm::APInt(32, *IntVal / Size, false), Ctx.IntTy,
-          clang::SourceLocation());
-    }
+  assert(Size != 0);
+  if (Size == 1) {
+    return Index;
   }
-  // try to match a multiply of constant.
-  if (auto *BO = llvm::dyn_cast<clang::BinaryOperator>(Index)) {
-    if (BO->getOpcode() == clang::BO_Mul) {
-      if (auto IntVal = getIntValue(BO->getRHS())) {
-        if (*IntVal == Size) {
-          return BO->getLHS();
-        } else if (*IntVal % Size == 0) {
-          assert(false && "todo");
-        }
-      }
-    }
-    if (BO->getOpcode() == clang::BO_Shl) {
-      if (auto IntVal = getIntValue(BO->getRHS())) {
-        auto Mul = myPow(2, *IntVal);
-        if (Mul == Size) {
-          return BO->getLHS();
-        } else if (*IntVal % Size == 0) {
-          assert(false && "todo");
-        }
-      }
-    }
+  DivideTransform TF(Ctx, Size);
+  auto Result = TF.TransformExpr(Index);
+  if (Result.isInvalid()) {
+    return nullptr;
+  } else {
+    return Result.get();
   }
-  return nullptr;
 }
 
 llvm::Expected<int64_t> ClangTypeResult::getTypeSize(const clang::Type *Ty) {
