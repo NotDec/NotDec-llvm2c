@@ -132,8 +132,9 @@ llvm::Value *PhiHaveAddress(llvm::PHINode *P) {
   if (auto SI = llvm::dyn_cast<llvm::StoreInst>(P->getNextNode())) {
     if (SI->getValueOperand() == P) {
       auto Ret = SI->getPointerOperand();
-      llvm::AllocaInst* AI = nullptr;
-      if ((AI = llvm::dyn_cast<llvm::AllocaInst>(Ret)) && AI->getParent()->isEntryBlock()) {
+      llvm::AllocaInst *AI = nullptr;
+      if ((AI = llvm::dyn_cast<llvm::AllocaInst>(Ret)) &&
+          AI->getParent()->isEntryBlock()) {
         SI->eraseFromParent();
         return Ret;
       }
@@ -326,6 +327,9 @@ static bool eliminateEmptyBr(llvm::Function &F) {
   bool Changed = false;
   // Remove blocks with single successors.
   for (BasicBlock &BB : make_early_inc_range(F)) {
+    if (BB.isEntryBlock()) {
+      continue;
+    }
     BasicBlock *Succ = BB.getSingleSuccessor();
     // Make sure BB has a single successor Succ and BB is empty
     if (!Succ || BB.size() > 1)
@@ -345,12 +349,24 @@ static bool eliminateEmptyBr(llvm::Function &F) {
         continue;
       }
       auto Pred = *pred_begin(&BB);
+      if (Pred->isEntryBlock()) {
+        continue;
+      }
       // Check if Succ's phi, have different incoming values for BB and
       // Pred, then we cannot eliminate the block
       bool canEliminate = true;
       for (PHINode &PN : Succ->phis()) {
-        auto BBVal = PN.getIncomingValueForBlock(&BB);
-        auto PredVal = PN.getIncomingValueForBlock(Pred);
+        Value *BBVal = nullptr;
+        Value *PredVal = nullptr;
+        auto BBInd = PN.getBasicBlockIndex(&BB);
+        // PredInd is likely to be -1
+        auto PredInd = PN.getBasicBlockIndex(Pred);
+        if (BBInd >= 0) {
+          BBVal = PN.getIncomingValue(BBInd);
+        }
+        if (PredInd >= 0) {
+          PredVal = PN.getIncomingValue(PredInd);
+        }
 
         if (BBVal != nullptr && PredVal != nullptr) {
           canEliminate = false;
@@ -391,9 +407,21 @@ llvm::PreservedAnalyses AdjustCFGPass::run(llvm::Function &F,
   do {
     Changed = false;
     Changed |= removeDeadBlocks_v1(F);
+    // if (llvm::verifyFunction(F, &llvm::errs())) {
+    //   assert(false && "Broken Function!");
+    // }
     Changed |= mergeIntoSinglePredecessor_v1(F);
+    // if (llvm::verifyFunction(F, &llvm::errs())) {
+    //   assert(false && "Broken Function!");
+    // }
     Changed |= eliminateEmptyBr(F);
+    // if (llvm::verifyFunction(F, &llvm::errs())) {
+    //   assert(false && "Broken Function!");
+    // }
     Changed |= simplifyCondBrSameLabel(F);
+    // if (llvm::verifyFunction(F, &llvm::errs())) {
+    //   assert(false && "Broken Function!");
+    // }
   } while (Changed);
   return llvm::PreservedAnalyses::none();
 }

@@ -758,6 +758,7 @@ public:
           pred->replaceAllSucc(Block, succ);
           succ->addPredecessor(pred);
         }
+        Block->pred_clear();
         deferredRemove(Block);
         CFG.sanityCheck();
       }

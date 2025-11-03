@@ -1728,9 +1728,14 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
 clang::FunctionDecl *SAContext::getIntrinsic(llvm::Function &F) {
   using namespace llvm;
   std::set<llvm::Intrinsic::ID> GeneralHandlingIntrinsicID = {
-      Intrinsic::fshl,     Intrinsic::fshr,     Intrinsic::bswap,
-      Intrinsic::ctlz,     Intrinsic::ctpop,    Intrinsic::cttz,
-      Intrinsic::ushl_sat, Intrinsic::usub_sat, Intrinsic::uadd_sat};
+      Intrinsic::fshl,     Intrinsic::fshr,      Intrinsic::bswap,
+      Intrinsic::ctlz,     Intrinsic::ctpop,     Intrinsic::cttz,
+      Intrinsic::ushl_sat, Intrinsic::usub_sat,  Intrinsic::uadd_sat,
+      Intrinsic::sshl_sat, Intrinsic::ssub_sat,  Intrinsic::sadd_sat,
+      Intrinsic::maxnum,   Intrinsic::minnum,    Intrinsic::maximum,
+      Intrinsic::minimum,  Intrinsic::nearbyint, Intrinsic::smin,
+      Intrinsic::smax,     Intrinsic::umin,      Intrinsic::umax,
+  };
 
   auto *TUD = AM->getFunctionDeclarations();
   clang::FunctionDecl *FD = nullptr;
