@@ -104,7 +104,7 @@ std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
 
 /// Run the RegToMemPass to demote SSA to memory, i.e., eliminate Phi nodes.
 void demoteSSA(llvm::Module &M, llvm::ModuleAnalysisManager &MAM) {
-  llvm::errs() << "demoteSSA\n";
+  // llvm::errs() << "demoteSSA\n";
   using namespace llvm;
 
   ModulePassManager MPM;

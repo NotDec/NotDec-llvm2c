@@ -114,7 +114,8 @@ std::string HType::getAsString() const {
   }
   case TK_Typedef:
     return llvm::cast<TypedefType>(this)->getDecl()->getName();
-        default : assert(false && "Unknown HType");
+  default:
+    assert(false && "Unknown HType");
   }
 }
 

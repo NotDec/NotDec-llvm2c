@@ -884,7 +884,8 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     assert(Args[i] != nullptr && "CFGBuilder.visitCallInst: Args[i] is null?");
   }
   llvm::Function *Callee = I.getCalledFunction();
-  clang::QualType Ret;
+  // first try high type
+  clang::QualType Ret = getTypeBuilder().getHighType(&I, nullptr, -1);
   clang::Expr *FRef;
   clang::QualType FunctionType;
   if (Callee != nullptr) {
@@ -896,7 +897,10 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
       Ty = Ctx.getPointerType(Ty.getNonReferenceType());
       FRef = makeImplicitCast(FRef, Ty, clang::CK_FunctionToPointerDecay);
     }
-    Ret = FD->getReturnType();
+    // second try Target function's return type.
+    if (Ret.isNull()) {
+      Ret = FD->getReturnType();
+    }
 
     if (Callee->isIntrinsic()) {
       if (FD->param_size() < Args.size()) {
@@ -2221,8 +2225,7 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
 
   llvm::Function *F;
   if (CT != nullptr && CT->hasType(Val)) {
-    Ret = CT->getType(Val);
-    assert(!Ret.isNull() && "TypeBuilder.getType: Ret is null?");
+    Ret = getHighType(Val, User, OpInd);
   } else if ((V != nullptr) &&
              (F = llvm::dyn_cast_or_null<llvm::Function>(*V))) {
     llvm::errs()

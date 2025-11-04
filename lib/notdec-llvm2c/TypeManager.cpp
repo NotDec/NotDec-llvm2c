@@ -1068,7 +1068,10 @@ clang::Expr *ClangTypeResult::getGlobal(int64_t Offset) {
   } else {
     // unroll handlePtrAdd for memory.
     auto MemASTDecl = Result->MemoryDecl;
-    const ast::FieldDecl *Target = MemASTDecl->getFieldAt(Offset);
+    const ast::FieldDecl *Target = nullptr;
+    if (MemASTDecl) {
+      Target = MemASTDecl->getFieldAt(Offset);
+    }
     if (Target != nullptr) {
       auto RemainingOffset = Offset - Target->R.Start;
       auto Var = llvm::cast<clang::VarDecl>(Target->ASTDecl);

@@ -181,6 +181,15 @@ public:
               std::shared_ptr<ASTManager> AM,
               std::shared_ptr<ClangTypeResult> CT, const llvm::DataLayout &DL)
       : Ctx(Ctx), VN(&VN), Names(Names), AM(AM), CT(CT), DL(DL) {}
+  clang::QualType getHighType(ExtValuePtr Val, llvm::User *User, long OpInd) {
+    llvmValue2ExtVal(Val, User, OpInd);
+    clang::QualType Ret;
+    if (CT != nullptr && CT->hasType(Val)) {
+      Ret = CT->getType(Val);
+      assert(!Ret.isNull() && "TypeBuilder.getHighType: Ret is null?");
+    }
+    return Ret;
+  }
   clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
   clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
     return toLValueType(Ctx, getType(Val, User, OpInd));
