@@ -2462,8 +2462,15 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     }
 
   } else if (llvm::ConstantFP *CFP = llvm::dyn_cast<llvm::ConstantFP>(&C)) {
-    return clang::FloatingLiteral::Create(Ctx, CFP->getValueAPF(), true,
-                                          getType(CFP, User, OpInd),
+    auto Ty = getType(CFP, User, OpInd);
+    if (Ty.isNull()) {
+      Ty = TB.visitType(*C.getType());
+    }
+    if (!Ty->isFloatingType()) {
+      llvm::errs() << "Error: ConstantFP is not floating type: " << C << "\n";
+      Ty = TB.visitType(*C.getType());
+    }
+    return clang::FloatingLiteral::Create(Ctx, CFP->getValueAPF(), true, Ty,
                                           clang::SourceLocation());
   } else if (llvm::ConstantExpr *CE = llvm::dyn_cast<llvm::ConstantExpr>(&C)) {
     // https://llvm.org/docs/LangRef.html#constant-expressions

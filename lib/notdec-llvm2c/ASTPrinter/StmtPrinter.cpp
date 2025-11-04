@@ -2,6 +2,7 @@
 #include <clang/AST/Attr.h>
 #include <clang/AST/Type.h>
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include "notdec-llvm2c/ASTPrinter/StmtPrinter.h"
 
@@ -1112,7 +1113,9 @@ static void PrintFloatingLiteral(raw_ostream &OS, FloatingLiteral *Node,
   // Emit suffixes.  Float literals are always a builtin float type.
   switch (Node->getType()->castAs<BuiltinType>()->getKind()) {
   default:
-    llvm_unreachable("Unexpected type for float literal!");
+    // llvm_unreachable("Unexpected type for float literal!");
+    llvm::errs() << "Error: StmtPrinter::PrintFloatingLiteral: Unexpected type for float literal!";
+    break;
   case BuiltinType::Half:
     break; // FIXME: suffix?
   case BuiltinType::Ibm128:
