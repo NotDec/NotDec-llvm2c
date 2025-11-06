@@ -79,6 +79,7 @@ void Phoenix::execute() {
         // round += 1;
       } while (Changed);
     }
+    CFG.sanityCheck();
     if (toRemove.empty() && CFG.size() > 1) {
       // Didn't make any progress this round,
       // try refining unstructured regions
@@ -235,7 +236,7 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
       }
       // organize edges: now it has only one successor.
       Block->appendStmt(whil);
-      removeEdge(Block, Block);
+      removeAllEdge(Block, Block);
       return true;
     }
   }
@@ -281,8 +282,8 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
       }
       // now the while is the only stmt in Block
       Block->appendStmt(whil);
-      removeEdge(Block, S);
-      removeEdge(S, Block);
+      removeAllEdge(Block, S);
+      removeAllEdge(S, Block);
       deferredRemove(S);
       CFG.sanityCheck();
       return true;
@@ -497,15 +498,13 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
     // To fold a switch branch, we need to create a new block
     auto newBlock = CFG.createBlock();
-    FCtx.mapRedirectBlock(**newBlock, *To);
     (*newBlock)->appendStmt(stm);
-    From->replaceAllSucc(To, *newBlock);
-    (*newBlock)->addPred(From);
-    To->removePred(From);
+    FCtx.mapRedirectBlock(**newBlock, *To);
+    replaceAllSucc(From, To, *newBlock);
     CFG.sanityCheck();
     break;
   }
-  removeEdge(From, To);
+  removeAllEdge(From, To);
   CFG.sanityCheck();
 }
 
@@ -604,6 +603,10 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
     auto th = ss.first;
     auto el = ss.second;
 
+    if (th == el) {
+      return false;
+    }
+
     if (el->succ_size() == 0 && th->succ_size() == 0 &&
         singlePredecessor(el) == n && singlePredecessor(th) == n) {
       auto cond = takeBinaryCond(*n);
@@ -614,8 +617,8 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
           nullptr, nullptr, cond, clang::SourceLocation(),
           clang::SourceLocation(), then, clang::SourceLocation(), els);
       n->appendStmt(IfStmt);
-      removeEdge(n, th);
-      removeEdge(n, el);
+      removeAllEdge(n, th);
+      removeAllEdge(n, el);
       deferredRemove(th);
       deferredRemove(el);
       CFG.sanityCheck();
@@ -631,7 +634,7 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
           nullptr, nullptr, cond, clang::SourceLocation(),
           clang::SourceLocation(), body, clang::SourceLocation());
       n->appendStmt(ifStmt);
-      removeEdge(n, el);
+      removeAllEdge(n, el);
       deferredRemove(el);
       CFG.sanityCheck();
       return true;
@@ -645,7 +648,7 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
           nullptr, nullptr, cond, clang::SourceLocation(),
           clang::SourceLocation(), body, clang::SourceLocation());
       n->appendStmt(ifStmt);
-      removeEdge(n, th);
+      removeAllEdge(n, th);
       deferredRemove(th);
       CFG.sanityCheck();
       return true;
@@ -725,6 +728,7 @@ void Phoenix::refineIncSwitch(CFGBlock *n) {
     return;
   }
 
+  CFG.sanityCheck();
   auto follow = findIrregularSwitchFollowRegion(n);
   std::map<CFGBlock *, std::set<CFGBlock *>> switchBody =
       findSwitchBody(n, follow);
@@ -836,26 +840,26 @@ CFGBlock *Phoenix::findIrregularSwitchFollowRegion(CFGBlock *n) {
 /// Returns True if one or more irregular entry was virtualized.
 /// this opens up the possibility of further refinements.
 bool Phoenix::virtualizeIrregularSwitchEntries(CFGBlock *n) {
-  std::set<VirtualEdge> VEdges;
+  std::map<std::pair<CFGBlock *, CFGBlock *>, Phoenix::VirtualEdge> vEdges;
   for (auto &S : n->succs()) {
     // find all entries that are not the switch head.
 
     // some block that dominates the switch cannot be within the switch.
     if (Dom.dominates(S, n)) {
-      VEdges.emplace(n, S, VirtualEdgeType::Goto);
+      vEdges.insert({{n, S}, {n, S, VirtualEdgeType::Goto}});
       continue;
     }
     for (auto &SP : S->preds()) {
       if (SP != n) {
-        VEdges.emplace(SP, S, VirtualEdgeType::Goto);
+        vEdges.insert({{SP, S}, {SP, S, VirtualEdgeType::Goto}});
       }
     }
   }
-  if (VEdges.size() == 0) {
+  if (vEdges.size() == 0) {
     return false;
   }
-  for (auto &vEdge : VEdges) {
-    virtualizeEdge(vEdge);
+  for (auto &vEdge : vEdges) {
+    virtualizeEdge(vEdge.second);
   }
   return true;
 }
@@ -954,7 +958,7 @@ bool Phoenix::reduceSequence(CFGBlock *Block) {
     Succ->setTerminator(nullptr);
     addAllStmtTo(Succ, Block);
     // remove this edge
-    removeEdge(Block, Succ);
+    removeAllEdge(Block, Succ);
     // add all edges from succ to current block
     replaceSuccessors(Succ, Block);
     // TODO faster remove instead of linear search.
@@ -1145,16 +1149,17 @@ bool Phoenix::reduceIncSwitch(CFGBlock *N, CFGBlock *Follow) {
   // we use set because case block can be shared.
   for (auto caseBlock : std::set<CFGBlock *>(N->succ_begin(), N->succ_end())) {
     assert(caseBlock != N);
-    removeEdge(N, caseBlock);
+    removeAllEdge(N, caseBlock);
     if (caseBlock == Follow) {
+      // do not remove follow block.
       continue;
     } else if (caseBlock->succ_size() == 0) {
       // tail block: do nothing
     } else {
+      // non follow edges must be removed.
       assert(caseBlock->getSingleSuccessor() == Follow);
-      removeEdge(caseBlock, Follow);
+      removeAllEdge(caseBlock, Follow);
     }
-    caseBlock->removePred(N);
     deferredRemove(caseBlock);
     CFG.sanityCheck();
   }
@@ -1212,9 +1217,9 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
         clang::SourceLocation());
     Block->appendStmt(IfStmt);
     // maintain the edge
-    removeEdge(Block, el);
+    removeAllEdge(Block, el);
     if (!elseTail) {
-      removeEdge(el, elS);
+      removeAllEdge(el, elS);
     }
     deferredRemove(el);
     assert(Block->succ_size() == 1);
@@ -1230,9 +1235,9 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
         clang::SourceLocation());
     Block->appendStmt(IfStmt);
     // maintain the edge
-    removeEdge(Block, th);
+    removeAllEdge(Block, th);
     if (thS == el) {
-      removeEdge(th, thS);
+      removeAllEdge(th, thS);
     }
     deferredRemove(th);
     assert(Block->succ_size() == 1);
@@ -1253,10 +1258,10 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
         clang::SourceLocation(), els);
     Block->appendStmt(IfStmt);
     // maintain the edge
-    removeEdge(Block, th);
-    removeEdge(Block, el);
-    removeEdge(th, thS);
-    removeEdge(el, elS);
+    removeAllEdge(Block, th);
+    removeAllEdge(Block, el);
+    removeAllEdge(th, thS);
+    removeAllEdge(el, elS);
     deferredRemove(th);
     deferredRemove(el);
     addEdge(Block, elS);

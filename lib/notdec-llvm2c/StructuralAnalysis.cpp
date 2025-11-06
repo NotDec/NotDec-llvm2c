@@ -1845,7 +1845,7 @@ void SAContext::createDecls() {
       continue;
     }
     getValueNamer().clearFuncCount();
-    llvm::errs() << "SAContext: Declare Function: " << F.getName() << "\n";
+    // llvm::errs() << "SAContext: Declare Function: " << F.getName() << "\n";
 
     // create function decl
     clang::IdentifierInfo *II =

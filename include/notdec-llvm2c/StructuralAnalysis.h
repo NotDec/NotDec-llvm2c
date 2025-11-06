@@ -762,12 +762,11 @@ public:
         if (succ == Block) {
           continue;
         }
-        removeEdge(Block, succ);
-        for (auto pred : Block->preds()) {
-          pred->replaceAllSucc(Block, succ);
-          succ->addPredecessor(pred);
+        removeAllEdge(Block, succ);
+        std::vector<CFGBlock *> Preds(Block->pred_begin(), Block->pred_end());
+        for (auto pred : Preds) {
+          replaceAllSucc(pred, Block, succ);
         }
-        Block->pred_clear();
         deferredRemove(Block);
         CFG.sanityCheck();
       }

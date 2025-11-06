@@ -35,11 +35,9 @@ bool isSubordinate(CFGBlock *block) {
 void CompoundConditionBuilder::rebuildGraph(CFGBlock *head, CFGBlock *redundant,
                                             CFGBlock *replacement,
                                             CFGBlock *common) {
-  removeEdge(redundant, replacement);
-  removeEdge(redundant, common);
-  head->replaceAllSucc(redundant, replacement);
-  replacement->addPred(head);
-  redundant->removePred(head);
+  removeAllEdge(redundant, replacement);
+  removeAllEdge(redundant, common);
+  replaceAllSucc(head, redundant, replacement);
   deferredRemove(redundant);
   CFG.sanityCheck();
 }

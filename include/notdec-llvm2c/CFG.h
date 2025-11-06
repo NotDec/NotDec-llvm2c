@@ -364,6 +364,23 @@ public:
   }
 
   unsigned succ_size() const { return Succs.size(); }
+  unsigned unique_succ_size() const {
+    auto Size = succ_size();
+    if (Size == 1) {
+      return 1;
+    }
+    if (Size == 2) {
+      auto S1 = Succs[0].getBlock();
+      auto S2 = Succs[0].getBlock();
+      if (S1 == S2) {
+        return 1;
+      } else {
+        return 2;
+      }
+    }
+    return std::set<CFGBlock *>(succ_begin(), succ_end()).size();
+  }
+
   bool succ_empty() const { return Succs.empty(); }
 
   unsigned pred_size() const { return Preds.size(); }
@@ -376,10 +393,7 @@ public:
   void setHasNoReturnElement() { HasNoReturnElement = true; }
   const CFGTerminator &getTerminator() const { return Terminator; }
   CFGTerminator &getTerminator() { return Terminator; }
-  void removeSucc(CFGBlock *B) {
-    if (BlockID == 9 && B->getBlockID() == 268) {
-      llvm::errs() << "here\n";
-    }
+  void removeAllSucc(CFGBlock *B) {
     Succs.erase(
         std::remove_if(Succs.begin(), Succs.end(),
                        [B](AdjacentBlock &AB) { return AB.getBlock() == B; }),
@@ -562,7 +576,8 @@ private:
 };
 
 void addEdge(CFGBlock *From, CFGBlock *To);
-void removeEdge(CFGBlock *From, CFGBlock *To);
+void removeAllEdge(CFGBlock *From, CFGBlock *To);
+void replaceAllSucc(CFGBlock *From, CFGBlock *OldTo, CFGBlock *NewTo);
 
 } // namespace notdec::llvm2c
 

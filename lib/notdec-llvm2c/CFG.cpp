@@ -790,9 +790,20 @@ void addEdge(CFGBlock *From, CFGBlock *To) {
   To->addPredecessor(CFGBlock::AdjacentBlock(From));
 }
 
-void removeEdge(CFGBlock *From, CFGBlock *To) {
-  From->removeSucc(To);
+void removeAllEdge(CFGBlock *From, CFGBlock *To) {
+  From->removeAllSucc(To);
   To->removePred(From);
+}
+
+void replaceAllSucc(CFGBlock* From, CFGBlock* OldTo, CFGBlock* NewTo) {
+  if (OldTo == NewTo) {
+    return;
+  }
+  auto Num = From->replaceAllSucc(OldTo, NewTo);
+  if (Num > 0) {
+    NewTo->addPred(From);
+  }
+  OldTo->removePred(From);
 }
 
 } // namespace notdec::llvm2c
