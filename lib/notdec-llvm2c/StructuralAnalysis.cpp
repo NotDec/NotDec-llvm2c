@@ -884,8 +884,7 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     assert(Args[i] != nullptr && "CFGBuilder.visitCallInst: Args[i] is null?");
   }
   llvm::Function *Callee = I.getCalledFunction();
-  // first try high type
-  clang::QualType Ret = getTypeBuilder().getHighType(&I, nullptr, -1);
+  clang::QualType Ret;
   clang::Expr *FRef;
   clang::QualType FunctionType;
   if (Callee != nullptr) {
@@ -897,10 +896,7 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
       Ty = Ctx.getPointerType(Ty.getNonReferenceType());
       FRef = makeImplicitCast(FRef, Ty, clang::CK_FunctionToPointerDecay);
     }
-    // second try Target function's return type.
-    if (Ret.isNull()) {
-      Ret = FD->getReturnType();
-    }
+    Ret = FD->getReturnType();
 
     if (Callee->isIntrinsic()) {
       if (FD->param_size() < Args.size()) {
@@ -951,9 +947,15 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
 
   FRef = addParenthesis<clang::CallExpr>(Ctx, FRef, false);
   // TODO? CallExpr type is function return type or not?
-  auto Call = clang::CallExpr::Create(Ctx, FRef, Args, Ret, clang::VK_PRValue,
-                                      clang::SourceLocation(),
-                                      clang::FPOptionsOverride());
+  clang::Expr *Call = clang::CallExpr::Create(
+      Ctx, FRef, Args, Ret, clang::VK_PRValue, clang::SourceLocation(),
+      clang::FPOptionsOverride());
+
+  // Check for High type
+  auto Ty2 = getTypeBuilder().getHighType(&I, nullptr, -1);
+  if (!Ty2.isNull()) {
+    Call = getTypeBuilder().checkCast(Call, Ty2);
+  }
 
   addExprOrStmt(I, *Call);
 }
@@ -1302,6 +1304,12 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
   }
 
   auto ExpectedTy = TB.getType(&Result, nullptr, -1);
+  auto ArithTy = ExpectedTy;
+  if (ArithTy->isPointerType()) {
+    ArithTy = Ctx.getIntTypeForBitwidth(TB.getPointerSizeInBits(), 0);
+  }
+  lhs = TB.checkCast(lhs, ArithTy);
+  rhs = TB.checkCast(rhs, ArithTy);
   // for normal arithmetic addition, use lhs's type.
   clang::Expr *binop = createBinaryOperator(Ctx, lhs, rhs, op.getValue(),
                                             lhs->getType(), clang::VK_PRValue);
@@ -1325,6 +1333,10 @@ void CFGBuilder::visitReturnInst(llvm::ReturnInst &I) {
   clang::Expr *retVal = nullptr;
   if (I.getReturnValue() != nullptr) {
     retVal = EB.visitValue(I.getReturnValue(), &I, 0);
+  }
+  if (retVal) {
+    auto RetTy = FCtx.getFunctionDecl()->getReturnType();
+    retVal = getTypeBuilder().checkCast(retVal, RetTy);
   }
   ret =
       clang::ReturnStmt::Create(Ctx, clang::SourceLocation(), retVal, nullptr);
