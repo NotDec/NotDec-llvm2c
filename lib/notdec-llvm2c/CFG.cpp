@@ -760,6 +760,15 @@ CFG::iterator CFG::createBlock() {
 
 int CFG::sanityCheck() {
   if (false) {
+    const auto duplicate = std::adjacent_find(begin(), end());
+
+    if (duplicate != end()) {
+      llvm::errs() << "Duplicate element = ";
+      (*duplicate)->dump();
+      llvm::errs() << "\n";
+      assert(false);
+    }
+
     std::set<CFGBlock *> Blocks(begin(), end());
     for (auto B : Blocks) {
       // check successor validity;
@@ -795,7 +804,7 @@ void removeAllEdge(CFGBlock *From, CFGBlock *To) {
   To->removePred(From);
 }
 
-void replaceAllSucc(CFGBlock* From, CFGBlock* OldTo, CFGBlock* NewTo) {
+void replaceAllSucc(CFGBlock *From, CFGBlock *OldTo, CFGBlock *NewTo) {
   if (OldTo == NewTo) {
     return;
   }

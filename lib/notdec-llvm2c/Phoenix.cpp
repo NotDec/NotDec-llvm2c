@@ -49,6 +49,7 @@ void Phoenix::execute() {
     if (iterations > 1000) {
       llvm::errs() << "Structure analysis stopped making progress, quitting."
                    << " Func: " << FCtx.getFunction().getName() << "\n";
+      // CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
       break;
     }
 

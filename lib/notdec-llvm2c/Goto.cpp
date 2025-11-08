@@ -8,6 +8,7 @@
 #include <clang/AST/Stmt.h>
 #include <clang/Analysis/CFG.h>
 #include <clang/Basic/Specifiers.h>
+#include <vector>
 
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Goto.h"
@@ -29,9 +30,9 @@ next(ForwardIt it,
 void Goto::execute() {
   auto &ASTCtx = FCtx.getASTContext();
   // for each block, insert goto statement to represent outgoing edges.
-  auto &bbs = FCtx.getFunction().getBasicBlockList();
-  for (auto it = bbs.begin(); it != bbs.end(); ++it) {
-    auto Current = FCtx.getBlock(*it);
+
+  for (auto it = CFG.begin(); it != CFG.end(); ++it) {
+    auto Current = (*it);
     auto succ_size = Current->succ_size();
     // for unconditional branch
     if (succ_size == 1) {
@@ -51,9 +52,9 @@ void Goto::execute() {
       bool invert = false;
 
       // Make b1 the fallthrough block
-      auto nextBlock = &(*next(it));
+      auto nextBlock = *std::next(it);
       // if false block == fall through, then can eliminate the goto
-      if (nextBlock == FCtx.getBlock(*b1)) {
+      if (nextBlock == b1) {
         std::swap(b1, b2);
         invert = true;
       }
@@ -115,9 +116,9 @@ void Goto::execute() {
   // all succs and preds of entry block, and ignore other blocks' edges.
   Entry.succ_clear();
   Entry.pred_clear();
-  for (auto it = bbs.begin(); it != bbs.end(); ++it) {
+  for (auto it = CFG.begin(); it != CFG.end(); ++it) {
     // push all statements into entry block
-    auto Current = FCtx.getBlock(*it);
+    auto Current = (*it);
     if (Current == &Entry) {
       continue;
     }
@@ -135,9 +136,18 @@ void Goto::execute() {
     if (Current->getTerminatorStmt() != nullptr) {
       Entry.appendStmt(Current->getTerminatorStmt());
     }
-    // remove the block from the cfg
+  }
+
+  // remove other blocks from the cfg
+  for (auto Current: std::vector<CFGBlock*>(CFG.begin(), CFG.end())) {
+    if (Current == &Entry) {
+      continue;
+    }
+    Current->succ_clear();
+    Current->pred_clear();
     CFG.remove(Current);
   }
+
   simplifyBlock(Entry);
   // The exit block is set to the first stub block created. We currently do not
   // care about it.

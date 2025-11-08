@@ -2047,6 +2047,11 @@ void SAFuncContext::run() {
                           << "\n");
   LLVM_DEBUG(Cfg->dump(getASTContext().getLangOpts(), getOpts().enableColor));
 
+  if (Cfg->size() > 1) {
+    Goto SA(*this);
+    SA.execute();
+  }
+
   // Finalize steps
   // After structural analysis, if things goes well, the CFG should have only
   // one linear block. But we still pick up other blocks if there are any.
