@@ -63,7 +63,7 @@ protected:
   std::pair<CFGBlock *, CFGBlock *>
   determineFollowLatch(CFGBlock *head, std::set<CFGBlock *> &loopNodes);
   bool virtualizeEdge(const VirtualEdge &edge);
-  void collapseToTailRegion(CFGBlock *From, CFGBlock *To, clang::Stmt *stm);
+  bool collapseToTailRegion(CFGBlock *From, CFGBlock *To, clang::Stmt *stm);
   bool virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
                                 CFGBlock *follow,
                                 std::set<CFGBlock *> &lexicalNodes);
@@ -72,10 +72,12 @@ protected:
   std::map<CFGBlock *, std::set<CFGBlock *>> findSwitchBody(CFGBlock *n,
                                                             CFGBlock *follow);
   bool
-  virtualizeIrregularSwitchExits(std::map<CFGBlock *, std::set<CFGBlock *>> map,
+  virtualizeIrregularSwitchExits(CFGBlock *head,
+                                 std::map<CFGBlock *, std::set<CFGBlock *>> map,
                                  CFGBlock *follow);
-  bool virtualizeIrregularCaseExits(CFGBlock *follow,
-                                    const std::set<CFGBlock *> &caseBody);
+  bool virtualizeIrregularCaseExits(CFGBlock *head, CFGBlock *caseEntry,
+                                    const std::set<CFGBlock *> &caseBody,
+                                    CFGBlock *follow);
   llvm::Optional<Phoenix::VirtualEdge>
   findLastResortEdge(std::set<CFGBlock *> &blocks);
   CFGBlock *getSwitchFollow(CFGBlock *n);

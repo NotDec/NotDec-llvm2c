@@ -467,7 +467,7 @@ bool isPureReturn(CFGBlock *B) {
   return llvm::isa<clang::ReturnStmt>(stmt);
 }
 
-void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
+bool Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
                                    clang::Stmt *stm) {
   switch (From->succ_size()) {
   case 2: {
@@ -493,19 +493,14 @@ void Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
                  << To->getBlockID() << "\n";
     std::abort();
   default:
-    // Switch statement may have multiple edge with the same from and to.
-    // Handle them all.
-    assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
-    // To fold a switch branch, we need to create a new block
-    auto newBlock = CFG.createBlock();
-    (*newBlock)->appendStmt(stm);
-    FCtx.mapRedirectBlock(**newBlock, *To);
-    replaceAllSucc(From, To, *newBlock);
-    CFG.sanityCheck();
-    break;
+    // Can't collapse switch to tail region
+    // llvm::errs() << __FILE__ << ":" << __LINE__
+    //              << ": Warning: Can't collapse switch to tail region!\n";
+    return false;
   }
   removeAllEdge(From, To);
   CFG.sanityCheck();
+  return true;
 }
 
 bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
@@ -541,7 +536,10 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
       std::abort();
     }
   }
-  collapseToTailRegion(Edge.From, To, Stmt);
+  bool Collapsed = collapseToTailRegion(Edge.From, To, Stmt);
+  if (!Collapsed) {
+    return false;
+  }
   if (To->pred_size() == 0 && To != &CFG.getEntry()) {
     if (isPureReturn(To) && (To->getLabel() == nullptr)) {
       // previous pure return detection has put the return to the From block.
@@ -590,8 +588,9 @@ bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
       }
     }
     for (auto &Ent : vEdges) {
-      changed = true;
-      virtualizeEdge(Ent.second);
+      if (virtualizeEdge(Ent.second)) {
+        changed = true;
+      }
     }
   }
   return changed;
@@ -723,6 +722,8 @@ bool Phoenix::lastResort(std::set<CFGBlock *> &blocks) {
 }
 
 void Phoenix::refineIncSwitch(CFGBlock *n) {
+  // At least do something before return.
+
   // virtualize all entries that makes a case having multiple preds.
   if (virtualizeIrregularSwitchEntries(n)) {
     return;
@@ -730,9 +731,10 @@ void Phoenix::refineIncSwitch(CFGBlock *n) {
 
   CFG.sanityCheck();
   auto follow = findIrregularSwitchFollowRegion(n);
+  // Map from switch successor to its lexical nodes.
   std::map<CFGBlock *, std::set<CFGBlock *>> switchBody =
       findSwitchBody(n, follow);
-  if (virtualizeIrregularSwitchExits(switchBody, follow)) {
+  if (virtualizeIrregularSwitchExits(n, switchBody, follow)) {
     return;
   }
 
@@ -748,41 +750,77 @@ void Phoenix::refineIncSwitch(CFGBlock *n) {
       return;
     }
   }
+
   lastResort(switchNodes);
 }
 
 bool Phoenix::virtualizeIrregularSwitchExits(
-    std::map<CFGBlock *, std::set<CFGBlock *>> switchBody, CFGBlock *follow) {
+    CFGBlock *head, std::map<CFGBlock *, std::set<CFGBlock *>> switchBody,
+    CFGBlock *follow) {
   for (auto &caseBody : switchBody) {
-    if (virtualizeIrregularCaseExits(follow, caseBody.second)) {
+    // for each case successor and its case nodes. remove all edges that does
+    // not go to follow.
+    if (virtualizeIrregularCaseExits(head, caseBody.first, caseBody.second,
+                                     follow)) {
       return true;
     }
   }
   return false;
 }
 
-bool Phoenix::virtualizeIrregularCaseExits(
-    CFGBlock *follow, const std::set<CFGBlock *> &caseBody) {
+bool Phoenix::virtualizeIrregularCaseExits(CFGBlock *head, CFGBlock *caseEntry,
+                                           const std::set<CFGBlock *> &caseBody,
+                                           CFGBlock *follow) {
+  // virtualized all out edges of caseBody that does not go to follow.
   bool virtualized = false;
   std::map<std::pair<CFGBlock *, CFGBlock *>, Phoenix::VirtualEdge> vEdges;
+  bool hasSwitchExit = false;
   for (auto n : caseBody) {
     for (auto &s : n->succs()) {
       // find leaving nodes.
-      if (caseBody.count(s) == 0 && s != follow) {
-        vEdges.insert({{n, s}, {n, s, VirtualEdgeType::Goto}});
+      if (caseBody.count(s) == 0) {
+        if (s != follow) {
+          // if there is switch in switch, we fail.
+          if (n->succ_size() > 2) {
+            hasSwitchExit = true;
+            break;
+          }
+          vEdges.insert({{n, s}, {n, s, VirtualEdgeType::Goto}});
+        }
       }
     }
   }
-  for (auto &Ent : vEdges) {
-    if (virtualizeEdge(Ent.second)) {
-      virtualized = true;
+  if (hasSwitchExit) {
+    // virtualize the switch edge instead
+    // Switch statement may have multiple edge with the same from and to.
+    // Handle them all.
+    auto From = head;
+    auto To = caseEntry;
+    auto Label = getBlockLabel(To);
+    auto stm = new (Ctx) clang::GotoStmt(Label, clang::SourceLocation(),
+                                         clang::SourceLocation());
+    assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
+    // To fold a switch branch, we need to create a new block
+    auto newBlock = CFG.createBlock();
+    (*newBlock)->appendStmt(stm);
+    FCtx.mapRedirectBlock(**newBlock, *To);
+    replaceAllSucc(From, To, *newBlock);
+    CFG.sanityCheck();
+    return true;
+  } else {
+    for (auto &Ent : vEdges) {
+      if (virtualizeEdge(Ent.second)) {
+        virtualized = true;
+      }
     }
   }
+
   return virtualized;
 }
 
 std::map<CFGBlock *, std::set<CFGBlock *>>
 Phoenix::findSwitchBody(CFGBlock *n, CFGBlock *follow) {
+  // Map from switch successor to its lexical nodes.
   std::map<CFGBlock *, std::set<CFGBlock *>> caseNodesMap;
   for (auto &C : n->succs()) {
     auto &caseNodes = caseNodesMap[C];
@@ -807,6 +845,7 @@ CFGBlock *Phoenix::findIrregularSwitchFollowRegion(CFGBlock *n) {
       return immPDom;
     }
   }
+  // TODO
   // collect all successors of all case nodes.
   // find the one with the most incoming edges from case nodes.
   int max_score = 0;
