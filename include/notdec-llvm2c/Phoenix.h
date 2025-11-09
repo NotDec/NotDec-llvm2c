@@ -45,6 +45,7 @@ protected:
   std::vector<CFGBlock *> unresolvedSwitches;
   std::queue<std::pair<CFGBlock *, std::set<CFGBlock *>>> unresolvedCycles;
   bool ReduceAcyclic(CFGBlock *Block, bool UseTail = true);
+  bool ReduceAcyclic2(CFGBlock *Block);
   bool isCyclic(CFGBlock *Block);
   bool ReduceCyclic(CFGBlock *Block);
   bool reduceSequence(CFGBlock *Block);

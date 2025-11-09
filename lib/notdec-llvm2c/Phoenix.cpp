@@ -69,9 +69,9 @@ void Phoenix::execute() {
         continue;
       }
 
-      bool Changed;
+      bool Changed = true;
       // int round = 0;
-      do {
+      while (Changed) {
         Changed = false;
         Changed |= ReduceAcyclic(Block, false);
         if (!Changed && isCyclic(Block)) {
@@ -79,7 +79,24 @@ void Phoenix::execute() {
         }
         Changed |= ReduceAcyclic(Block, true);
         // round += 1;
-      } while (Changed);
+      };
+    }
+
+    if (toRemove.empty() && CFG.size() > 1) {
+      for (const CFGBlock *CBlock : *postView) {
+        CFGBlock *Block = const_cast<CFGBlock *>(CBlock);
+        if (toRemove.count(Block)) {
+          continue;
+        }
+        // 2nd round rule.
+        bool Changed = true;
+        // int round = 0;
+        while (Changed) {
+          Changed = false;
+          Changed |= ReduceAcyclic2(Block);
+          // round += 1;
+        };
+      }
     }
     CFG.sanityCheck();
     if (toRemove.empty() && CFG.size() > 1) {
@@ -1330,6 +1347,46 @@ bool Phoenix::ReduceAcyclic(CFGBlock *Block, bool UseTail) {
   }
   // unreachable
   assert(false && "unreachable");
+}
+
+bool Phoenix::ReduceAcyclic2(CFGBlock *Block) {
+  // if block has only one pred and one succ, fold to previous block as an if.
+  if (Block->succ_size() == 1 && Block->pred_size() == 1) {
+    CFGBlock *Pred = *Block->pred_begin();
+    if (Pred->succ_size() == 2) {
+      auto TwoSuccs = Pred->getTwoSuccs();
+      CFGBlock *Other = TwoSuccs.first;
+      if (Other == Block) {
+        Other = TwoSuccs.second;
+      }
+      assert(Other != Block);
+      auto Succ = Block->getSingleSuccessor();
+      if (Other != Succ) {
+        // TODO if Pred's condition has no side effect.
+        // 1. Add an if block to Pred.
+        auto then = makeCompoundStmt(Block);
+        // copy cond.
+        auto cond = llvm::cast<clang::Expr>(Pred->getTerminatorStmt());
+        if (Pred->isFalseBrSucc(Block)) {
+          cond = invertCond(cond);
+        }
+        auto IfStmt = clang::IfStmt::Create(
+            Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary,
+            nullptr, nullptr, cond, clang::SourceLocation(),
+            clang::SourceLocation(), then, clang::SourceLocation());
+        Pred->appendStmt(IfStmt);
+        // 2. move the edge from Pred to Succ,
+        removeAllEdge(Block, Succ);
+        Pred->replaceAllSucc(Block, Succ);
+        Block->removePred(Pred);
+        Succ->addPred(Pred);
+        deferredRemove(Block);
+        CFG.sanityCheck();
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 } // namespace notdec::llvm2c
