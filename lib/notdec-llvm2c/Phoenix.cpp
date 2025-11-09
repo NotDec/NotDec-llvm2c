@@ -53,6 +53,7 @@ void Phoenix::execute() {
       break;
     }
 
+    CFG.sanityCheck();
     // this will maintain a list, so modification during iteration is OK
     auto postView = PostOrderCFGView::create(&CFG);
     Dom.buildDominatorTree(&CFG);
@@ -526,8 +527,7 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
       break;
     case Goto: {
       auto Label = getBlockLabel(To);
-      Stmt = new (Ctx) clang::GotoStmt(Label, clang::SourceLocation(),
-                                       clang::SourceLocation());
+      Stmt = createGotoStmt(Label);
       break;
     }
     default:
@@ -798,8 +798,7 @@ bool Phoenix::virtualizeIrregularCaseExits(CFGBlock *head, CFGBlock *caseEntry,
     auto From = head;
     auto To = caseEntry;
     auto Label = getBlockLabel(To);
-    auto stm = new (Ctx) clang::GotoStmt(Label, clang::SourceLocation(),
-                                         clang::SourceLocation());
+    auto stm = createGotoStmt(Label);
     assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
     // To fold a switch branch, we need to create a new block
     auto newBlock = CFG.createBlock();
