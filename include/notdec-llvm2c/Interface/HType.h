@@ -184,7 +184,9 @@ public:
   static UnionDecl *Create(HTypeContext &Ctx, const std::string &Name);
 
   SimpleRange getRange() const {
-    assert(!Members.empty() && "getRange: Empty Members?");
+    if (Members.empty()) {
+      return SimpleRange{};
+    }
     int64_t Max = std::numeric_limits<decltype(Max)>::min();
     int64_t Min = std::numeric_limits<decltype(Min)>::max();
     for (auto &Ent : Members) {
