@@ -2,6 +2,7 @@
 // Analysis and Iterative Control-Flow Structuring
 
 #include <cassert>
+#include <clang/AST/Decl.h>
 #include <iostream>
 #include <llvm/Support/Casting.h>
 #include <memory>
@@ -527,6 +528,7 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
     return false;
   }
   clang::Stmt *Stmt;
+  clang::LabelDecl* Label = nullptr;
   auto To = Edge.To;
   if (isPureReturn(To)) {
     assert(To->succ_size() == 0);
@@ -543,7 +545,7 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
       Stmt = new (Ctx) clang::ContinueStmt(clang::SourceLocation());
       break;
     case Goto: {
-      auto Label = getBlockLabel(To);
+      Label = getBlockLabel(To);
       Stmt = createGotoStmt(Label);
       break;
     }

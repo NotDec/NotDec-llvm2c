@@ -452,6 +452,45 @@ public:
   llvm::FunctionAnalysisManager &getFAM() { return FAM; }
   const Options &getOpts() const;
   void run();
+
+  /// Map from label to all GotoStmts that use it.
+  /// Assuming all goto stmt is created by createGotoStmt.
+  std::map<clang::LabelDecl *, std::vector<clang::GotoStmt *>> labelUsers;
+
+  clang::GotoStmt *createGotoStmt(clang::LabelDecl *label) {
+    auto Goto = new (getASTContext()) clang::GotoStmt(
+        label, clang::SourceLocation(), clang::SourceLocation());
+    auto &Vec = labelUsers[label];
+    assert(std::find(Vec.begin(), Vec.end(), Goto) == Vec.end());
+    Vec.push_back(Goto);
+    return Goto;
+  }
+
+  /// Replace all uses of a label with a new label.
+  void replaceAllUsesWith(clang::LabelDecl *label, clang::LabelDecl *newLabel) {
+    auto &users = labelUsers[label];
+    for (auto user : users) {
+      user->setLabel(newLabel);
+    }
+    labelUsers[newLabel].insert(labelUsers[newLabel].end(), users.begin(),
+                                users.end());
+    labelUsers.erase(label);
+  }
+
+  void removeLabelUse(LabelStmt *label, GotoStmt *gotoStmt) {
+    auto &vec = labelUsers[label->getDecl()];
+    auto it2 = std::find(vec.begin(), vec.end(), gotoStmt);
+    assert(it2 != vec.end());
+    vec.erase(it2);
+  }
+
+  bool eraseLabelUseIfEmpty(LabelStmt *label) {
+    if (labelUsers[label->getDecl()].empty()) {
+      labelUsers.erase(label->getDecl());
+      return true;
+    }
+    return false;
+  }
 };
 
 /// Main data structures for structural analysis
@@ -579,26 +618,12 @@ protected:
                                FCtx.getASTContext().IntTy, clang::VK_PRValue);
   }
 
-  /// Map from label to all GotoStmts that use it.
-  /// Assuming all goto stmt is created by createGotoStmt.
-  std::map<clang::LabelDecl *, std::vector<clang::GotoStmt *>> labelUsers;
-
   clang::GotoStmt *createGotoStmt(clang::LabelDecl *label) {
-    auto Goto = new (FCtx.getASTContext()) clang::GotoStmt(
-        label, clang::SourceLocation(), clang::SourceLocation());
-    labelUsers[label].push_back(Goto);
-    return Goto;
+    return FCtx.createGotoStmt(label);
   }
 
-  /// Replace all uses of a label with a new label.
   void replaceAllUsesWith(clang::LabelDecl *label, clang::LabelDecl *newLabel) {
-    auto &users = labelUsers[label];
-    for (auto user : users) {
-      user->setLabel(newLabel);
-    }
-    labelUsers[newLabel].insert(labelUsers[newLabel].end(), users.begin(),
-                                users.end());
-    labelUsers.erase(label);
+    return FCtx.replaceAllUsesWith(label, newLabel);
   }
 
 public:

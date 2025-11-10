@@ -1,5 +1,4 @@
 #include <cstdlib>
-#include <type_traits>
 
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/Debug.h>
@@ -139,7 +138,7 @@ void Goto::execute() {
   }
 
   // remove other blocks from the cfg
-  for (auto Current: std::vector<CFGBlock*>(CFG.begin(), CFG.end())) {
+  for (auto Current : std::vector<CFGBlock *>(CFG.begin(), CFG.end())) {
     if (Current == &Entry) {
       continue;
     }
@@ -165,10 +164,7 @@ void Goto::simplifyBlock(CFGBlock &Block) {
           if (label->getDecl() == gotoStmt->getLabel()) {
             LLVM_DEBUG(llvm::dbgs() << "Removing redundant goto: "
                                     << label->getName() << "\n");
-            auto &vec = labelUsers[label->getDecl()];
-            auto it2 = std::find(vec.begin(), vec.end(), gotoStmt);
-            assert(it2 != vec.end());
-            vec.erase(it2);
+            FCtx.removeLabelUse(label, gotoStmt);
             it = Block.erase(it);
             continue;
           }
@@ -207,10 +203,9 @@ void Goto::simplifyBlock(CFGBlock &Block) {
   for (auto it = Block.begin(); it != Block.end();) {
     if (auto stmt = getStmt(*it)) {
       if (auto label = llvm::dyn_cast<clang::LabelStmt>(stmt)) {
-        if (labelUsers[label->getDecl()].empty()) {
+        if (FCtx.eraseLabelUseIfEmpty(label)) {
           LLVM_DEBUG(llvm::dbgs() << "Removing unused LabelStmt: "
                                   << label->getName() << "\n");
-          labelUsers.erase(label->getDecl());
           it = Block.erase(it);
           continue;
         } else if (llvm::isa<clang::NullStmt>(label->getSubStmt()) &&
