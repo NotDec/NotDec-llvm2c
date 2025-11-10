@@ -650,21 +650,14 @@ public:
   static void addAllStmtTo(CFGBlock *From, CFGBlock *To) {
     // if the block has a label, then fold it.
     auto label = llvm::cast_or_null<clang::LabelStmt>(From->getLabel());
+    if (label != nullptr) {
+      To->appendStmt(label);
+    }
     for (auto elem = From->begin(); elem != From->end(); ++elem) {
       // TODO what if there are other kinds of CFGElement
       if (auto stmt = getStmt(*elem)) {
-        if (label != nullptr &&
-            llvm::isa<clang::NullStmt>(label->getSubStmt())) {
-          label->setSubStmt(stmt);
-          To->appendStmt(label);
-          label = nullptr;
-        } else {
-          To->appendStmt(stmt);
-        }
+        To->appendStmt(stmt);
       }
-    }
-    if (label != nullptr) {
-      To->appendStmt(label);
     }
     if (auto term = From->getTerminatorStmt()) {
       assert(false && "Terminator should be handled first!");
@@ -676,21 +669,13 @@ public:
                            bool noAssert = false) {
     // if the block has a label, then fold it.
     auto label = llvm::cast_or_null<clang::LabelStmt>(B->getLabel());
-    for (auto elem = B->begin(); elem != B->end(); ++elem) {
-      if (auto stmt = getStmt(*elem)) {
-        if (label != nullptr) {
-          assert(llvm::isa<clang::NullStmt>(label->getSubStmt()));
-          label->setSubStmt(stmt);
-          stmts.push_back(label);
-          label = nullptr;
-        } else {
-          stmts.push_back(stmt);
-        }
-      }
-    }
     if (label != nullptr) {
       stmts.push_back(label);
-      label = nullptr;
+    }
+    for (auto elem = B->begin(); elem != B->end(); ++elem) {
+      if (auto stmt = getStmt(*elem)) {
+        stmts.push_back(stmt);
+      }
     }
     if (auto term = B->getTerminatorStmt()) {
       if (!noAssert) {

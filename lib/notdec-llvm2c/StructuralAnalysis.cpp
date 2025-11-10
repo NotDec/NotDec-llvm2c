@@ -1568,7 +1568,7 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
 
     FuncCtx.run();
     LLVM_DEBUG(llvm::dbgs() << "Function: " << F.getName() << "\n");
-    LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
+    // LLVM_DEBUG(FuncCtx.getFunctionDecl()->dump());
   }
 
   // Print the AST
@@ -2474,6 +2474,10 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
                                  Ret);
       return Ret;
     } else {
+      if (Val.getBitWidth() != Ctx.getIntWidth(Ty)) {
+        llvm::errs() << "Error: Incorrect int type bitwidth? expect " << Val.getBitWidth() << " but got " << Ctx.getIntWidth(Ty) << "\n";
+        Ty = TB.visitType(*CI->getType());
+      }
       return clang::IntegerLiteral::Create(Ctx, Val, Ty,
                                            clang::SourceLocation());
     }

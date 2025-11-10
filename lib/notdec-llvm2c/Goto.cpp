@@ -159,14 +159,16 @@ void Goto::simplifyBlock(CFGBlock &Block) {
     if (auto stmt = getStmt(*it)) {
       if (auto gotoStmt = llvm::dyn_cast<clang::GotoStmt>(stmt)) {
         auto next = std::next(it);
-        if (auto label =
-                llvm::dyn_cast_or_null<clang::LabelStmt>(getStmt(*next))) {
-          if (label->getDecl() == gotoStmt->getLabel()) {
-            LLVM_DEBUG(llvm::dbgs() << "Removing redundant goto: "
-                                    << label->getName() << "\n");
-            FCtx.removeLabelUse(label, gotoStmt);
-            it = Block.erase(it);
-            continue;
+        if (next != Block.end()) {
+          if (auto label =
+                  llvm::dyn_cast_or_null<clang::LabelStmt>(getStmt(*next))) {
+            if (label->getDecl() == gotoStmt->getLabel()) {
+              LLVM_DEBUG(llvm::dbgs() << "Removing redundant goto: "
+                                      << label->getName() << "\n");
+              FCtx.removeLabelUse(label, gotoStmt);
+              it = Block.erase(it);
+              continue;
+            }
           }
         }
       }
