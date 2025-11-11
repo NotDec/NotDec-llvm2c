@@ -296,8 +296,9 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
       // 2. array indexing
       Ty = ArrayTy->getElementType().getTypePtr();
       Val = new (Ctx) clang::ArraySubscriptExpr(
-          addParenthesis<ArraySubscriptExpr>(Ctx, Val, false), Index, ArrayTy->getElementType(), clang::VK_LValue,
-          clang::OK_Ordinary, clang::SourceLocation());
+          addParenthesis<ArraySubscriptExpr>(Ctx, Val, false), Index,
+          ArrayTy->getElementType(), clang::VK_LValue, clang::OK_Ordinary,
+          clang::SourceLocation());
     } else if (auto *RecordTy = Ty->getAs<clang::RecordType>()) {
       // 3. field reference
       auto Decl = RecordTy->getDecl();
@@ -973,8 +974,8 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
           auto binop = handleBinary(
               Ctx, EB, FCtx.getTypeBuilder(), llvm::Instruction::Mul, *Call,
               Op0, Op1,
-              nullptr // &FCtx.getSAContext().getHighTypes().StructInfos
-          );
+              nullptr, // &FCtx.getSAContext().getHighTypes().StructInfos
+              getTypeBuilder().getType(&I, nullptr, -1));
           addExprOrStmt(I, *binop);
           return;
         } else if (Ind == 1) {
@@ -1262,7 +1263,8 @@ void CFGBuilder::visitCastInst(llvm::CastInst &I) {
 clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
                           TypeBuilder &TB, llvm::Instruction::BinaryOps OpCode,
                           llvm::User &Result, llvm::Value *L, llvm::Value *R,
-                          std::map<clang::Decl *, StructInfo> *StructInfos) {
+                          std::map<clang::Decl *, StructInfo> *StructInfos,
+                          QualType ExpectedTy) {
   clang::Optional<clang::BinaryOperatorKind> op = convertOp(OpCode);
   assert(op.hasValue() && "CFGBuilder.visitBinaryOperator: unexpected op type");
   Conversion cv = getSignedness(OpCode);
@@ -1303,7 +1305,9 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
     op = clang::BO_LOr;
   }
 
-  auto ExpectedTy = TB.getType(&Result, nullptr, -1);
+  if (ExpectedTy.isNull()) {
+    ExpectedTy = TB.getType(&Result, nullptr, -1);
+  }
   auto ArithTy = ExpectedTy;
   if (ArithTy->isPointerType()) {
     ArithTy = Ctx.getIntTypeForBitwidth(TB.getPointerSizeInBits(), 0);
@@ -2475,7 +2479,9 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
       return Ret;
     } else {
       if (Val.getBitWidth() != Ctx.getIntWidth(Ty)) {
-        llvm::errs() << "Error: Incorrect int type bitwidth? expect " << Val.getBitWidth() << " but got " << Ctx.getIntWidth(Ty) << "\n";
+        llvm::errs() << "Error: Incorrect int type bitwidth? expect "
+                     << Val.getBitWidth() << " but got " << Ctx.getIntWidth(Ty)
+                     << "\n";
         Ty = TB.visitType(*CI->getType());
       }
       return clang::IntegerLiteral::Create(Ctx, Val, Ty,

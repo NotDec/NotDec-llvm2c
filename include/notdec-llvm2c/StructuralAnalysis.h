@@ -964,7 +964,8 @@ clang::Expr *castUnsigned(clang::ASTContext &Ctx, TypeBuilder &TB,
 clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
                           TypeBuilder &TB, llvm::Instruction::BinaryOps OpCode,
                           llvm::User &Result, llvm::Value *L, llvm::Value *R,
-                          std::map<clang::Decl *, StructInfo> *StructInfos);
+                          std::map<clang::Decl *, StructInfo> *StructInfos,
+                          QualType ExpectedTy = QualType());
 
 } // namespace notdec::llvm2c
 
