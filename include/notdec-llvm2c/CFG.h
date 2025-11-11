@@ -260,6 +260,17 @@ public:
     assert(succ_size() == 2);
     return std::make_pair(Succs[0], Succs[1]);
   }
+  CFGBlock * getOtherSucc(CFGBlock *One) {
+    assert(succ_size() == 2);
+    CFGBlock *Other = nullptr;
+    if (Succs[0] == One) {
+      Other = Succs[1];
+    } else if (Succs[1] == One) {
+      Other = Succs[0];
+    }
+    assert(Other != One);
+    return Other;
+  }
   bool isTrueBrSucc(CFGBlock *To) {
     assert(succ_size() == 2);
     return Succs[0] == To;
@@ -417,6 +428,7 @@ public:
   }
 
   Stmt *getLabel() { return Label; }
+  clang::LabelStmt *getLabelStmt() { return llvm::dyn_cast_or_null<clang::LabelStmt>(getLabel()); }
   const Stmt *getLabel() const { return Label; }
 
   bool hasNoReturnElement() const { return HasNoReturnElement; }

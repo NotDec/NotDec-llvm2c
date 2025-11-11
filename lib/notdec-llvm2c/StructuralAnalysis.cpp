@@ -296,7 +296,7 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, clang::Expr *Val,
       // 2. array indexing
       Ty = ArrayTy->getElementType().getTypePtr();
       Val = new (Ctx) clang::ArraySubscriptExpr(
-          Val, Index, ArrayTy->getElementType(), clang::VK_LValue,
+          addParenthesis<ArraySubscriptExpr>(Ctx, Val, false), Index, ArrayTy->getElementType(), clang::VK_LValue,
           clang::OK_Ordinary, clang::SourceLocation());
     } else if (auto *RecordTy = Ty->getAs<clang::RecordType>()) {
       // 3. field reference

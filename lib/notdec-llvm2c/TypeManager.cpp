@@ -791,7 +791,9 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
           CastKind::CK_ArrayToPointerDecay, deref(Ctx, Val), nullptr,
           ExprValueKind::VK_PRValue, FPOptionsOverride()));
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
-          deref(Ctx, Val), Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
+          addParenthesis<clang::ArraySubscriptExpr>(Ctx, deref(Ctx, Val),
+                                                    false),
+          Index, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
           clang::SourceLocation());
       auto R = addrOf(Ctx, AS, true);
       Result.push_back(R);
@@ -1018,8 +1020,10 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
 
       // Create array indexing?
       auto AS = new (Ctx) clang::ArraySubscriptExpr(
-          deref(Ctx, Base), CurrentIndex, ElemTy, clang::VK_LValue,
-          clang::OK_Ordinary, clang::SourceLocation());
+          addParenthesis<clang::ArraySubscriptExpr>(Ctx, deref(Ctx, Base),
+                                                    false),
+          CurrentIndex, ElemTy, clang::VK_LValue, clang::OK_Ordinary,
+          clang::SourceLocation());
 
       Base = addrOf(Ctx, AS);
       // TODO Remaining Offset?

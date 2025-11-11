@@ -713,7 +713,7 @@ clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
     Ty = Ty->castAsArrayTypeUnsafe()->getElementType();
     // Create array subscript operator
     auto ArrSub = new (Ctx) clang::ArraySubscriptExpr(
-        E,
+        addParenthesis<clang::ArraySubscriptExpr>(Ctx, (E), false),
         clang::IntegerLiteral::Create(Ctx, llvm::APInt::getZero(32), Ctx.IntTy,
                                       clang::SourceLocation()),
         Ty, clang::VK_LValue, clang::OK_Ordinary, clang::SourceLocation());

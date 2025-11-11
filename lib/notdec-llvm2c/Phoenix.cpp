@@ -22,6 +22,7 @@
 #include <clang/AST/Stmt.h>
 #include <clang/Basic/SourceLocation.h>
 
+#include "LoopGotoRewriter.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Dominators.h"
 #include "notdec-llvm2c/Phoenix.h"
@@ -227,6 +228,7 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
     }
     changed = true;
   }
+  // Only support two succ
   if (Block->succ_size() > 2) {
     return changed;
   }
@@ -242,6 +244,7 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
         whil = createWhileTrue(body);
       } else {
         assert(Block->succ_size() == 2);
+        auto Other = Block->getOtherSucc(S);
         // Do while loop
         auto cond = takeBinaryCond(*Block);
         auto body = makeCompoundStmt(Block);
@@ -249,6 +252,13 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
         if (Block->isFalseBrSucc(S)) {
           cond = invertCond(cond);
         }
+        // We ignore continue for do while loop.
+        // Rewrite the body for only break stmt.
+        if (auto Label = Other->getLabelStmt()) {
+          LoopGotoRewriter LGR(Ctx, nullptr, Label->getDecl());
+          LGR.Rewrite(body);
+        }
+
         // create do while stmt
         whil = new (Ctx)
             clang::DoStmt(body, cond, clang::SourceLocation(),
@@ -273,10 +283,26 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
       if (Block->isFalseBrSucc(S)) {
         cond = invertCond(cond);
       }
+      auto Other = Block->getOtherSucc(S);
       clang::Stmt *whil;
       if (auto CondStmtExpr = createBlockCondExpr(Block, cond)) {
         // S is the only body block
         auto body = makeCompoundStmt(S);
+        // rewrite goto to break or continue
+        auto BreakTarget = Other->getLabelStmt();
+        auto ContinueTarget = Block->getLabelStmt();
+        if (BreakTarget != nullptr || ContinueTarget != nullptr) {
+          LoopGotoRewriter LGR(
+              Ctx, ContinueTarget ? ContinueTarget->getDecl() : nullptr,
+              BreakTarget ? BreakTarget->getDecl() : nullptr);
+          if (auto Com = llvm::dyn_cast<CompoundStmt>(body)) {
+            LGR.RewriteCompound(Com);
+          } else {
+            if (auto S = LGR.RewriteSingle(body)) {
+              body = S;
+            }
+          }
+        }
         whil = clang::WhileStmt::Create(
             Ctx, nullptr, CondStmtExpr, body, clang::SourceLocation(),
             clang::SourceLocation(), clang::SourceLocation());
@@ -298,6 +324,15 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
         // create the while true
         auto body = clang::CompoundStmt::Create(
             Ctx, stmts, clang::SourceLocation(), clang::SourceLocation());
+        // rewrite goto to break or continue
+        auto BreakTarget = Other->getLabelStmt();
+        auto ContinueTarget = Block->getLabelStmt();
+        if (BreakTarget != nullptr || ContinueTarget != nullptr) {
+          LoopGotoRewriter LGR(
+              Ctx, ContinueTarget ? ContinueTarget->getDecl() : nullptr,
+              BreakTarget ? BreakTarget->getDecl() : nullptr);
+          LGR.RewriteCompound(body);
+        }
         whil = createWhileTrue(body);
       }
       // now the while is the only stmt in Block
@@ -528,7 +563,7 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
     return false;
   }
   clang::Stmt *Stmt;
-  clang::LabelDecl* Label = nullptr;
+  clang::LabelDecl *Label = nullptr;
   auto To = Edge.To;
   if (isPureReturn(To)) {
     assert(To->succ_size() == 0);
@@ -592,7 +627,7 @@ bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
         if (n != latch) {
           vEdges.insert_or_assign(
               {n, s},
-              Phoenix::VirtualEdge{n, s, Phoenix::VirtualEdgeType::Continue});
+              Phoenix::VirtualEdge{n, s, Phoenix::VirtualEdgeType::Goto});
         }
       } else if (lexicalNodes.count(s) == 0) {
         if (s == follow) {
@@ -600,7 +635,7 @@ bool Phoenix::virtualizeIrregularExits(CFGBlock *head, CFGBlock *latch,
               (loopType == Phoenix::While && n != head)) {
             vEdges.insert_or_assign(
                 {n, s},
-                Phoenix::VirtualEdge{n, s, Phoenix::VirtualEdgeType::Break});
+                Phoenix::VirtualEdge{n, s, Phoenix::VirtualEdgeType::Goto});
           }
         } else {
           vEdges.insert({{n, s}, {n, s, Phoenix::VirtualEdgeType::Goto}});
@@ -1364,27 +1399,29 @@ bool Phoenix::ReduceAcyclic2(CFGBlock *Block) {
       assert(Other != Block);
       auto Succ = Block->getSingleSuccessor();
       if (Other != Succ) {
-        // TODO if Pred's condition has no side effect.
-        // 1. Add an if block to Pred.
-        auto then = makeCompoundStmt(Block);
-        // copy cond.
+        // if Pred's condition has no side effect.
         auto cond = llvm::cast<clang::Expr>(Pred->getTerminatorStmt());
-        if (Pred->isFalseBrSucc(Block)) {
-          cond = invertCond(cond);
+        if (!cond->HasSideEffects(Ctx)) {
+          // 1. Add an if block to Pred.
+          auto then = makeCompoundStmt(Block);
+          // copy cond.
+          if (Pred->isFalseBrSucc(Block)) {
+            cond = invertCond(cond);
+          }
+          auto IfStmt = clang::IfStmt::Create(
+              Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary,
+              nullptr, nullptr, cond, clang::SourceLocation(),
+              clang::SourceLocation(), then, clang::SourceLocation());
+          Pred->appendStmt(IfStmt);
+          // 2. move the edge from Pred to Succ,
+          removeAllEdge(Block, Succ);
+          Pred->replaceAllSucc(Block, Succ);
+          Block->removePred(Pred);
+          Succ->addPred(Pred);
+          deferredRemove(Block);
+          CFG.sanityCheck();
+          return true;
         }
-        auto IfStmt = clang::IfStmt::Create(
-            Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary,
-            nullptr, nullptr, cond, clang::SourceLocation(),
-            clang::SourceLocation(), then, clang::SourceLocation());
-        Pred->appendStmt(IfStmt);
-        // 2. move the edge from Pred to Succ,
-        removeAllEdge(Block, Succ);
-        Pred->replaceAllSucc(Block, Succ);
-        Block->removePred(Pred);
-        Succ->addPred(Pred);
-        deferredRemove(Block);
-        CFG.sanityCheck();
-        return true;
       }
     }
   }
