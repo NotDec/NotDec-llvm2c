@@ -1134,6 +1134,12 @@ bool Phoenix::reduceIncSwitch(CFGBlock *N, CFGBlock *Follow) {
   //     CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor););
   auto &term = std::get<SwitchTerminator>(N->getTerminator());
   auto cond = llvm::cast<clang::Expr>(term.getStmt());
+  // if cond is pointer type, cast to int.
+  if (cond->getType()->isPointerType()) {
+    cond = FCtx.getTypeBuilder().checkCast(
+        cond, Ctx.getIntTypeForBitwidth(
+                  FCtx.getTypeBuilder().getPointerSizeInBits(), 1));
+  }
   auto SW = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
                                       clang::SourceLocation(),
                                       clang::SourceLocation());
