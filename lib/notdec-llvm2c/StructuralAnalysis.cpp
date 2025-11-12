@@ -443,10 +443,14 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
     Ty = Ctx.getIntTypeForBitwidth(StoreSize, true);
   }
 
+  if (I.getPointerOperand()->getName() == "new_19146") {
+    llvm::errs() << "here\n";
+  }
+
   Ty = toLValueType(Ctx, Ty);
   Val1 = getTypeBuilder().checkCast(Val1, Ty);
   Ptr1 = getTypeBuilder().checkCast(Ptr1, Ctx.getPointerType(Ty));
-  auto PtrD = deref(Ctx, Ptr1);
+  auto PtrD = deref(Ctx, Ptr1, false);
   // // if there is addrof, cast may be eliminated, we need to cast again.
   // PtrD = getTypeBuilder().checkCast(PtrD, Ty);
   clang::Expr *assign = createBinaryOperator(Ctx, PtrD, Val1, clang::BO_Assign,
@@ -503,7 +507,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
 
   assert(!Ty->isVoidType());
   Ptr1 = getTypeBuilder().checkCast(Ptr1, Ctx.getPointerType(Ty));
-  Ptr1 = deref(Ctx, Ptr1);
+  Ptr1 = deref(Ctx, Ptr1, false);
 
   // TODO: 尝试重写Ptr1，确保其指针唯一。
   SimpleRewriter SR(Ctx);

@@ -683,16 +683,19 @@ clang::Expr *addrOf(clang::ASTContext &Ctx, clang::Expr *E, bool NoElimMember) {
                              clang::VK_LValue);
 }
 
-clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E) {
+clang::Expr *deref(clang::ASTContext &Ctx, clang::Expr *E, bool SkipCast) {
   // eliminate deref + addrOf
   clang::Expr *ENoCast = E;
-  clang::CastExpr *Cast = nullptr;
-  // only when same size.
-  while ((Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) &&
-         (Ctx.getTypeSize(Cast->getType()) ==
-          Ctx.getTypeSize(ENoCast->getType()))) {
-    ENoCast = Cast->getSubExpr();
+  if (SkipCast) {
+    clang::CastExpr *Cast = nullptr;
+    // only when same size.
+    while ((Cast = llvm::dyn_cast<clang::CastExpr>(ENoCast)) &&
+           (Ctx.getTypeSize(Cast->getType()) ==
+            Ctx.getTypeSize(ENoCast->getType()))) {
+      ENoCast = Cast->getSubExpr();
+    }
   }
+
   if (llvm::isa<clang::UnaryOperator>(ENoCast) &&
       llvm::cast<clang::UnaryOperator>(ENoCast)->getOpcode() ==
           clang::UO_AddrOf) {
