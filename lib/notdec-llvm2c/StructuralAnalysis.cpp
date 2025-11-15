@@ -383,6 +383,11 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
                  << I << "\n";
     return;
   }
+
+  if (I.getPointerOperand()->getName() == "new_104204" && I.getValueOperand()->getName() == "new_104200") {
+    llvm::errs() << "here";
+  }
+
   // store = assign + deref left.
   clang::Expr *Val = EB.visitValue(I.getValueOperand(), &I, 0);
   clang::Expr *Ptr = EB.visitValue(I.getPointerOperand(), &I, 1);
@@ -443,14 +448,11 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
     Ty = Ctx.getIntTypeForBitwidth(StoreSize, true);
   }
 
-  if (I.getPointerOperand()->getName() == "new_19146") {
-    llvm::errs() << "here\n";
-  }
-
   Ty = toLValueType(Ctx, Ty);
   Val1 = getTypeBuilder().checkCast(Val1, Ty);
   Ptr1 = getTypeBuilder().checkCast(Ptr1, Ctx.getPointerType(Ty));
   auto PtrD = deref(Ctx, Ptr1, false);
+
   // // if there is addrof, cast may be eliminated, we need to cast again.
   // PtrD = getTypeBuilder().checkCast(PtrD, Ty);
   clang::Expr *assign = createBinaryOperator(Ctx, PtrD, Val1, clang::BO_Assign,
@@ -1014,7 +1016,11 @@ void CFGBuilder::visitFreezeInst(llvm::FreezeInst &I) {
 }
 
 clang::Expr *TypeBuilder::checkCast(clang::Expr *Val, clang::QualType To) {
-  // remove any cast expr
+  // Cannot cast to array
+  if (To->isArrayType()) {
+    To = Ctx.getDecayedType(To);
+  }
+  // remove any cast expr?
   while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Val)) {
     Val = Cast->getSubExpr();
   }
@@ -1050,6 +1056,11 @@ clang::Expr *SAFuncContext::cacheExpr(llvm::Instruction &Inst,
   if (Ty->canDecayToPointerType()) {
     Ty = Ctx.getASTContext().getDecayedType(Ty);
   }
+
+  if (Ty->isArrayType()) {
+    llvm::errs() << "here\n";
+  }
+
   clang::VarDecl *Decl = clang::VarDecl::Create(
       getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
       II2, Ty, nullptr, clang::SC_None);
@@ -1070,14 +1081,18 @@ void SAFuncContext::addStmt(CFGBlock &Block, clang::Stmt &Stmt,
                             llvm::Instruction &InsertLoc,
                             std::optional<size_t> Slot) {
   LoadCloneRewriter R(getASTContext(), LoadInfoMap, InsertLoc);
-  auto NewStmt = R.TransformStmt(&Stmt);
-  assert(NewStmt.get() != nullptr);
+  auto NewStmtR = R.TransformStmt(&Stmt);
+  auto NewStmt = NewStmtR.get();
+  assert(NewStmt != nullptr);
+  if (auto E = llvm::dyn_cast<Expr>(NewStmt)) {
+    NewStmt = getNoCast(E);
+  }
 
   if (Slot) {
     assert(isa<llvm::LoadInst>(&InsertLoc));
-    Block.updateStmt(*Slot, NewStmt.get());
+    Block.updateStmt(*Slot, NewStmt);
   } else {
-    Block.appendStmt(NewStmt.get());
+    Block.appendStmt(NewStmt);
   }
 }
 

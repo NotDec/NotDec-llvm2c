@@ -646,7 +646,7 @@ void ClangTypeResult::createMemoryDecls() {
 
 bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
                                        clang::QualType FromQ,
-                                       clang::QualType ToQ) {
+                                       clang::QualType ToQ, bool canDecay) {
   // char[0] vs char (*)[32]
   // if (From->isPointerType() && From->getPointeeType()->isArrayType()) {
   //   return isTypeCompatible(From->getPointeeType(), To);
@@ -655,11 +655,13 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   //   return isTypeCompatible(From, To->getPointeeType());
   // }
 
-  if (FromQ->isArrayType()) {
-    FromQ = Ctx.getDecayedType(FromQ);
-  }
-  if (ToQ->isArrayType()) {
-    ToQ = Ctx.getDecayedType(ToQ);
+  if (canDecay) {
+    if (FromQ->isArrayType()) {
+      FromQ = Ctx.getDecayedType(FromQ);
+    }
+    if (ToQ->isArrayType()) {
+      ToQ = Ctx.getDecayedType(ToQ);
+    }
   }
 
   const clang::Type *From = FromQ.getCanonicalType().getTypePtr();
@@ -674,7 +676,8 @@ bool ClangTypeResult::isTypeCompatible(clang::ASTContext &Ctx,
   }
 
   if (From->isPointerType() && To->isPointerType()) {
-    return isTypeCompatible(Ctx, From->getPointeeType(), To->getPointeeType());
+    return isTypeCompatible(Ctx, From->getPointeeType(), To->getPointeeType(),
+                            false);
   } else if (From->isPointerType() != To->isPointerType()) {
     // pointer and non-pointer
     return false;

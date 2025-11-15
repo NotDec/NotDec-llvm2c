@@ -1400,6 +1400,11 @@ void StmtPrinter::VisitCStyleCastExpr(CStyleCastExpr *Node) {
   OS << '(';
   Node->getTypeAsWritten().print(OS, Policy);
   OS << ')';
+  if (Node->getType()->isPointerType() && Node->getSubExpr()->getType()->isFloatingType()) {
+    OS << '(';
+    Context->getIntPtrType().print(OS, Policy);
+    OS << ')';
+  }
   PrintExpr(Node->getSubExpr());
 }
 
