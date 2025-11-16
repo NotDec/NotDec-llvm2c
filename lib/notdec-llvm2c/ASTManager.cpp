@@ -161,6 +161,10 @@ void ASTManager::print(DeclPrinter &Printer) {
   });
   OS << "// ====== End of Type Definitions ======\n\n";
 
+  OS << "// ====== Global Declarations ======\n";
+  Printer.VisitTranslationUnitDecl(GlobalDeclarations);
+  OS << "// ====== End of Global Declarations ======\n\n";
+
   OS << "// ====== Global Definitions ======\n";
   Printer.VisitTranslationUnitDecl(GlobalDefinitions);
   OS << "// ====== End of Global Definitions ======\n\n";

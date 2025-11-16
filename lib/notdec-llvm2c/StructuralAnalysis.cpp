@@ -1573,9 +1573,6 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
       HTR == nullptr ? nullptr : std::make_shared<ClangTypeResult>(HTR, AM);
 
   if (CT != nullptr) {
-    CT->declareDecls();
-  }
-  if (CT != nullptr) {
     CT->defineDecls();
   }
 

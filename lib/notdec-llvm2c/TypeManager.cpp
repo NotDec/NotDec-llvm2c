@@ -1,10 +1,12 @@
 #include "notdec-llvm2c/TypeManager.h"
 #include "CCodeTransform.h"
+#include "DependencyVisitors.h"
 #include "Interface/HType.h"
 #include "Interface/StructManager.h"
 #include "StructuralAnalysis.h"
 #include "Utils.h"
 #include <cassert>
+#include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
@@ -18,6 +20,7 @@
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 #include <optional>
@@ -216,6 +219,7 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
 }
 
 void ClangTypeResult::defineDecls() {
+  declareDecls();
   std::set<notdec::ast::TypedDecl *> Visited;
 
   // Because if one record is embedded, inner record need to be defined first.
@@ -579,6 +583,14 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
   }
 }
 
+clang::VarDecl *convertDeclaration(clang::ASTContext &Ctx,
+                                   clang::TranslationUnitDecl *TUD,
+                                   const clang::VarDecl *VD) {
+  return clang::VarDecl::Create(Ctx, TUD, clang::SourceLocation(),
+                                clang::SourceLocation(), VD->getIdentifier(),
+                                VD->getType(), nullptr, clang::SC_None);
+}
+
 void ClangTypeResult::createMemoryDecls() {
   auto *MDecl = Result->MemoryDecl;
   auto *TUD = AM->getGlobalDefinitions();
@@ -617,6 +629,25 @@ void ClangTypeResult::createMemoryDecls() {
               MDecl->getBytesManager()->getSubBytes(Field.R.Start, EndRange);
           clang::Expr *Init = decodeInitializer(VD, SubBytes);
           VD->setInit(Init);
+        }
+      }
+      // Finally, try to resolve the cyclic dependency issue.
+      DeclarationCounterVisitor DCV;
+      for (size_t i = 0; i < FS.size(); i++) {
+        auto &Field = FS[i];
+        auto VD = llvm::cast<clang::VarDecl>(Field.ASTDecl);
+        if (VD->hasInit()) {
+          DCV.TraverseDecl(VD);
+        }
+        DCV.ignoreDecl(VD);
+      }
+      auto GD = AM->getGlobalDeclarations();
+      for (auto &Ent : DCV.getCounts()) {
+        if (Ent.second > 0) {
+          auto VD2 = llvm::cast<clang::VarDecl>(Ent.first);
+          auto VDecl = convertDeclaration(Ctx, GD, VD2);
+          const_cast<VarDecl*>(VD2)->setPreviousDecl(VDecl);
+          GD->addDecl(VDecl);
         }
       }
     } else {

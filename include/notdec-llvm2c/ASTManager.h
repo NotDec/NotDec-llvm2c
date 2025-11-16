@@ -16,6 +16,7 @@ class ASTManager {
   std::shared_ptr<clang::ASTUnit> AST;
   TranslationUnitDecl *TypeDeclarations;
   TranslationUnitDecl *FunctionDeclarations;
+  TranslationUnitDecl *GlobalDeclarations;
   TranslationUnitDecl *GlobalDefinitions;
   TranslationUnitDecl *TypeDefinitions;
   TranslationUnitDecl *FunctionDefinitions;
@@ -25,6 +26,7 @@ public:
       : OS(OS), AST(AST) {
     TypeDeclarations = TranslationUnitDecl::Create(getASTContext());
     FunctionDeclarations = TranslationUnitDecl::Create(getASTContext());
+    GlobalDeclarations = TranslationUnitDecl::Create(getASTContext());
     GlobalDefinitions = TranslationUnitDecl::Create(getASTContext());
     TypeDefinitions = TranslationUnitDecl::Create(getASTContext());
     FunctionDefinitions = TranslationUnitDecl::Create(getASTContext());
@@ -36,6 +38,7 @@ public:
   TranslationUnitDecl *getFunctionDeclarations() {
     return FunctionDeclarations;
   }
+  TranslationUnitDecl *getGlobalDeclarations() { return GlobalDeclarations; }
   TranslationUnitDecl *getGlobalDefinitions() { return GlobalDefinitions; }
   TranslationUnitDecl *getTypeDefinitions() { return TypeDefinitions; }
   TranslationUnitDecl *getFunctionDefinitions() { return FunctionDefinitions; }
