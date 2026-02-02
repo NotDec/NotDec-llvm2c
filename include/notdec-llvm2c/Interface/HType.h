@@ -245,7 +245,8 @@ public:
     TK_Union,
     TK_Array,
     // End of CompoundType
-    TK_Typedef
+    TK_Typedef,
+    TK_TypeVariable  // Type variable, similar to C++ template parameter
   };
 
 protected:
@@ -266,6 +267,7 @@ public:
   bool isUnionType() const { return Kind == TK_Union; }
   bool isArrayType() const { return Kind == TK_Array; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
+  bool isTypeVariableType() const { return Kind == TK_TypeVariable; }
   bool isCharType() const;
   bool isCharArrayType() const;
 
@@ -416,6 +418,19 @@ public:
   TypedefDecl *getDecl() const { return Decl; }
 };
 
+// Type variable - similar to C++ template parameter template<typename T>
+class TypeVariableType : public HType {
+  std::string Name;
+
+  TypeVariableType(bool IsConst, std::string Name)
+      : HType(TK_TypeVariable, nullptr, IsConst), Name(std::move(Name)) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_TypeVariable; }
+  const std::string &getName() const { return Name; }
+};
+
 /* Factory class implementation */
 class HTypeContext {
 
@@ -433,6 +448,9 @@ class HTypeContext {
 
   using ArrayKey = std::tuple<bool, HType *, std::optional<unsigned>>;
   std::map<ArrayKey, std::unique_ptr<ArrayType>> ArrayTypes;
+
+  using TypeVariableKey = std::tuple<bool, std::string>;
+  std::map<TypeVariableKey, std::unique_ptr<TypeVariableType>> TypeVariableTypes;
 
   // using FunctionKey = std::tuple<bool, std::vector<HType*>,
   // std::vector<HType*>>; static std::map<FunctionKey,
@@ -568,6 +586,19 @@ public:
     } else {
       return Decl->TypeForDeclConst.get();
     }
+  }
+
+  HType *getTypeVariableType(bool IsConst, const std::string &Name) {
+    auto key = std::make_tuple(IsConst, Name);
+    auto &entry = TypeVariableTypes[key];
+    if (!entry) {
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getTypeVariableType(false, Name);
+      }
+      entry.reset(new TypeVariableType(IsConst, Name));
+    }
+    return entry.get();
   }
 
   void printDecls(llvm::raw_fd_ostream &OS) {
