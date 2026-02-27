@@ -25,6 +25,15 @@ HType *ArrayType::withSize(HTypeContext &Ctx,
   return Ctx.getArrayType(isConst(), ElementType, NumElements);
 }
 
+bool HType::isVoidPtrType() const {
+  if (isPointerType()) {
+    if (getPointeeType() == nullptr || getPointeeType()->isVoidPtrType()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool HType::isCharArrayType() const {
   if (isArrayType()) {
     if (llvm::cast<ArrayType>(this)->getElementType()->isCharType()) {

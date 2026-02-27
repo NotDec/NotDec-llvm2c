@@ -270,6 +270,7 @@ public:
   bool isTypeVariableType() const { return Kind == TK_TypeVariable; }
   bool isCharType() const;
   bool isCharArrayType() const;
+  bool isVoidPtrType() const;
 
   HType *getPointeeType() const;
   HType *getArrayElementType() const;

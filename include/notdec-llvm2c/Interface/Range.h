@@ -32,7 +32,7 @@ struct ArrayOffset {
   const uint64_t Count = 0;
 
   ArrayOffset(int64_t Size = 0, uint64_t Count = 0)
-      : Size(Size), Count(Count){};
+      : Size(Size), Count(Count) {};
 
   // copy constructor
   ArrayOffset(const ArrayOffset &other)
@@ -86,11 +86,59 @@ struct OffsetRange {
     s += "@" + std::to_string(offset);
     for (auto &a : access) {
       s += "+" + std::to_string(a.Size) + "i";
-      if (a.Count != -1) {
+      if (a.Count != 0) {
         s += "[" + std::to_string(a.Count) + "]";
       }
     }
     return s;
+  }
+
+  static OffsetRange fromStr(const std::string &s) {
+    OffsetRange ret;
+    if (s.empty() || s[0] != '@') {
+      assert(false && "Invalid offset range string");
+    }
+
+    size_t pos = 1;
+    // Find the end of offset (next '+' or end of string)
+    size_t end = s.find('+', pos);
+    if (end == std::string::npos) {
+      end = s.length();
+    }
+    ret.offset = std::stoll(s.substr(pos, end - pos));
+    pos = end;
+
+    // Parse +Sizei or +Sizei[Count] parts
+    while (pos < s.length() && s[pos] == '+') {
+      pos++; // skip '+'
+      size_t iPos = s.find('i', pos);
+      int64_t size = std::stoll(s.substr(pos, iPos - pos));
+      pos = iPos + 1; // skip 'i'
+
+      uint64_t count = static_cast<uint64_t>(-1); // default when no [] part
+      if (pos < s.length() && s[pos] == '[') {
+        pos++; // skip '['
+        size_t bracketEnd = s.find(']', pos);
+        count = std::stoull(s.substr(pos, bracketEnd - pos));
+        pos = bracketEnd + 1; // skip ']'
+      }
+
+      ret.access.push_back(ArrayOffset(size, count));
+    }
+
+    return ret;
+  }
+
+  int64_t maxAccess() const {
+    assert(offset > 0);
+    auto MaxSize =
+        std::max_element(access.begin(), access.end(),
+                         [](const ArrayOffset &O1, const ArrayOffset &O2) {
+                           return O1.Size < O2.Size;
+                         })
+            ->Size;
+    assert(MaxSize > 0);
+    return offset + MaxSize;
   }
 
   OffsetRange mulx() const {
