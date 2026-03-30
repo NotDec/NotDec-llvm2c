@@ -1599,7 +1599,7 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
   // Print the AST
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
                  Ctx.getASTContext(), 0, MyPrintingPolicy(), CT);
-  AM->print(DP);
+  AM->print(DP, opts.filterUnusedDefinitions);
 }
 
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb) {

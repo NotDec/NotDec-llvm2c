@@ -33,6 +33,7 @@ enum StructuralAlgorithms { SA_Goto, SA_Phoenix };
 struct Options {
   bool noDemoteSSA = false;
   bool enableColor = false;
+  bool filterUnusedDefinitions = false;
   StructuralAlgorithms algo;
 };
 

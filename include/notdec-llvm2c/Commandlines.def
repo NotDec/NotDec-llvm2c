@@ -16,11 +16,17 @@ static cl::opt<bool>
                 cl::desc("Disable SSA demotion passes. Eliminate all phi nodes "
                          "before enabling this."),
                 cl::init(false), cl::cat(NotdecLLVM2CCat));
+static cl::opt<bool>
+    filterUnusedDefinitions(
+        "filter-unused-definitions",
+        cl::desc("Only print referenced type declarations and definitions."),
+        cl::init(false), cl::cat(NotdecLLVM2CCat));
 
 ::notdec::llvm2c::Options getLLVM2COptions() {
   ::notdec::llvm2c::Options Opts = {
       .noDemoteSSA = noDemoteSSA,
       .enableColor = enableColor,
+      .filterUnusedDefinitions = filterUnusedDefinitions,
       .algo = Algo,
   };
   return Opts;

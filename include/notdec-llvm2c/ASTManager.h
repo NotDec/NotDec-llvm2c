@@ -46,7 +46,7 @@ public:
   clang::FunctionDecl *getFuncDeclaration(const char *Name);
   clang::NamedDecl *getNamedDecl(const char *Name);
 
-  void print(DeclPrinter &Printer);
+  void print(DeclPrinter &Printer, bool FilterUnusedDefinitions = false);
 };
 
 } // namespace notdec::llvm2c

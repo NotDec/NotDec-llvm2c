@@ -104,14 +104,15 @@ private:
   }
 };
 
-void ASTManager::print(DeclPrinter &Printer) {
+void ASTManager::print(DeclPrinter &Printer, bool FilterUnusedDefinitions) {
   // auto &Ctx = FunctionDefinitions->getASTContext();
-  // collect all usages
-  TypeRefCollector Collector;
-
-  Collector.collect(GlobalDefinitions);
-  Collector.collect(FunctionDefinitions);
-  Collector.collect(FunctionDeclarations);
+  std::optional<TypeRefCollector> Collector;
+  if (FilterUnusedDefinitions) {
+    Collector.emplace();
+    Collector->collect(GlobalDefinitions);
+    Collector->collect(FunctionDefinitions);
+    Collector->collect(FunctionDeclarations);
+  }
 
   // // 处理类型内引用其他类型的情况，递归访问类型
   // auto Size = Collector.size();
@@ -134,15 +135,16 @@ void ASTManager::print(DeclPrinter &Printer) {
   OS << "#include <stdbool.h>\n\n";
 
   OS << "// ====== Type Declarations ======\n";
-  // Printer.VisitTranslationUnitDecl(TypeDeclarations);
-  Printer.VisitDeclContext(TypeDeclarations, false, [&](Decl *D) -> bool {
-    if (auto ND = llvm::dyn_cast<NamedDecl>(D)) {
-      auto N = ND->getNameAsString();
-      auto C = Collector.count(N);
-      return C != 0;
-    }
-    return false;
-  });
+  if (FilterUnusedDefinitions) {
+    Printer.VisitDeclContext(TypeDeclarations, false, [&](Decl *D) -> bool {
+      if (auto ND = llvm::dyn_cast<NamedDecl>(D)) {
+        return Collector->count(ND->getNameAsString()) != 0;
+      }
+      return false;
+    });
+  } else {
+    Printer.VisitTranslationUnitDecl(TypeDeclarations);
+  }
   OS << "// ====== End of Type Declarations ======\n\n";
 
   OS << "// ====== Function Declarations ======\n";
@@ -150,15 +152,16 @@ void ASTManager::print(DeclPrinter &Printer) {
   OS << "// ====== End of Function Declarations ======\n\n";
 
   OS << "// ====== Type Definitions ======\n";
-  // Printer.VisitTranslationUnitDecl(TypeDefinitions);
-  Printer.VisitDeclContext(TypeDefinitions, false, [&](Decl *D) -> bool {
-    if (auto ND = llvm::dyn_cast<NamedDecl>(D)) {
-      auto N = ND->getNameAsString();
-      auto C = Collector.count(N);
-      return C != 0;
-    }
-    return false;
-  });
+  if (FilterUnusedDefinitions) {
+    Printer.VisitDeclContext(TypeDefinitions, false, [&](Decl *D) -> bool {
+      if (auto ND = llvm::dyn_cast<NamedDecl>(D)) {
+        return Collector->count(ND->getNameAsString()) != 0;
+      }
+      return false;
+    });
+  } else {
+    Printer.VisitTranslationUnitDecl(TypeDefinitions);
+  }
   OS << "// ====== End of Type Definitions ======\n\n";
 
   OS << "// ====== Global Declarations ======\n";
