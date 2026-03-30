@@ -2,6 +2,7 @@
 #include <cctype>
 #include <clang/Sema/Ownership.h>
 #include <cstddef>
+#include <cstdlib>
 #include <llvm/IR/Instruction.h>
 #include <map>
 #include <memory>
@@ -1540,7 +1541,11 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
 
   auto DebugDir = std::getenv("NOTDEC_DEBUG_DIR");
   if (DebugDir) {
-    llvm::sys::fs::create_directories(DebugDir);
+    if (std::error_code EC = llvm::sys::fs::create_directories(DebugDir)) {
+      llvm::errs() << "Error: failed to create debug directory '" << DebugDir
+                   << "': " << EC.message() << "\n";
+      std::abort();
+    }
   }
 
   if (llvm::verifyModule(M, &llvm::errs())) {
