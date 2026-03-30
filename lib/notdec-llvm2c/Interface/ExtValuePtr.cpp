@@ -76,7 +76,7 @@ llvm::Type *getType(const ExtValuePtr &Val) {
 
 unsigned int getSize(llvm::Type *Ty, unsigned int pointer_size) {
   assert(pointer_size != 0);
-  if (Ty->isPointerTy()) {
+  if (Ty->isPointerTy() || Ty->isFunctionTy()) {
     return pointer_size;
   }
   if (!Ty->isAggregateType() && !Ty->isVectorTy()) {

@@ -121,6 +121,33 @@ std::string HType::getAsString() const {
     return AT->getElementType()->getAsString() + "[" +
            (!hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
   }
+  case TK_Function: {
+    auto *FT = llvm::cast<FunctionType>(this);
+    std::string Result;
+    auto &Ret = FT->getReturnType();
+    if (Ret.empty()) {
+      Result = "void";
+    } else if (Ret.size() == 1) {
+      Result = Ret[0]->getAsString();
+    } else {
+      Result = "(";
+      for (size_t i = 0; i < Ret.size(); i++) {
+        if (i > 0)
+          Result += ", ";
+        Result += Ret[i]->getAsString();
+      }
+      Result += ")";
+    }
+    Result += " (*)(";
+    auto &Params = FT->getParamTypes();
+    for (size_t i = 0; i < Params.size(); i++) {
+      if (i > 0)
+        Result += ", ";
+      Result += Params[i]->getAsString();
+    }
+    Result += ")";
+    return Result;
+  }
   case TK_Typedef:
     return llvm::cast<TypedefType>(this)->getDecl()->getName();
   case TK_TypeVariable:

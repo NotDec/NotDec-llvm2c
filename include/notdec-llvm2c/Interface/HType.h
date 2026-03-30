@@ -453,9 +453,9 @@ class HTypeContext {
   using TypeVariableKey = std::tuple<bool, std::string>;
   std::map<TypeVariableKey, std::unique_ptr<TypeVariableType>> TypeVariableTypes;
 
-  // using FunctionKey = std::tuple<bool, std::vector<HType*>,
-  // std::vector<HType*>>; static std::map<FunctionKey,
-  // std::unique_ptr<FunctionType>> functionTypes;
+  using FunctionKey =
+      std::tuple<bool, std::vector<HType *>, std::vector<HType *>>;
+  std::map<FunctionKey, std::unique_ptr<FunctionType>> FunctionTypes;
 
 protected:
   friend class RecordDecl;
@@ -538,15 +538,26 @@ public:
     return entry.get();
   }
 
-  //  HType* getFunctionType(bool IsConst, const std::vector<HType*>& Ret,
-  // const std::vector<HType*>& Params) {
-  //   auto key = std::make_tuple(IsConst, Ret, Params);
-  //   auto& entry = functionTypes[key];
-  //   if (!entry) {
-  //     entry.reset(new FunctionType(IsConst, Ret, Params));
-  //   }
-  //   return entry.get();
-  // }
+  HType *getFunctionType(bool IsConst, const std::vector<HType *> &Ret,
+                         const std::vector<HType *> &Params) {
+    auto key = std::make_tuple(IsConst, Ret, Params);
+    auto &entry = FunctionTypes[key];
+    if (!entry) {
+      HType *Canon = nullptr;
+      std::vector<HType *> CanonRet;
+      for (auto *T : Ret)
+        CanonRet.push_back(T->getCanonicalType());
+      std::vector<HType *> CanonParams;
+      for (auto *T : Params)
+        CanonParams.push_back(T->getCanonicalType());
+      auto canonKey = std::make_tuple(false, CanonRet, CanonParams);
+      if (key != canonKey) {
+        Canon = getFunctionType(false, CanonRet, CanonParams);
+      }
+      entry.reset(new FunctionType(IsConst, Canon, Ret, Params));
+    }
+    return entry.get();
+  }
 
   HType *getRecordType(bool IsConst, RecordDecl *Decl) {
     if (!Decl->TypeForDecl) {
@@ -593,10 +604,6 @@ public:
     auto key = std::make_tuple(IsConst, Name);
     auto &entry = TypeVariableTypes[key];
     if (!entry) {
-      HType *Canon = nullptr;
-      if (IsConst) {
-        Canon = getTypeVariableType(false, Name);
-      }
       entry.reset(new TypeVariableType(IsConst, Name));
     }
     return entry.get();

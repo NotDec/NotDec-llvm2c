@@ -50,6 +50,14 @@ struct SimpleRange {
   std::string str() const {
     return "@" + std::to_string(Start) + "-" + std::to_string(end());
   }
+
+  bool operator<(const SimpleRange &other) const {
+    return std::tie(Start, Size) < std::tie(other.Start, other.Size);
+  }
+  bool operator==(const SimpleRange &other) const {
+    return !(*this < other) && !(other < *this);
+  }
+  bool operator!=(const SimpleRange &other) const { return !(*this == other); }
 };
 
 struct FieldEntry {
