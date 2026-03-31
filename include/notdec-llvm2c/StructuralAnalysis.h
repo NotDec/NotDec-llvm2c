@@ -585,7 +585,7 @@ class IStructuralAnalysis {
 protected:
   std::set<CFGBlock *> toRemove;
   SAFuncContext &FCtx;
-  CFG &CFG;
+  CFG &Cfg;
   // initialize after FCtx
   clang::ASTContext &Ctx;
 
@@ -628,7 +628,7 @@ protected:
 
 public:
   IStructuralAnalysis(SAFuncContext &ctx)
-      : FCtx(ctx), CFG(FCtx.getCFG()), Ctx(ctx.getASTContext()) {}
+      : FCtx(ctx), Cfg(FCtx.getCFG()), Ctx(ctx.getASTContext()) {}
 
   virtual ~IStructuralAnalysis() = default;
   virtual void execute() = 0;
@@ -765,13 +765,13 @@ public:
   /// after free.
   bool doRemoveBlocks() {
     bool changed = false;
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     for (auto block : toRemove) {
-      CFG.remove(block);
-      CFG.sanityCheck();
+      Cfg.remove(block);
+      Cfg.sanityCheck();
       changed = true;
     }
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     toRemove.clear();
     return changed;
   }
@@ -786,7 +786,7 @@ public:
   CFGCleaner(SAFuncContext &Ctx) : IStructuralAnalysis(Ctx) {}
 
   void execute() override {
-    std::vector<CFGBlock *> blks(CFG.begin(), CFG.end());
+    std::vector<CFGBlock *> blks(Cfg.begin(), Cfg.end());
     for (auto Block : blks) {
       if (Block->size() == 0 && Block->succ_size() == 1 &&
           Block->pred_size() > 0) {
@@ -800,7 +800,7 @@ public:
           replaceAllSucc(pred, Block, succ);
         }
         deferredRemove(Block);
-        CFG.sanityCheck();
+        Cfg.sanityCheck();
       }
     }
     doRemoveBlocks();

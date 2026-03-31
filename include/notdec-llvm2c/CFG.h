@@ -611,7 +611,7 @@ template <> struct simplify_type<::notdec::llvm2c::CFGTerminator> {
 
 // Traits for: CFGBlock
 
-template <> struct ::llvm::GraphTraits<::notdec::llvm2c::CFGBlock *> {
+template <> struct GraphTraits<::notdec::llvm2c::CFGBlock *> {
   using NodeRef = ::notdec::llvm2c::CFGBlock *;
   using ChildIteratorType = ::notdec::llvm2c::CFGBlock::succ_iterator;
 
@@ -620,7 +620,7 @@ template <> struct ::llvm::GraphTraits<::notdec::llvm2c::CFGBlock *> {
   static ChildIteratorType child_end(NodeRef N) { return N->succ_end(); }
 };
 
-template <> struct ::llvm::GraphTraits<const ::notdec::llvm2c::CFGBlock *> {
+template <> struct GraphTraits<const ::notdec::llvm2c::CFGBlock *> {
   using NodeRef = const ::notdec::llvm2c::CFGBlock *;
   using ChildIteratorType = ::notdec::llvm2c::CFGBlock::const_succ_iterator;
 

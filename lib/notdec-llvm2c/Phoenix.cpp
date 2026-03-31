@@ -55,10 +55,10 @@ void Phoenix::execute() {
       break;
     }
 
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     // this will maintain a list, so modification during iteration is OK
-    auto postView = PostOrderCFGView::create(&CFG);
-    Dom.buildDominatorTree(&CFG);
+    auto postView = PostOrderCFGView::create(&Cfg);
+    Dom.buildDominatorTree(&Cfg);
     // equivalent of unresolvedCycles.clear()
     std::queue<std::pair<CFGBlock *, std::set<CFGBlock *>>>().swap(
         unresolvedCycles);
@@ -84,7 +84,7 @@ void Phoenix::execute() {
       };
     }
 
-    if (toRemove.empty() && CFG.size() > 1) {
+    if (toRemove.empty() && Cfg.size() > 1) {
       for (const CFGBlock *CBlock : *postView) {
         CFGBlock *Block = const_cast<CFGBlock *>(CBlock);
         if (toRemove.count(Block)) {
@@ -100,8 +100,8 @@ void Phoenix::execute() {
         };
       }
     }
-    CFG.sanityCheck();
-    if (toRemove.empty() && CFG.size() > 1) {
+    Cfg.sanityCheck();
+    if (toRemove.empty() && Cfg.size() > 1) {
       // Didn't make any progress this round,
       // try refining unstructured regions
       ProcessUnresolvedRegions();
@@ -110,7 +110,7 @@ void Phoenix::execute() {
       iterations = 0;
     }
     doRemoveBlocks();
-  } while (CFG.size() > 1);
+  } while (Cfg.size() > 1);
 }
 
 bool Phoenix::isBackEdge(CFGBlock *A, CFGBlock *B) {
@@ -340,7 +340,7 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
       removeAllEdge(Block, S);
       removeAllEdge(S, Block);
       deferredRemove(S);
-      CFG.sanityCheck();
+      Cfg.sanityCheck();
       return true;
     } // end Block -> S -> Block
   }
@@ -540,7 +540,7 @@ bool Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     break;
   case 0:
     llvm::errs() << "======== dumping CFG due to an error =============\n";
-    CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
+    Cfg.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                  << "Error: Can't collapse edge! function: "
                  << FCtx.getFunction().getName()
@@ -554,12 +554,12 @@ bool Phoenix::collapseToTailRegion(CFGBlock *From, CFGBlock *To,
     return false;
   }
   removeAllEdge(From, To);
-  CFG.sanityCheck();
+  Cfg.sanityCheck();
   return true;
 }
 
 bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
-  if (!CFG.hasEdge(Edge.From, Edge.To)) {
+  if (!Cfg.hasEdge(Edge.From, Edge.To)) {
     return false;
   }
   clang::Stmt *Stmt;
@@ -595,12 +595,12 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
   if (!Collapsed) {
     return false;
   }
-  if (To->pred_size() == 0 && To != &CFG.getEntry()) {
+  if (To->pred_size() == 0 && To != &Cfg.getEntry()) {
     if (isPureReturn(To) && (To->getLabel() == nullptr)) {
       // previous pure return detection has put the return to the From block.
       To->clear();
       deferredRemove(To);
-      CFG.sanityCheck();
+      Cfg.sanityCheck();
     } else {
       // CFG.dump(Ctx.getLangOpts(), FCtx.getOpts().enableColor);
       std::cerr << __FILE__ << ":" << __LINE__ << ": "
@@ -610,7 +610,7 @@ bool Phoenix::virtualizeEdge(const Phoenix::VirtualEdge &Edge) {
       // std::abort();
     }
   }
-  CFG.sanityCheck();
+  Cfg.sanityCheck();
   return true;
 }
 
@@ -675,7 +675,7 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
       removeAllEdge(n, el);
       deferredRemove(th);
       deferredRemove(el);
-      CFG.sanityCheck();
+      Cfg.sanityCheck();
       return true;
     }
     if (range.count(el) != 0 && el->succ_size() == 0 &&
@@ -690,7 +690,7 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
       n->appendStmt(ifStmt);
       removeAllEdge(n, el);
       deferredRemove(el);
-      CFG.sanityCheck();
+      Cfg.sanityCheck();
       return true;
     };
     if (range.count(th) != 0 && th->succ_size() == 0 &&
@@ -704,7 +704,7 @@ bool Phoenix::coalesceTailRegion(CFGBlock *n, std::set<CFGBlock *> &range) {
       n->appendStmt(ifStmt);
       removeAllEdge(n, th);
       deferredRemove(th);
-      CFG.sanityCheck();
+      Cfg.sanityCheck();
       return true;
     }
     // TODO?
@@ -784,7 +784,7 @@ void Phoenix::refineIncSwitch(CFGBlock *n) {
     return;
   }
 
-  CFG.sanityCheck();
+  Cfg.sanityCheck();
   auto follow = findIrregularSwitchFollowRegion(n);
   // Map from switch successor to its lexical nodes.
   std::map<CFGBlock *, std::set<CFGBlock *>> switchBody =
@@ -855,11 +855,11 @@ bool Phoenix::virtualizeIrregularCaseExits(CFGBlock *head, CFGBlock *caseEntry,
     auto stm = createGotoStmt(Label);
     assert(std::holds_alternative<SwitchTerminator>(From->getTerminator()));
     // To fold a switch branch, we need to create a new block
-    auto newBlock = CFG.createBlock();
+    auto newBlock = Cfg.createBlock();
     (*newBlock)->appendStmt(stm);
     FCtx.mapRedirectBlock(**newBlock, *To);
     replaceAllSucc(From, To, *newBlock);
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     return true;
   } else {
     for (auto &Ent : vEdges) {
@@ -891,7 +891,7 @@ Phoenix::findSwitchBody(CFGBlock *n, CFGBlock *follow) {
 // highest number of incoming edges from case nodes.
 CFGBlock *Phoenix::findIrregularSwitchFollowRegion(CFGBlock *n) {
   CFGPostDomTree PostDom;
-  PostDom.buildDominatorTree(&CFG);
+  PostDom.buildDominatorTree(&Cfg);
 
   auto immPDom = PostDom.getImmediateDominator(n);
   for (auto succ : n->succs()) {
@@ -986,14 +986,14 @@ bool Phoenix::ProcessUnresolvedRegions() {
     refineIncSwitch(switchHead);
     return true;
   }
-  auto postView = PostOrderCFGView::create(&CFG);
+  auto postView = PostOrderCFGView::create(&Cfg);
   for (const CFGBlock *CBlock : *postView) {
     CFGBlock *Block = const_cast<CFGBlock *>(CBlock);
     if (virtualizeReturn(Block)) {
       return true;
     }
   }
-  std::set<CFGBlock *> nodes(CFG.nodes_begin(), CFG.nodes_end());
+  std::set<CFGBlock *> nodes(Cfg.nodes_begin(), Cfg.nodes_end());
   for (const CFGBlock *CBlock : *postView) {
     CFGBlock *Block = const_cast<CFGBlock *>(CBlock);
     if (coalesceTailRegion(Block, nodes)) {
@@ -1056,7 +1056,7 @@ bool Phoenix::reduceSequence(CFGBlock *Block) {
     replaceSuccessors(Succ, Block);
     // TODO faster remove instead of linear search.
     deferredRemove(Succ);
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     return true;
   } else {
     return false;
@@ -1260,7 +1260,7 @@ bool Phoenix::reduceIncSwitch(CFGBlock *N, CFGBlock *Follow) {
       removeAllEdge(caseBlock, Follow);
     }
     deferredRemove(caseBlock);
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
   }
   // TODO ensure that reachability is not broken.
   if (Follow != nullptr) {
@@ -1322,7 +1322,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
     }
     deferredRemove(el);
     assert(Block->succ_size() == 1);
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     return true;
   } else if ((thS == el || thenTail) && onlyPred(th, Block)) {
     clang::Expr *cond = takeBinaryCond(*Block);
@@ -1340,7 +1340,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
     }
     deferredRemove(th);
     assert(Block->succ_size() == 1);
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     return true;
   } else if (elS != nullptr && elS == thS) {
     if (!(onlyPred(el, Block) && onlyPred(th, Block))) {
@@ -1365,7 +1365,7 @@ bool Phoenix::reduceIfRegion(CFGBlock *Block, bool UseTail) {
     deferredRemove(el);
     addEdge(Block, elS);
     assert(Block->succ_size() == 1);
-    CFG.sanityCheck();
+    Cfg.sanityCheck();
     return true;
   }
   return false;
@@ -1425,7 +1425,7 @@ bool Phoenix::ReduceAcyclic2(CFGBlock *Block) {
           Block->removePred(Pred);
           Succ->addPred(Pred);
           deferredRemove(Block);
-          CFG.sanityCheck();
+          Cfg.sanityCheck();
           return true;
         }
       }

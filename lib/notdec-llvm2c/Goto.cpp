@@ -30,7 +30,7 @@ void Goto::execute() {
   auto &ASTCtx = FCtx.getASTContext();
   // for each block, insert goto statement to represent outgoing edges.
 
-  for (auto it = CFG.begin(); it != CFG.end(); ++it) {
+  for (auto it = Cfg.begin(); it != Cfg.end(); ++it) {
     auto Current = (*it);
     auto succ_size = Current->succ_size();
     // for unconditional branch
@@ -116,12 +116,12 @@ void Goto::execute() {
     }
   }
   // merge all blocks into one. Remove all other blocks and edges.
-  CFGBlock &Entry = CFG.getEntry();
+  CFGBlock &Entry = Cfg.getEntry();
   // because we only need one block, instead of maintaining all edges, we remove
   // all succs and preds of entry block, and ignore other blocks' edges.
   Entry.succ_clear();
   Entry.pred_clear();
-  for (auto it = CFG.begin(); it != CFG.end(); ++it) {
+  for (auto it = Cfg.begin(); it != Cfg.end(); ++it) {
     // push all statements into entry block
     auto Current = (*it);
     if (Current == &Entry) {
@@ -144,13 +144,13 @@ void Goto::execute() {
   }
 
   // remove other blocks from the cfg
-  for (auto Current : std::vector<CFGBlock *>(CFG.begin(), CFG.end())) {
+  for (auto Current : std::vector<CFGBlock *>(Cfg.begin(), Cfg.end())) {
     if (Current == &Entry) {
       continue;
     }
     Current->succ_clear();
     Current->pred_clear();
-    CFG.remove(Current);
+    Cfg.remove(Current);
   }
 
   simplifyBlock(Entry);

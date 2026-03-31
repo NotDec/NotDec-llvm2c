@@ -12,7 +12,7 @@ void CompoundConditionBuilder::execute() {
   bool changed = false;
   do {
     changed = false;
-    auto postView = PostOrderCFGView::create(&CFG);
+    auto postView = PostOrderCFGView::create(&Cfg);
 
     for (auto block : *postView) {
       if (toRemove.count(const_cast<CFGBlock *>(block))) {
@@ -39,7 +39,7 @@ void CompoundConditionBuilder::rebuildGraph(CFGBlock *head, CFGBlock *redundant,
   removeAllEdge(redundant, common);
   replaceAllSucc(head, redundant, replacement);
   deferredRemove(redundant);
-  CFG.sanityCheck();
+  Cfg.sanityCheck();
 }
 
 bool CompoundConditionBuilder::maybeCoalesce(CFGBlock *Head) {
