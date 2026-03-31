@@ -2,6 +2,7 @@
 #ifndef _NOTDEC_BACKEND_UTILS_H_
 #define _NOTDEC_BACKEND_UTILS_H_
 
+#include <cassert>
 #include <clang/AST/Type.h>
 #include <iostream>
 #include <type_traits>
@@ -141,6 +142,8 @@ constexpr PrecedenceLevel getOperatorPrecedence(clang::BinaryOperatorKind OK) {
   case clang::BO_Cmp:
     return Spaceship;
   }
+  assert(false && "Error: unhandled clang::BinaryOperatorKind");
+  return Unknown;
 }
 
 constexpr PrecedenceLevel getOperatorPrecedence(clang::UnaryOperatorKind OK) {
@@ -162,6 +165,8 @@ constexpr PrecedenceLevel getOperatorPrecedence(clang::UnaryOperatorKind OK) {
   case clang::UO_Extension:
     return PrefixUnary;
   }
+  assert(false && "Error: unhandled clang::UnaryOperatorKind");
+  return Unknown;
 }
 
 template <typename T> constexpr PrecedenceLevel getPrecedence(int OpCode = -1) {

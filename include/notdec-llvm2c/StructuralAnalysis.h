@@ -659,7 +659,7 @@ public:
         To->appendStmt(stmt);
       }
     }
-    if (auto term = From->getTerminatorStmt()) {
+    if (From->getTerminatorStmt()) {
       assert(false && "Terminator should be handled first!");
     }
     From->clear();
@@ -677,7 +677,7 @@ public:
         stmts.push_back(stmt);
       }
     }
-    if (auto term = B->getTerminatorStmt()) {
+    if (B->getTerminatorStmt()) {
       if (!noAssert) {
         assert(false && "Terminator should be handled first!");
       }

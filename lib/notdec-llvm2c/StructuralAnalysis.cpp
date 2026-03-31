@@ -664,7 +664,8 @@ clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
     // Specialize for case where op2 is Constant.
     assert(!llvm::isa<llvm::Constant>(Op0)); // because of inst combine.
     lhs = createBinaryOperator(
-        Ctx, lhs, lhs, llvm::CmpInst::FCMP_ORD ? clang::BO_EQ : clang::BO_NE,
+        Ctx, lhs, lhs,
+        OpCode == llvm::CmpInst::FCMP_ORD ? clang::BO_EQ : clang::BO_NE,
         TB.getType(Result, nullptr, -1), clang::VK_PRValue);
     if (llvm::isa<llvm::Constant>(Op1)) {
       return lhs;
@@ -830,6 +831,8 @@ convertOp(llvm::CmpInst::Predicate op) {
   case llvm::CmpInst::BAD_ICMP_PREDICATE:
     return clang::None;
   }
+  assert(false && "Error: unhandled llvm::CmpInst::Predicate");
+  return clang::None;
 }
 
 /// Convert the LLVM binary operator to a Clang binary operator op.
@@ -1135,7 +1138,7 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
   bool canCache = false;
 
   using namespace llvm;
-  if (auto LI = dyn_cast<LoadInst>(&Inst)) {
+  if (dyn_cast<LoadInst>(&Inst)) {
     canCache = false;
 
     // auto &MSSAR = FAM.getResult<llvm::MemorySSAAnalysis>(Func);
@@ -1668,7 +1671,7 @@ SAContext::createFunctionDecl(TranslationUnitDecl *TUD, const char *Name,
 
   // create function parameters
   llvm::SmallVector<clang::ParmVarDecl *, 4> Params;
-  for (int i = 0; i < ParamSize; i++) {
+  for (decltype(ParamSize) i = 0; i < ParamSize; ++i) {
     clang::IdentifierInfo *ArgII = getIdentifierInfo(ParamNames[i]);
     clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
         getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
@@ -2424,8 +2427,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     }
     return new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), vec,
                                          clang::SourceLocation());
-  } else if (llvm::ConstantAggregateZero *CAZ =
-                 llvm::dyn_cast<llvm::ConstantAggregateZero>(&C)) {
+  } else if (llvm::dyn_cast<llvm::ConstantAggregateZero>(&C)) {
     assert(!Ty.isNull() && "ExprBuilder.visitConstant: Ty is null?");
     auto ret = new (Ctx) clang::InitListExpr(Ctx, clang::SourceLocation(), {},
                                              clang::SourceLocation());
@@ -2437,8 +2439,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     //              << "Error: ExprBuilder.visitConstant cannot handle "
     //                 "ConstantAggregateZero, use visitInitializer
     //                 instead.\n";
-  } else if (llvm::ConstantPointerNull *CPN =
-                 llvm::dyn_cast<llvm::ConstantPointerNull>(&C)) {
+  } else if (llvm::dyn_cast<llvm::ConstantPointerNull>(&C)) {
     return getNull(Ty);
   } else if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(&C)) {
     auto Val = CI->getValue();
@@ -2528,8 +2529,10 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     }
     // handle casts
     switch (CE->getOpcode()) {
-    case llvm::Instruction::IntToPtr:
-      return visitValue(CE->getOperand(0), CE, 0, Ty);
+    case llvm::Instruction::IntToPtr: {
+      auto PtrTy = Ty.isNull() ? TB.visitType(*CE->getType()) : Ty;
+      return visitValue(CE->getOperand(0), CE, 0, PtrTy);
+    }
 
     case llvm::Instruction::Trunc:
     case llvm::Instruction::ZExt:

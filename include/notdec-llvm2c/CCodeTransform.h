@@ -433,10 +433,11 @@ public:
             return x * tmp * tmp;
         };
         uint64_t Mul = intPow(2, Val);
-        if (Mul == Size) {
+        auto UnsignedSize = static_cast<uint64_t>(Size);
+        if (Mul == UnsignedSize) {
           return E->getLHS();
-        } else if (Mul % Size == 0) {
-          Mul = Mul / Size;
+        } else if (Mul % UnsignedSize == 0) {
+          Mul = Mul / UnsignedSize;
           auto MulC = clang::IntegerLiteral::Create(
               Context,
               llvm::APInt(Context.getIntWidth(RHS->getType()), Mul, false),

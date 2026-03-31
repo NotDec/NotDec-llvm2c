@@ -198,7 +198,7 @@ clang::Expr *Phoenix::createBlockCondExpr(CFGBlock *Block, clang::Expr *Cond) {
   if (Block->size() == 0) {
     return Cond;
   }
-  if (Block->size() < StmtExprThreshold) {
+  if (Block->size() < static_cast<std::size_t>(StmtExprThreshold)) {
     bool hasNoCompound = true;
     for (auto Elem = Block->begin(); Elem != Block->end(); ++Elem) {
       // TODO what if there are other kinds of CFGElement

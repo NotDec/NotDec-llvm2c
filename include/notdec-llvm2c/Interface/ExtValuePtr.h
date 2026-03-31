@@ -124,7 +124,7 @@ inline bool checkWrapped(ExtValuePtr &Val) {
   using namespace llvm;
   if (auto V = std::get_if<llvm::Value *>(&Val)) {
     if (!isa<GlobalValue>(*V)) {
-      if (auto CI = dyn_cast<Constant>(*V)) {
+      if (dyn_cast<Constant>(*V)) {
         return false;
         // assert(false && "Should already be converted to UConstant");
       }

@@ -266,7 +266,7 @@ void ClangTypeResult::defineDecls() {
       auto *CDecl = convertUnion(UD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
       ASTDecl = CDecl;
-    } else if (auto *TD = llvm::dyn_cast<ast::TypedefDecl>(Decl)) {
+    } else if (llvm::dyn_cast<ast::TypedefDecl>(Decl)) {
       // typedef only need declaration, no need to create definition.
       return;
     } else {
@@ -362,7 +362,7 @@ llvm::APInt stringToAPInt(const std::string &bytes,
 void ClangTypeResult::increaseArraySize(ValueDecl *Decl, int64_t Size) {
   auto AT = llvm::cast<clang::ConstantArrayType>(Decl->getType());
   auto OldSize = AT->getSize().getZExtValue();
-  if (OldSize >= Size) {
+  if (Size <= 0 || OldSize >= static_cast<uint64_t>(Size)) {
     return;
   }
   auto NewAT =
@@ -844,7 +844,7 @@ std::optional<int64_t> getIntValue(clang::Expr *Index) {
   while (auto Cast = llvm::dyn_cast<clang::CastExpr>(Index)) {
     Index = Cast->getSubExpr();
   }
-  if (auto IntegerLiteral = llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
+  if (llvm::dyn_cast<clang::IntegerLiteral>(Index)) {
     OffsetNum =
         llvm::cast<clang::IntegerLiteral>(Index)->getValue().getSExtValue();
   }

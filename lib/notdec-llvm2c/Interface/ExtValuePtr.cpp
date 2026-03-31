@@ -96,7 +96,7 @@ ExtValuePtr getExtValuePtr(llvm::Value *V, llvm::User *User, long OpInd) {
   using namespace llvm;
   ExtValuePtr Val = V;
   if (!isa<GlobalValue>(*V)) {
-    if (auto CI = dyn_cast<Constant>(V)) {
+    if (isa<Constant>(V)) {
       assert(User != nullptr && "RetypdGenerator::getTypeVar: User is Null!");
       assert(hasUser(V, User) &&
              "convertTypeVarVal: constant not used by user");

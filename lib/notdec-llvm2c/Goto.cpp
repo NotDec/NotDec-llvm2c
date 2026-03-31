@@ -228,7 +228,7 @@ void Goto::simplifyBlock(CFGBlock &Block) {
       }
 
       // remove NullStmt
-      if (auto term = llvm::dyn_cast<clang::NullStmt>(stmt)) {
+      if (llvm::dyn_cast<clang::NullStmt>(stmt)) {
         LLVM_DEBUG(llvm::dbgs() << "Removing NullStmt\n");
         it = Block.erase(it);
         continue;
