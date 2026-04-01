@@ -95,11 +95,11 @@ struct OffsetRange {
 
   static OffsetRange fromStr(const std::string &s) {
     OffsetRange ret;
-    if (s.empty() || s[0] != '@') {
+    if (s.empty()) {
       assert(false && "Invalid offset range string");
     }
 
-    size_t pos = 1;
+    size_t pos = s[0] == '@' ? 1 : 0;
     // Find the end of offset (next '+' or end of string)
     size_t end = s.find('+', pos);
     if (end == std::string::npos) {
