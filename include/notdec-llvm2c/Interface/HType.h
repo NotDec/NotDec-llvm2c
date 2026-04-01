@@ -255,6 +255,7 @@ protected:
         IsConst(IsConst) {}
 
 public:
+  virtual ~HType() = default;
   HTypeKind getKind() const { return Kind; }
   bool isConst() const { return IsConst; }
   HType *getCanonicalType() const { return CanonicalType; }
