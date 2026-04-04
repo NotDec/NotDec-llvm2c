@@ -79,6 +79,42 @@ clang::RecordDecl *createRecordDecl(clang::ASTContext &Ctx,
   return decl;
 }
 
+namespace {
+
+clang::QualType lowerIntegerFallback(clang::ASTContext &Ctx, unsigned BitSize,
+                                     bool IsSigned) {
+  if (BitSize == 0) {
+    return Ctx.VoidPtrTy;
+  }
+  if (BitSize == 1) {
+    return getBoolTy(Ctx);
+  }
+  if (BitSize == 8) {
+    return Ctx.CharTy;
+  }
+  auto Ret = Ctx.getIntTypeForBitwidth(BitSize, IsSigned);
+  if (Ret.isNull()) {
+    Ret = Ctx.getConstantArrayType(Ctx.CharTy, llvm::APInt(32, BitSize / 8),
+                                   nullptr, clang::ArrayType::Normal, 0);
+  }
+  return Ret;
+}
+
+std::optional<unsigned>
+getFallbackBitSize(const std::vector<const ast::TypeVariableType *> &Vars) {
+  std::optional<unsigned> Ret;
+  for (auto *Var : Vars) {
+    auto SizeBits = Var->getSizeBits();
+    if (!SizeBits || *SizeBits == 0) {
+      continue;
+    }
+    Ret = Ret ? std::max(*Ret, *SizeBits) : *SizeBits;
+  }
+  return Ret;
+}
+
+} // namespace
+
 clang::QualType ClangTypeResult::convertType(HType *T) {
   // Check for cache
   if (auto It = TypeMap.find(T); It != TypeMap.end()) {
@@ -87,20 +123,119 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
 
   // convert logic without cache
   auto doConvert = [&](HType *T) -> clang::QualType {
+    auto lowerFunctionType =
+        [&](const ast::FunctionType *FT) -> clang::QualType {
+      clang::QualType RetTy = Ctx.VoidTy;
+      if (!FT->getReturnType().empty()) {
+        if (FT->getReturnType().size() > 1) {
+          llvm::errs()
+              << "Warning: lowering multi-return function type by keeping the "
+                 "first return: "
+              << T->getAsString() << "\n";
+        }
+        RetTy = convertType(FT->getReturnType().front());
+      }
+
+      std::vector<clang::QualType> ParamTypes;
+      for (auto *Param : FT->getParamTypes()) {
+        ParamTypes.push_back(convertType(Param));
+      }
+      return Ctx.getFunctionType(RetTy, ParamTypes,
+                                 clang::FunctionProtoType::ExtProtoInfo());
+    };
+
+    auto lowerSetLikeType = [&](HType *Root) -> clang::QualType {
+      std::vector<HType *> WorkList{Root};
+      std::vector<HType *> ConcreteTypes;
+      std::vector<const ast::TypeVariableType *> TypeVars;
+      auto ShouldFlatten = [Root](HType *Node) {
+        return Root->isSetUnionType() ? Node->isSetUnionType()
+                                      : Node->isSetInterType();
+      };
+
+      while (!WorkList.empty()) {
+        HType *Cur = WorkList.back();
+        WorkList.pop_back();
+        if (ShouldFlatten(Cur)) {
+          if (auto *UT = llvm::dyn_cast<ast::SetUnionType>(Cur)) {
+            WorkList.push_back(UT->getLhs());
+            WorkList.push_back(UT->getRhs());
+            continue;
+          }
+          auto *IT = llvm::cast<ast::SetInterType>(Cur);
+          WorkList.push_back(IT->getLhs());
+          WorkList.push_back(IT->getRhs());
+          continue;
+        }
+        if (auto *TV = llvm::dyn_cast<ast::TypeVariableType>(Cur)) {
+          TypeVars.push_back(TV);
+          continue;
+        }
+        ConcreteTypes.push_back(Cur);
+      }
+
+      std::vector<HType *> UniqueConcreteTypes;
+      for (auto *Candidate : ConcreteTypes) {
+        auto *Canon = Candidate->getCanonicalType();
+        auto It = std::find_if(UniqueConcreteTypes.begin(),
+                               UniqueConcreteTypes.end(), [Canon](HType *Ty) {
+                                 return Ty->getCanonicalType() == Canon;
+                               });
+        if (It == UniqueConcreteTypes.end()) {
+          UniqueConcreteTypes.push_back(Candidate);
+        }
+      }
+
+      if (UniqueConcreteTypes.empty()) {
+        if (auto SizeBits = getFallbackBitSize(TypeVars)) {
+          return lowerIntegerFallback(Ctx, *SizeBits, true);
+        }
+        return Ctx.VoidPtrTy;
+      }
+
+      if (UniqueConcreteTypes.size() == 1) {
+        return convertType(UniqueConcreteTypes.front());
+      }
+
+      bool AllInts = llvm::all_of(UniqueConcreteTypes, [](HType *Ty) {
+        return Ty->isIntType();
+      });
+      if (AllInts) {
+        unsigned MaxBitSize = 0;
+        bool IsSigned = false;
+        for (auto *Ty : UniqueConcreteTypes) {
+          auto *IT = llvm::cast<ast::IntegerType>(Ty);
+          MaxBitSize = std::max(MaxBitSize, IT->getBitSize());
+          IsSigned = IsSigned || IT->isSigned();
+        }
+        return lowerIntegerFallback(Ctx, MaxBitSize, IsSigned);
+      }
+
+      bool AllFloats = llvm::all_of(UniqueConcreteTypes, [](HType *Ty) {
+        return Ty->isFloatType();
+      });
+      if (AllFloats) {
+        unsigned MaxBitSize = 0;
+        for (auto *Ty : UniqueConcreteTypes) {
+          MaxBitSize = std::max(
+              MaxBitSize, llvm::cast<ast::FloatingType>(Ty)->getBitSize());
+        }
+        if (MaxBitSize == 32) {
+          return Ctx.FloatTy;
+        }
+        if (MaxBitSize == 64) {
+          return Ctx.DoubleTy;
+        }
+      }
+
+      llvm::errs() << "Warning: lossy lowering of set type " << Root->getAsString()
+                   << " to " << UniqueConcreteTypes.front()->getAsString()
+                   << "\n";
+      return convertType(UniqueConcreteTypes.front());
+    };
+
     if (auto *IT = llvm::dyn_cast<ast::IntegerType>(T)) {
-      if (IT->getBitSize() == 1) {
-        return getBoolTy(Ctx);
-      }
-      if (IT->getBitSize() == 8) {
-        return Ctx.CharTy;
-      }
-      auto Ret = Ctx.getIntTypeForBitwidth(IT->getBitSize(), IT->isSigned());
-      if (Ret.isNull()) {
-        Ret = Ctx.getConstantArrayType(Ctx.CharTy,
-                                       llvm::APInt(32, IT->getBitSize() / 8),
-                                       nullptr, clang::ArrayType::Normal, 0);
-      }
-      return Ret;
+      return lowerIntegerFallback(Ctx, IT->getBitSize(), IT->isSigned());
     } else if (auto *FT = llvm::dyn_cast<ast::FloatingType>(T)) {
       if (FT->getBitSize() == 32) {
         return Ctx.FloatTy;
@@ -114,6 +249,19 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
         return Ctx.VoidPtrTy;
       }
       return Ctx.getPointerType(convertType(PT->getPointeeType()));
+    } else if (auto *FT = llvm::dyn_cast<ast::FunctionType>(T)) {
+      return lowerFunctionType(FT);
+    } else if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(T)) {
+      HType *Chosen = DPT->getLoadType();
+      if (Chosen == nullptr) {
+        Chosen = DPT->getStoreType();
+      }
+      if (Chosen == nullptr) {
+        return Ctx.VoidPtrTy;
+      }
+      return Ctx.getPointerType(convertType(Chosen));
+    } else if (T->isSetUnionType() || T->isSetInterType()) {
+      return lowerSetLikeType(T);
     } else if (auto *AT = llvm::dyn_cast<ast::ArrayType>(T)) {
       if (AT->getNumElements().has_value()) {
         return Ctx.getConstantArrayType(
@@ -134,6 +282,11 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
     } else if (auto *TT = llvm::dyn_cast<ast::TypedefType>(T)) {
       return Ctx.getTypedefType(
           llvm::cast<clang::TypedefDecl>(getDecl(TT->getDecl())));
+    } else if (auto *TV = llvm::dyn_cast<ast::TypeVariableType>(T)) {
+      if (auto SizeBits = TV->getSizeBits()) {
+        return lowerIntegerFallback(Ctx, *SizeBits, true);
+      }
+      return Ctx.VoidPtrTy;
     } else {
       assert(false && "convertDecl: Unhandled type");
     }
