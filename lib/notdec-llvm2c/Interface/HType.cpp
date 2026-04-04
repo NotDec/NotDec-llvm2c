@@ -90,7 +90,7 @@ TypedDecl *HType::getAsRecordOrUnionDecl() const {
 }
 
 RecordDecl *HType::getAsRecordDecl() const {
-  return llvm::dyn_cast<RecordType>(this)->getDecl();
+  return llvm::dyn_cast<RecordPtrType>(this)->getDecl();
 }
 
 UnionDecl *HType::getAsUnionDecl() const {
@@ -112,7 +112,8 @@ std::string HType::getAsString() const {
                                         : getPointeeType()->getAsString()) +
            "*";
   case TK_Record:
-    return "struct " + llvm::cast<RecordType>(this)->getDecl()->getName();
+    return "struct " + llvm::cast<RecordPtrType>(this)->getDecl()->getName() +
+           "*";
   case TK_Union:
     return "union " + llvm::cast<UnionType>(this)->getDecl()->getName();
   case TK_Array: {

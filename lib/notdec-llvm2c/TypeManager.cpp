@@ -125,9 +125,9 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
                                         llvm::APInt(32, 0), nullptr,
                                         clang::ArrayType::Star, 0);
       }
-    } else if (auto *RT = llvm::dyn_cast<ast::RecordType>(T)) {
-      return Ctx.getRecordType(
-          llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl())));
+    } else if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(T)) {
+      return Ctx.getPointerType(Ctx.getRecordType(
+          llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl()))));
     } else if (auto *UT = llvm::dyn_cast<ast::UnionType>(T)) {
       return Ctx.getRecordType(
           llvm::cast<clang::RecordDecl>(getDecl(UT->getDecl())));

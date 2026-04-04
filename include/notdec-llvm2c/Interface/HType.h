@@ -21,7 +21,7 @@ namespace notdec::ast {
 
 class HTypeContext;
 class TypedefType;
-class RecordType;
+class RecordPtrType;
 class HType;
 
 /*
@@ -270,7 +270,8 @@ public:
   bool isDualPointerType() const { return Kind == TK_DualPointer; }
   bool isSetUnionType() const { return Kind == TK_SetUnion; }
   bool isSetInterType() const { return Kind == TK_SetInter; }
-  bool isRecordType() const { return Kind == TK_Record; }
+  bool isRecordPtrType() const { return Kind == TK_Record; }
+  bool isRecordType() const { return isRecordPtrType(); }
   bool isUnionType() const { return Kind == TK_Union; }
   bool isArrayType() const { return Kind == TK_Array; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
@@ -426,9 +427,9 @@ public:
   HType *getRhs() const { return Rhs; }
 };
 
-class RecordType : public HType {
+class RecordPtrType : public HType {
   RecordDecl *Decl;
-  RecordType(bool IsConst, HType *Canon, RecordDecl *Decl)
+  RecordPtrType(bool IsConst, HType *Canon, RecordDecl *Decl)
       : HType(TK_Record, Canon, IsConst), Decl(Decl) {}
   friend class HTypeContext;
 
@@ -649,11 +650,11 @@ public:
     return entry.get();
   }
 
-  HType *getRecordType(bool IsConst, RecordDecl *Decl) {
+  HType *getRecordPtrType(bool IsConst, RecordDecl *Decl) {
     if (!Decl->TypeForDecl) {
-      Decl->TypeForDecl.reset(new RecordType(false, nullptr, Decl));
+      Decl->TypeForDecl.reset(new RecordPtrType(false, nullptr, Decl));
       Decl->TypeForDeclConst.reset(
-          new RecordType(true, Decl->TypeForDecl.get(), Decl));
+          new RecordPtrType(true, Decl->TypeForDecl.get(), Decl));
     }
 
     if (!IsConst) {
