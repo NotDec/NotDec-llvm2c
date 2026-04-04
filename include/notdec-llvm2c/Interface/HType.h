@@ -239,6 +239,9 @@ public:
     TK_Pointer,
     // End of SimpleType
     TK_Function,
+    TK_DualPointer,
+    TK_SetUnion,
+    TK_SetInter,
 
     // Begin of CompoundType
     TK_Record,
@@ -264,6 +267,9 @@ public:
   bool isFloatType() const { return Kind == TK_Float; }
   bool isPointerType() const { return Kind == TK_Pointer; }
   bool isFunctionType() const { return Kind == TK_Function; }
+  bool isDualPointerType() const { return Kind == TK_DualPointer; }
+  bool isSetUnionType() const { return Kind == TK_SetUnion; }
+  bool isSetInterType() const { return Kind == TK_SetInter; }
   bool isRecordType() const { return Kind == TK_Record; }
   bool isUnionType() const { return Kind == TK_Union; }
   bool isArrayType() const { return Kind == TK_Array; }
@@ -369,6 +375,57 @@ public:
   const std::vector<HType *> &getParamTypes() const { return ParamTypes; }
 };
 
+class DualPointerType : public HType {
+  HType *LoadType;
+  HType *StoreType;
+  unsigned PointerSize;
+
+  DualPointerType(bool IsConst, HType *Canon, unsigned PointerSize,
+                  HType *LoadType, HType *StoreType)
+      : HType(TK_DualPointer, Canon, IsConst), LoadType(LoadType),
+        StoreType(StoreType), PointerSize(PointerSize) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) {
+    return T->getKind() == TK_DualPointer;
+  }
+
+  HType *getLoadType() const { return LoadType; }
+  HType *getStoreType() const { return StoreType; }
+  unsigned getPointerSize() const { return PointerSize; }
+};
+
+class SetUnionType : public HType {
+  HType *Lhs;
+  HType *Rhs;
+
+  SetUnionType(bool IsConst, HType *Canon, HType *Lhs, HType *Rhs)
+      : HType(TK_SetUnion, Canon, IsConst), Lhs(Lhs), Rhs(Rhs) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_SetUnion; }
+
+  HType *getLhs() const { return Lhs; }
+  HType *getRhs() const { return Rhs; }
+};
+
+class SetInterType : public HType {
+  HType *Lhs;
+  HType *Rhs;
+
+  SetInterType(bool IsConst, HType *Canon, HType *Lhs, HType *Rhs)
+      : HType(TK_SetInter, Canon, IsConst), Lhs(Lhs), Rhs(Rhs) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_SetInter; }
+
+  HType *getLhs() const { return Lhs; }
+  HType *getRhs() const { return Rhs; }
+};
+
 class RecordType : public HType {
   RecordDecl *Decl;
   RecordType(bool IsConst, HType *Canon, RecordDecl *Decl)
@@ -423,14 +480,18 @@ public:
 // Type variable - similar to C++ template parameter template<typename T>
 class TypeVariableType : public HType {
   std::string Name;
+  std::optional<unsigned> SizeBits;
 
-  TypeVariableType(bool IsConst, std::string Name)
-      : HType(TK_TypeVariable, nullptr, IsConst), Name(std::move(Name)) {}
+  TypeVariableType(bool IsConst, std::string Name,
+                   std::optional<unsigned> SizeBits)
+      : HType(TK_TypeVariable, nullptr, IsConst), Name(std::move(Name)),
+        SizeBits(SizeBits) {}
   friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_TypeVariable; }
   const std::string &getName() const { return Name; }
+  std::optional<unsigned> getSizeBits() const { return SizeBits; }
 };
 
 /* Factory class implementation */
@@ -448,10 +509,18 @@ class HTypeContext {
   using PointerKey = std::tuple<bool, unsigned, HType *>;
   std::map<PointerKey, std::unique_ptr<PointerType>> PointerTypes;
 
+  using DualPointerKey = std::tuple<bool, unsigned, HType *, HType *>;
+  std::map<DualPointerKey, std::unique_ptr<DualPointerType>> DualPointerTypes;
+
   using ArrayKey = std::tuple<bool, HType *, std::optional<unsigned>>;
   std::map<ArrayKey, std::unique_ptr<ArrayType>> ArrayTypes;
 
-  using TypeVariableKey = std::tuple<bool, std::string>;
+  using SetBinaryKey = std::tuple<bool, HType *, HType *>;
+  std::map<SetBinaryKey, std::unique_ptr<SetUnionType>> SetUnionTypes;
+  std::map<SetBinaryKey, std::unique_ptr<SetInterType>> SetInterTypes;
+
+  using TypeVariableKey =
+      std::tuple<bool, std::string, std::optional<unsigned>>;
   std::map<TypeVariableKey, std::unique_ptr<TypeVariableType>> TypeVariableTypes;
 
   using FunctionKey =
@@ -560,6 +629,26 @@ public:
     return entry.get();
   }
 
+  HType *getDualPointerType(bool IsConst, unsigned PtrSize, HType *LoadType,
+                            HType *StoreType) {
+    auto key = std::make_tuple(IsConst, PtrSize, LoadType, StoreType);
+    auto &entry = DualPointerTypes[key];
+    if (!entry) {
+      HType *Canon = nullptr;
+      auto CanonLoad =
+          LoadType == nullptr ? nullptr : LoadType->getCanonicalType();
+      auto CanonStore =
+          StoreType == nullptr ? nullptr : StoreType->getCanonicalType();
+      auto canonKey = std::make_tuple(false, PtrSize, CanonLoad, CanonStore);
+      if (key != canonKey) {
+        Canon = getDualPointerType(false, PtrSize, CanonLoad, CanonStore);
+      }
+      entry.reset(
+          new DualPointerType(IsConst, Canon, PtrSize, LoadType, StoreType));
+    }
+    return entry.get();
+  }
+
   HType *getRecordType(bool IsConst, RecordDecl *Decl) {
     if (!Decl->TypeForDecl) {
       Decl->TypeForDecl.reset(new RecordType(false, nullptr, Decl));
@@ -601,11 +690,44 @@ public:
     }
   }
 
-  HType *getTypeVariableType(bool IsConst, const std::string &Name) {
-    auto key = std::make_tuple(IsConst, Name);
+  HType *getSetUnionType(bool IsConst, HType *Lhs, HType *Rhs) {
+    auto key = std::make_tuple(IsConst, Lhs, Rhs);
+    auto &entry = SetUnionTypes[key];
+    if (!entry) {
+      HType *Canon = nullptr;
+      auto CanonLhs = Lhs->getCanonicalType();
+      auto CanonRhs = Rhs->getCanonicalType();
+      auto canonKey = std::make_tuple(false, CanonLhs, CanonRhs);
+      if (key != canonKey) {
+        Canon = getSetUnionType(false, CanonLhs, CanonRhs);
+      }
+      entry.reset(new SetUnionType(IsConst, Canon, Lhs, Rhs));
+    }
+    return entry.get();
+  }
+
+  HType *getSetInterType(bool IsConst, HType *Lhs, HType *Rhs) {
+    auto key = std::make_tuple(IsConst, Lhs, Rhs);
+    auto &entry = SetInterTypes[key];
+    if (!entry) {
+      HType *Canon = nullptr;
+      auto CanonLhs = Lhs->getCanonicalType();
+      auto CanonRhs = Rhs->getCanonicalType();
+      auto canonKey = std::make_tuple(false, CanonLhs, CanonRhs);
+      if (key != canonKey) {
+        Canon = getSetInterType(false, CanonLhs, CanonRhs);
+      }
+      entry.reset(new SetInterType(IsConst, Canon, Lhs, Rhs));
+    }
+    return entry.get();
+  }
+
+  HType *getTypeVariableType(bool IsConst, const std::string &Name,
+                             std::optional<unsigned> SizeBits = std::nullopt) {
+    auto key = std::make_tuple(IsConst, Name, SizeBits);
     auto &entry = TypeVariableTypes[key];
     if (!entry) {
-      entry.reset(new TypeVariableType(IsConst, Name));
+      entry.reset(new TypeVariableType(IsConst, Name, SizeBits));
     }
     return entry.get();
   }

@@ -148,10 +148,38 @@ std::string HType::getAsString() const {
     Result += ")";
     return Result;
   }
+  case TK_DualPointer: {
+    auto *DPT = llvm::cast<DualPointerType>(this);
+    std::string Result = "ptr<load=";
+    Result += (DPT->getLoadType() == nullptr ? "void"
+                                             : DPT->getLoadType()->getAsString());
+    Result += ", store=";
+    Result +=
+        (DPT->getStoreType() == nullptr ? "void"
+                                        : DPT->getStoreType()->getAsString());
+    Result += ", psize=" + std::to_string(DPT->getPointerSize()) + ">";
+    return Result;
+  }
+  case TK_SetUnion: {
+    auto *UT = llvm::cast<SetUnionType>(this);
+    return "(" + UT->getLhs()->getAsString() + " | " +
+           UT->getRhs()->getAsString() + ")";
+  }
+  case TK_SetInter: {
+    auto *IT = llvm::cast<SetInterType>(this);
+    return "(" + IT->getLhs()->getAsString() + " & " +
+           IT->getRhs()->getAsString() + ")";
+  }
   case TK_Typedef:
     return llvm::cast<TypedefType>(this)->getDecl()->getName();
-  case TK_TypeVariable:
-    return llvm::cast<TypeVariableType>(this)->getName();
+  case TK_TypeVariable: {
+    auto *TV = llvm::cast<TypeVariableType>(this);
+    auto SizeBits = TV->getSizeBits();
+    if (!SizeBits.has_value()) {
+      return TV->getName();
+    }
+    return TV->getName() + ":" + std::to_string(*SizeBits);
+  }
   default:
     assert(false && "Unknown HType");
   }
