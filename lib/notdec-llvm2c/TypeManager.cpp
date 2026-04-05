@@ -6,8 +6,11 @@
 #include "StructuralAnalysis.h"
 #include "Utils.h"
 #include <cassert>
+#include <cstdlib>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/DeclCXX.h>
+#include <clang/AST/DeclTemplate.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
@@ -81,6 +84,11 @@ clang::RecordDecl *createRecordDecl(clang::ASTContext &Ctx,
 
 namespace {
 
+bool useDualPointerTemplateMode() {
+  const char *Env = std::getenv("NOTDEC_LLVM2C_DUAL_PTR_TEMPLATE");
+  return Env != nullptr && Env[0] != '\0' && Env[0] != '0';
+}
+
 clang::QualType lowerIntegerFallback(clang::ASTContext &Ctx, unsigned BitSize,
                                      bool IsSigned) {
   if (BitSize == 0) {
@@ -114,6 +122,83 @@ getFallbackBitSize(const std::vector<const ast::TypeVariableType *> &Vars) {
 }
 
 } // namespace
+
+clang::ClassTemplateDecl *ClangTypeResult::getOrCreateDualPointerTemplateDecl() {
+  if (DualPointerTemplateDecl != nullptr) {
+    return DualPointerTemplateDecl;
+  }
+
+  auto *TUD = AM->getTypeDefinitions();
+  auto &PtrId = Ctx.Idents.get("Ptr");
+  auto &LoadId = Ctx.Idents.get("TLoad");
+  auto &StoreId = Ctx.Idents.get("TStore");
+
+  auto *LoadParam = clang::TemplateTypeParmDecl::Create(
+      Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), 0, 0,
+      &LoadId, true, false);
+  auto *StoreParam = clang::TemplateTypeParmDecl::Create(
+      Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), 0, 1,
+      &StoreId, true, false);
+  llvm::SmallVector<clang::NamedDecl *, 2> Params{LoadParam, StoreParam};
+  auto *ParamList =
+      clang::TemplateParameterList::Create(Ctx, clang::SourceLocation(),
+                                           clang::SourceLocation(), Params,
+                                           clang::SourceLocation(), nullptr);
+
+  auto *Record = clang::CXXRecordDecl::Create(
+      Ctx, clang::TTK_Union, TUD, clang::SourceLocation(),
+      clang::SourceLocation(), &PtrId);
+  auto *Template = clang::ClassTemplateDecl::Create(
+      Ctx, TUD, clang::SourceLocation(), clang::DeclarationName(&PtrId),
+      ParamList, Record);
+  Record->setDescribedClassTemplate(Template);
+  Record->startDefinition();
+
+  auto LoadTy = Ctx.getTemplateTypeParmType(0, 0, false, LoadParam);
+  auto StoreTy = Ctx.getTemplateTypeParmType(0, 1, false, StoreParam);
+
+  auto *LoadField = clang::FieldDecl::Create(
+      Ctx, Record, clang::SourceLocation(), clang::SourceLocation(),
+      &Ctx.Idents.get("load"), LoadTy, nullptr, nullptr, false,
+      clang::ICIS_NoInit);
+  auto *StoreField = clang::FieldDecl::Create(
+      Ctx, Record, clang::SourceLocation(), clang::SourceLocation(),
+      &Ctx.Idents.get("store"), StoreTy, nullptr, nullptr, false,
+      clang::ICIS_NoInit);
+  Record->addDecl(LoadField);
+  Record->addDecl(StoreField);
+  Record->completeDefinition();
+
+  TUD->addDecl(Template);
+  DualPointerTemplateDecl = Template;
+  return DualPointerTemplateDecl;
+}
+
+clang::QualType
+ClangTypeResult::convertDualPointerTemplateType(const ast::DualPointerType *T) {
+  auto lowerViewType = [&](ast::HType *ElemTy) -> clang::QualType {
+    if (ElemTy == nullptr) {
+      return Ctx.VoidPtrTy;
+    }
+    auto Lowered = convertType(ElemTy);
+    if (Lowered.isNull() || Lowered->isVoidType()) {
+      return Ctx.VoidPtrTy;
+    }
+    return Ctx.getPointerType(Lowered);
+  };
+
+  auto *TemplateDecl = getOrCreateDualPointerTemplateDecl();
+  llvm::SmallVector<clang::TemplateArgument, 2> Args{
+      clang::TemplateArgument(lowerViewType(T->getLoadType())),
+      clang::TemplateArgument(lowerViewType(T->getStoreType()))};
+
+  auto Ret = Ctx.getTemplateSpecializationType(clang::TemplateName(TemplateDecl),
+                                               Args);
+  if (T->isConst()) {
+    Ret = Ret.withConst();
+  }
+  return Ret;
+}
 
 clang::QualType ClangTypeResult::convertType(HType *T) {
   // Check for cache
@@ -252,6 +337,9 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
     } else if (auto *FT = llvm::dyn_cast<ast::FunctionType>(T)) {
       return lowerFunctionType(FT);
     } else if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(T)) {
+      if (useDualPointerTemplateMode()) {
+        return convertDualPointerTemplateType(DPT);
+      }
       HType *Chosen = DPT->getLoadType();
       if (Chosen == nullptr) {
         Chosen = DPT->getStoreType();

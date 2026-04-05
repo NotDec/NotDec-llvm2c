@@ -4,6 +4,7 @@
 
 #include "notdec-llvm2c/Interface/StructManager.h"
 #include <clang/AST/DeclVisitor.h>
+#include <clang/AST/DeclTemplate.h>
 #include <llvm/Support/raw_ostream.h>
 #include <optional>
 
@@ -41,6 +42,8 @@ public:
   void VisitDeclContext(DeclContext *DC, bool Indent = true, std::function<bool(Decl*)> Filter = nullptr);
 
   void VisitTranslationUnitDecl(TranslationUnitDecl *D);
+  void VisitClassTemplateDecl(ClassTemplateDecl *D);
+  void VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D);
   void VisitTypedefDecl(TypedefDecl *D);
   // void VisitTypeAliasDecl(TypeAliasDecl *D);
   void VisitEnumDecl(EnumDecl *D);

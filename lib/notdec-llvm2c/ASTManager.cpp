@@ -75,6 +75,16 @@ private:
         processType(TD->getUnderlyingType());
       }
       return;
+    } else if (const auto *TST = QT->getAs<TemplateSpecializationType>()) {
+      if (auto *TD = TST->getTemplateName().getAsTemplateDecl()) {
+        Referenced.insert(TD->getNameAsString());
+      }
+      for (const auto &Arg : TST->template_arguments()) {
+        if (Arg.getKind() == TemplateArgument::Type) {
+          processType(Arg.getAsType());
+        }
+      }
+      return;
     } else if (auto *FT = QT->getAs<FunctionType>()) {
       // 返回值
       processType(FT->getReturnType());

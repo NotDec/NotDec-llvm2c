@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdlib>
 #include <clang/AST/Decl.h>
 #include <iostream>
 #include <llvm/IR/Verifier.h>
@@ -31,6 +32,15 @@
 #define DEBUG_TYPE "notdec-backend-utils"
 
 namespace notdec::llvm2c {
+
+namespace {
+
+bool useDualPointerTemplateMode() {
+  const char *Env = std::getenv("NOTDEC_LLVM2C_DUAL_PTR_TEMPLATE");
+  return Env != nullptr && Env[0] != '\0' && Env[0] != '0';
+}
+
+} // namespace
 
 const char *KIND_STACK_POINTER = "notdec.stackpointer";
 
@@ -87,13 +97,19 @@ void printModule(llvm::Module &M, const char *path) {
 
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
   auto FileNameStr = FileName.str();
-  if (!FileName.endswith(".c") || !FileName.endswith(".cpp") ||
+  bool UseCppMode = useDualPointerTemplateMode();
+  if (!FileName.endswith(".c") && !FileName.endswith(".cpp") &&
       !FileName.endswith(".cc")) {
-    FileNameStr += ".c";
+    FileNameStr += UseCppMode ? ".cpp" : ".c";
+  }
+  std::vector<std::string> Args = {"-target", "wasm32-unknown-wasi",
+                                   "-fparse-all-comments"};
+  if (UseCppMode) {
+    Args.push_back("-xc++");
+    Args.push_back("-std=c++17");
   }
   auto AST = clang::tooling::buildASTFromCodeWithArgs(
-      "", {"-target", "wasm32-unknown-wasi", "-fparse-all-comments"},
-      FileNameStr, "clang-tool",
+      "", Args, FileNameStr, "clang-tool",
       std::make_shared<clang::PCHContainerOperations>());
   assert(AST != nullptr && "Failed to build AST");
   auto Int64Ty = AST->getASTContext().getIntTypeForBitwidth(64, true);

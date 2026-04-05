@@ -249,6 +249,31 @@ void DeclPrinter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
   VisitDeclContext(D, false);
 }
 
+void DeclPrinter::VisitClassTemplateDecl(ClassTemplateDecl *D) {
+  Out << "template <";
+  bool First = true;
+  for (auto *Param : *D->getTemplateParameters()) {
+    if (!First) {
+      Out << ", ";
+    }
+    First = false;
+    if (auto *TyParam = dyn_cast<TemplateTypeParmDecl>(Param)) {
+      VisitTemplateTypeParmDecl(TyParam);
+      continue;
+    }
+    assert(false && "Unsupported template parameter kind");
+  }
+  Out << "> ";
+  VisitRecordDecl(D->getTemplatedDecl());
+}
+
+void DeclPrinter::VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D) {
+  Out << (D->wasDeclaredWithTypename() ? "typename " : "class ");
+  if (D->getIdentifier()) {
+    Out << D->getName();
+  }
+}
+
 void DeclPrinter::printDeclComments(Decl *D) {
   if (CT) {
     std::string Comment = CT->getComment(D);

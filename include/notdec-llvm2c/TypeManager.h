@@ -4,6 +4,7 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
+#include <clang/AST/DeclTemplate.h>
 #include <clang/AST/Type.h>
 #include <clang/Frontend/ASTUnit.h>
 #include <cstdint>
@@ -36,9 +37,12 @@ class ClangTypeResult {
   // map from field decl to ast field decl. For globals, may map VarDecl to ast
   // FieldDecl
   std::map<clang::Decl *, const ast::FieldDecl *> FieldDeclMap;
+  clang::ClassTemplateDecl *DualPointerTemplateDecl = nullptr;
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
   clang::QualType convertType(HType *T);
+  clang::ClassTemplateDecl *getOrCreateDualPointerTemplateDecl();
+  clang::QualType convertDualPointerTemplateType(const ast::DualPointerType *T);
   clang::QualType convertTypeL(HType *T) {
     return toLValueType(Ctx, convertType(T));
   }
