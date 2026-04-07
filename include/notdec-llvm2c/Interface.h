@@ -76,7 +76,7 @@ private:
   }
 
   static std::string formatValueKey(const ExtValuePtr &Value) {
-    return toString(Value, true);
+    return toStableString(Value);
   }
 
   static std::string formatType(const HType *Type) {
