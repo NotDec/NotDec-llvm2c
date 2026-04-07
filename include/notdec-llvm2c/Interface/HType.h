@@ -25,6 +25,7 @@ class HTypeContext;
 class TypedefType;
 class RecordPtrType;
 class HType;
+class HTypeSnapshotFormatter;
 
 /*
 TypedDecl Architecture:
@@ -748,6 +749,39 @@ public:
 
   // static HTypeContext Instance;
   // static HTypeContext &getInstance() { return Instance; }
+};
+
+// 这个 formatter 专门服务 snapshot / golden 输出，而不是常规调试打印。
+//
+// 设计成独立类而不是直接改 HType::getAsString()，主要有两个原因：
+// 1. snapshot 需要“整份结果级别”的稳定命名。像 struct_0 / union_0 /
+//    field_0 这类 canonical 名，必须在 [decls]、[upper]、[lower]、
+//    [memory] 四个 section 之间共享同一份状态，单个 HType 自己无法完成。
+// 2. getAsString() 仍然保留给调试和其他非 snapshot 路径使用，避免把
+//    测试基线格式的约束扩散到普通展示逻辑。
+// 3. 当前仍依赖 “首次发现顺序” 但是HTypeResult::print() 会先按 stable value key 排序，因此大概率是稳定的
+class HTypeSnapshotFormatter {
+public:
+  explicit HTypeSnapshotFormatter(const HTypeContext *Ctx = nullptr)
+      : Ctx(Ctx) {}
+
+  void collectType(const HType *Type);
+  void collectDecl(const TypedDecl &Decl);
+  std::string formatType(const HType *Type);
+  std::string formatDecl(const TypedDecl &Decl);
+  std::string formatDeclName(const TypedDecl &Decl);
+  std::vector<const TypedDecl *> getOrderedDecls();
+
+private:
+  std::string getDeclName(const TypedDecl &Decl);
+  std::string formatFieldName(const FieldDecl &Field, unsigned Index,
+                              unsigned PaddingIndex) const;
+  const HTypeContext *Ctx = nullptr;
+  std::map<const TypedDecl *, std::string> DeclNames;
+  std::vector<const TypedDecl *> DeclOrder;
+  unsigned NextStructId = 0;
+  unsigned NextUnionId = 0;
+  unsigned NextTypedefId = 0;
 };
 
 } // namespace notdec::ast

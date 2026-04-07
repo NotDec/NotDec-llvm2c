@@ -58,60 +58,68 @@ struct HTypeResult {
   HTypeResult(HTypeResult &&Other) = default;
   HTypeResult &operator=(HTypeResult &&Other) = default;
   void print(llvm::raw_ostream &OS) const {
+    // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
+    // 因此这里先创建并预热一个 formatter，再统一打印 decl/type/memory，
+    // 避免同一个声明在不同 section 中拿到不同名字。
+    ast::HTypeSnapshotFormatter Formatter(HTCtx.get());
+    primeFormatter(Formatter);
     OS << "# HTypeResult\n\n";
-    printDeclSection(OS);
-    printValueSection(OS, "upper", ValueTypes);
-    printValueSection(OS, "lower", ValueTypesLowerBound);
-    printMemorySection(OS);
+    printDeclSection(OS, Formatter);
+    printValueSection(OS, "upper", ValueTypes, Formatter);
+    printValueSection(OS, "lower", ValueTypesLowerBound, Formatter);
+    printMemorySection(OS, Formatter);
   }
   void dump() const { print(llvm::errs()); }
 
 private:
-  static std::string formatDecl(const ast::TypedDecl &Decl) {
-    std::string Ret;
-    llvm::raw_string_ostream SS(Ret);
-    Decl.print(SS);
-    SS.flush();
-    return Ret;
-  }
-
   static std::string formatValueKey(const ExtValuePtr &Value) {
     return toStableString(Value);
   }
 
-  static std::string formatType(const HType *Type) {
-    return Type == nullptr ? "<null>" : Type->getAsString();
+  void primeFormatter(ast::HTypeSnapshotFormatter &Formatter) const {
+    auto CollectMap = [&](const std::map<ExtValuePtr, HType *> &Map) {
+      std::vector<std::pair<std::string, const HType *>> Entries;
+      Entries.reserve(Map.size());
+      for (const auto &Ent : Map) {
+        Entries.emplace_back(formatValueKey(Ent.first), Ent.second);
+      }
+      std::sort(Entries.begin(), Entries.end());
+      for (const auto &Ent : Entries) {
+        Formatter.collectType(Ent.second);
+      }
+    };
+
+    CollectMap(ValueTypes);
+    CollectMap(ValueTypesLowerBound);
+    if (MemoryType != nullptr) {
+      Formatter.collectType(MemoryType);
+    }
+    if (MemoryDecl != nullptr) {
+      Formatter.collectDecl(*MemoryDecl);
+    }
   }
 
-  void printDeclSection(llvm::raw_ostream &OS) const {
+  void printDeclSection(llvm::raw_ostream &OS,
+                        ast::HTypeSnapshotFormatter &Formatter) const {
     OS << "[decls]\n";
     if (HTCtx != nullptr) {
-      std::vector<const ast::TypedDecl *> Decls;
-      Decls.reserve(HTCtx->getDecls().size());
-      for (const auto &Ent : HTCtx->getDecls()) {
-        Decls.push_back(Ent.second.get());
-      }
-      std::sort(Decls.begin(), Decls.end(),
-                [](const ast::TypedDecl *LHS, const ast::TypedDecl *RHS) {
-                  if (LHS->getName() != RHS->getName()) {
-                    return LHS->getName() < RHS->getName();
-                  }
-                  return formatDecl(*LHS) < formatDecl(*RHS);
-                });
+      auto Decls = Formatter.getOrderedDecls();
       for (const auto *Decl : Decls) {
-        OS << formatDecl(*Decl) << "\n";
+        OS << Formatter.formatDecl(*Decl) << "\n";
       }
     }
     OS << "\n";
   }
 
   void printValueSection(llvm::raw_ostream &OS, llvm::StringRef Name,
-                         const std::map<ExtValuePtr, HType *> &Map) const {
+                         const std::map<ExtValuePtr, HType *> &Map,
+                         ast::HTypeSnapshotFormatter &Formatter) const {
     OS << "[" << Name << "]\n";
     std::vector<std::pair<std::string, std::string>> Entries;
     Entries.reserve(Map.size());
     for (const auto &Ent : Map) {
-      Entries.emplace_back(formatValueKey(Ent.first), formatType(Ent.second));
+      Entries.emplace_back(formatValueKey(Ent.first),
+                           Formatter.formatType(Ent.second));
     }
     std::sort(Entries.begin(), Entries.end());
     for (const auto &Ent : Entries) {
@@ -120,13 +128,14 @@ private:
     OS << "\n";
   }
 
-  void printMemorySection(llvm::raw_ostream &OS) const {
+  void printMemorySection(llvm::raw_ostream &OS,
+                          ast::HTypeSnapshotFormatter &Formatter) const {
     OS << "[memory]\n";
     if (MemoryDecl != nullptr) {
-      OS << "decl => " << MemoryDecl->getName() << "\n";
+      OS << "decl => " << Formatter.formatDeclName(*MemoryDecl) << "\n";
     }
     if (MemoryType != nullptr) {
-      OS << "type => " << formatType(MemoryType) << "\n";
+      OS << "type => " << Formatter.formatType(MemoryType) << "\n";
     }
     OS << "\n";
   }
