@@ -14,6 +14,8 @@
 #include <variant>
 #include <vector>
 
+#include <llvm/Support/raw_ostream.h>
+
 #include "Range.h"
 #include "notdec-llvm2c/Interface/StructManager.h"
 
@@ -59,7 +61,7 @@ public:
     }
     return nullptr;
   }
-  void print(llvm::raw_fd_ostream &OS) const;
+  void print(llvm::raw_ostream &OS) const;
 
 private:
   TypedDeclKind Kind;
@@ -96,7 +98,7 @@ public:
   std::vector<FieldDecl> &getFields() { return Fields; }
   const std::vector<FieldDecl> &getFields() const { return Fields; }
   const ast::FieldDecl *getFieldAt(OffsetTy Off) const;
-  void print(llvm::raw_fd_ostream &OS) const;
+  void print(llvm::raw_ostream &OS) const;
   void setBytesManager(std::shared_ptr<BytesManager> Bytes) {
     assert(this->Bytes == nullptr && "BytesManager already exists");
     this->Bytes = Bytes;
@@ -179,7 +181,7 @@ public:
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Union; }
   const std::vector<FieldDecl> &getMembers() const { return Members; }
   void addMember(FieldDecl Field) { Members.push_back(Field); }
-  void print(llvm::raw_fd_ostream &OS) const;
+  void print(llvm::raw_ostream &OS) const;
 
   static UnionDecl *Create(HTypeContext &Ctx, const std::string &Name);
 
@@ -209,7 +211,7 @@ public:
 
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Typedef; }
   HType *getType() const { return Type; }
-  void print(llvm::raw_fd_ostream &OS) const;
+  void print(llvm::raw_ostream &OS) const;
 
   static TypedefDecl *Create(HTypeContext &Ctx, const std::string &Name,
                              HType *Type);
@@ -733,7 +735,7 @@ public:
     return entry.get();
   }
 
-  void printDecls(llvm::raw_fd_ostream &OS) {
+  void printDecls(llvm::raw_ostream &OS) {
     for (auto &Ent : Decls) {
       Ent.second->print(OS);
       OS << "\n";

@@ -186,7 +186,7 @@ std::string HType::getAsString() const {
   }
 }
 
-void TypedDecl::print(llvm::raw_fd_ostream &OS) const {
+void TypedDecl::print(llvm::raw_ostream &OS) const {
   switch (getKind()) {
   case DK_Record:
     llvm::cast<RecordDecl>(this)->print(OS);
@@ -200,7 +200,7 @@ void TypedDecl::print(llvm::raw_fd_ostream &OS) const {
   }
 }
 
-void RecordDecl::print(llvm::raw_fd_ostream &OS) const {
+void RecordDecl::print(llvm::raw_ostream &OS) const {
   OS << "struct " << getName() << " {\n";
   for (auto &Field : Fields) {
     OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* "
@@ -209,7 +209,7 @@ void RecordDecl::print(llvm::raw_fd_ostream &OS) const {
   OS << "}; /* " << getComment() << " */\n";
 }
 
-void UnionDecl::print(llvm::raw_fd_ostream &OS) const {
+void UnionDecl::print(llvm::raw_ostream &OS) const {
   OS << "union " << getName() << " {\n";
   for (auto &Field : Members) {
     OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* "
@@ -218,7 +218,7 @@ void UnionDecl::print(llvm::raw_fd_ostream &OS) const {
   OS << "}; /* " << getComment() << " */\n";
 }
 
-void TypedefDecl::print(llvm::raw_fd_ostream &OS) const {
+void TypedefDecl::print(llvm::raw_ostream &OS) const {
   OS << "typedef " << Type->getAsString() << " " << getName() << "; /* "
      << getComment() << " */\n";
 }
