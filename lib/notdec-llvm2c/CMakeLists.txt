@@ -20,11 +20,19 @@ add_library(notdec-llvm2c SHARED STATIC
     ASTPrinter/TypePrinter.cpp
 )
 
-target_link_libraries(notdec-llvm2c
-    PUBLIC
-    LLVMCore LLVMIRReader LLVMSupport LLVMPasses
-    clangAST clangTooling
-)
+if (NOTDEC_HAVE_SHARED_LLVM AND NOTDEC_HAVE_SHARED_CLANG)
+    target_link_libraries(notdec-llvm2c
+        PUBLIC
+        notdec_llvm_deps
+        notdec_clang_deps
+    )
+else ()
+    target_link_libraries(notdec-llvm2c
+        PUBLIC
+        LLVMCore LLVMIRReader LLVMSupport LLVMPasses
+        clangAST clangTooling
+    )
+endif ()
 
 target_include_directories(notdec-llvm2c
     PUBLIC
