@@ -311,7 +311,11 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
       return convertType(UniqueConcreteTypes.front());
     };
 
-    if (auto *IT = llvm::dyn_cast<ast::IntegerType>(T)) {
+    if (auto *TT = llvm::dyn_cast<ast::TopType>(T)) {
+      return lowerIntegerFallback(Ctx, TT->getBitSize(), true);
+    } else if (auto *BT = llvm::dyn_cast<ast::BottomType>(T)) {
+      return lowerIntegerFallback(Ctx, BT->getBitSize(), true);
+    } else if (auto *IT = llvm::dyn_cast<ast::IntegerType>(T)) {
       return lowerIntegerFallback(Ctx, IT->getBitSize(), IT->isSigned());
     } else if (auto *FT = llvm::dyn_cast<ast::FloatingType>(T)) {
       if (FT->getBitSize() == 32) {

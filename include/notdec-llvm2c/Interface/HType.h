@@ -237,6 +237,8 @@ public:
   enum HTypeKind {
     // Begin of SimpleType
     TK_Simple,
+    TK_Top,
+    TK_Bottom,
     TK_Integer,
     TK_Float,
     TK_Pointer,
@@ -269,6 +271,8 @@ public:
   bool isIntType() const { return Kind == TK_Integer; }
   bool isFloatType() const { return Kind == TK_Float; }
   bool isPointerType() const { return Kind == TK_Pointer; }
+  bool isTopType() const { return Kind == TK_Top; }
+  bool isBottomType() const { return Kind == TK_Bottom; }
   bool isFunctionType() const { return Kind == TK_Function; }
   bool isDualPointerType() const { return Kind == TK_DualPointer; }
   bool isSetUnionType() const { return Kind == TK_SetUnion; }
@@ -318,6 +322,26 @@ public:
 
 private:
   unsigned BitSize;
+};
+
+class TopType : public SimpleType {
+protected:
+  TopType(bool IsConst, HType *Canon, unsigned BitSize)
+      : SimpleType(TK_Top, Canon, IsConst, BitSize) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_Top; }
+};
+
+class BottomType : public SimpleType {
+protected:
+  BottomType(bool IsConst, HType *Canon, unsigned BitSize)
+      : SimpleType(TK_Bottom, Canon, IsConst, BitSize) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) { return T->getKind() == TK_Bottom; }
 };
 
 // 整数类型
@@ -507,6 +531,10 @@ class HTypeContext {
   using IntegerKey = std::tuple<bool, unsigned, bool>;
   std::map<IntegerKey, std::unique_ptr<IntegerType>> IntegerTypes;
 
+  using BoundKey = std::tuple<bool, unsigned>;
+  std::map<BoundKey, std::unique_ptr<TopType>> TopTypes;
+  std::map<BoundKey, std::unique_ptr<BottomType>> BottomTypes;
+
   using FloatKey = std::tuple<bool, unsigned>;
   std::map<FloatKey, std::unique_ptr<FloatingType>> FloatTypes;
 
@@ -567,6 +595,32 @@ public:
   }
   HType *getBool() { return getIntegerType(false, 1, true); }
   HType *getChar() { return getIntegerType(false, 8, false); }
+
+  HType *getTopType(bool IsConst, unsigned BitSize) {
+    auto Key = std::make_tuple(IsConst, BitSize);
+    auto &Entry = TopTypes[Key];
+    if (!Entry) {
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getTopType(false, BitSize);
+      }
+      Entry.reset(new TopType(IsConst, Canon, BitSize));
+    }
+    return Entry.get();
+  }
+
+  HType *getBottomType(bool IsConst, unsigned BitSize) {
+    auto Key = std::make_tuple(IsConst, BitSize);
+    auto &Entry = BottomTypes[Key];
+    if (!Entry) {
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getBottomType(false, BitSize);
+      }
+      Entry.reset(new BottomType(IsConst, Canon, BitSize));
+    }
+    return Entry.get();
+  }
 
   HType *getFloatType(bool IsConst, unsigned BitSize) {
     auto key = std::make_tuple(IsConst, BitSize);

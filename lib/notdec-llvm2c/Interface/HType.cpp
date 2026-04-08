@@ -113,6 +113,11 @@ TypedefDecl *HType::getAsTypedefDecl() const {
 
 std::string HType::getAsString() const {
   switch (getKind()) {
+  case TK_Top:
+    return "top:" + std::to_string(llvm::cast<TopType>(this)->getBitSize());
+  case TK_Bottom:
+    return "bottom:" +
+           std::to_string(llvm::cast<BottomType>(this)->getBitSize());
   case TK_Integer:
     return "i" + std::to_string(llvm::cast<IntegerType>(this)->getBitSize());
   case TK_Float:
@@ -279,6 +284,8 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
   case HType::TK_Simple:
     assert(false && "Unexpected abstract simple type");
     return;
+  case HType::TK_Top:
+  case HType::TK_Bottom:
   case HType::TK_Integer:
   case HType::TK_Float:
   case HType::TK_TypeVariable:
@@ -363,6 +370,11 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
   switch (Type->getKind()) {
   case HType::TK_Simple:
     assert(false && "Unexpected abstract simple type");
+  case HType::TK_Top:
+    return "top:" + std::to_string(llvm::cast<TopType>(Type)->getBitSize());
+  case HType::TK_Bottom:
+    return "bottom:" +
+           std::to_string(llvm::cast<BottomType>(Type)->getBitSize());
   case HType::TK_Integer:
     return "i" + std::to_string(llvm::cast<IntegerType>(Type)->getBitSize());
   case HType::TK_Float:
