@@ -13,6 +13,13 @@ template <typename T> void sortPairForDisplay(T &Lhs, T &Rhs) {
   }
 }
 
+void appendCommentIfPresent(llvm::raw_ostream &OS, llvm::StringRef Comment) {
+  if (Comment.empty()) {
+    return;
+  }
+  OS << " /* " << Comment << " */";
+}
+
 } // namespace
 
 // HTypeContext HTypeContext::Instance;
@@ -218,24 +225,31 @@ void TypedDecl::print(llvm::raw_ostream &OS) const {
 void RecordDecl::print(llvm::raw_ostream &OS) const {
   OS << "struct " << getName() << " {\n";
   for (auto &Field : Fields) {
-    OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* "
-       << Field.Comment << " */\n";
+    OS << "  " << Field.Type->getAsString() << " " << Field.Name << ";";
+    appendCommentIfPresent(OS, Field.Comment);
+    OS << "\n";
   }
-  OS << "}; /* " << getComment() << " */\n";
+  OS << "};";
+  appendCommentIfPresent(OS, getComment());
+  OS << "\n";
 }
 
 void UnionDecl::print(llvm::raw_ostream &OS) const {
   OS << "union " << getName() << " {\n";
   for (auto &Field : Members) {
-    OS << "  " << Field.Type->getAsString() << " " << Field.Name << "; /* "
-       << Field.Comment << " */\n";
+    OS << "  " << Field.Type->getAsString() << " " << Field.Name << ";";
+    appendCommentIfPresent(OS, Field.Comment);
+    OS << "\n";
   }
-  OS << "}; /* " << getComment() << " */\n";
+  OS << "};";
+  appendCommentIfPresent(OS, getComment());
+  OS << "\n";
 }
 
 void TypedefDecl::print(llvm::raw_ostream &OS) const {
-  OS << "typedef " << Type->getAsString() << " " << getName() << "; /* "
-     << getComment() << " */\n";
+  OS << "typedef " << Type->getAsString() << " " << getName() << ";";
+  appendCommentIfPresent(OS, getComment());
+  OS << "\n";
 }
 
 std::string HTypeSnapshotFormatter::getDeclName(const TypedDecl &Decl) {
@@ -473,15 +487,18 @@ std::string HTypeSnapshotFormatter::formatDecl(const TypedDecl &Decl) {
     unsigned PaddingIndex = 0;
     for (const auto &Field : RD->getFields()) {
       auto Name = formatFieldName(Field, FieldIndex, PaddingIndex);
-      OS << "  " << formatType(Field.Type) << " " << Name << "; /* "
-         << Field.Comment << " */\n";
+      OS << "  " << formatType(Field.Type) << " " << Name << ";";
+      appendCommentIfPresent(OS, Field.Comment);
+      OS << "\n";
       if (Field.isPadding) {
         ++PaddingIndex;
       } else {
         ++FieldIndex;
       }
     }
-    OS << "}; /* " << RD->getComment() << " */\n";
+    OS << "};";
+    appendCommentIfPresent(OS, RD->getComment());
+    OS << "\n";
     OS.flush();
     return Result;
   }
@@ -517,22 +534,27 @@ std::string HTypeSnapshotFormatter::formatDecl(const TypedDecl &Decl) {
     for (const auto &Member : Members) {
       auto Name =
           formatFieldName(*Member.Field, FieldIndex, PaddingIndex);
-      OS << "  " << Member.TypeText << " " << Name << "; /* " << Member.Comment
-         << " */\n";
+      OS << "  " << Member.TypeText << " " << Name << ";";
+      appendCommentIfPresent(OS, Member.Comment);
+      OS << "\n";
       if (Member.IsPadding) {
         ++PaddingIndex;
       } else {
         ++FieldIndex;
       }
     }
-    OS << "}; /* " << UD->getComment() << " */\n";
+    OS << "};";
+    appendCommentIfPresent(OS, UD->getComment());
+    OS << "\n";
     OS.flush();
     return Result;
   }
 
   auto *TD = llvm::cast<TypedefDecl>(&Decl);
   OS << "typedef " << formatType(TD->getType()) << " " << getDeclName(*TD)
-     << "; /* " << TD->getComment() << " */\n";
+     << ";";
+  appendCommentIfPresent(OS, TD->getComment());
+  OS << "\n";
   OS.flush();
   return Result;
 }
