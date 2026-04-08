@@ -1527,10 +1527,11 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                      llvm::raw_fd_ostream &OS, Options opts,
                      std::unique_ptr<HTypeResult> HT) {
 
-  auto DebugDir = std::getenv("NOTDEC_DEBUG_DIR");
-  if (DebugDir) {
-    if (std::error_code EC = llvm::sys::fs::create_directories(DebugDir)) {
-      llvm::errs() << "Error: failed to create debug directory '" << DebugDir
+  auto WorkDir =
+      opts.workDir.empty() ? nullptr : opts.workDir.c_str();
+  if (WorkDir) {
+    if (std::error_code EC = llvm::sys::fs::create_directories(WorkDir)) {
+      llvm::errs() << "Error: failed to create work directory '" << WorkDir
                    << "': " << EC.message() << "\n";
       std::abort();
     }
@@ -1542,7 +1543,7 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
 
   if (!opts.noDemoteSSA) {
     if (HT) {
-      demoteSSAFixHT(M, MAM, *HT, DebugDir);
+      demoteSSAFixHT(M, MAM, *HT, WorkDir);
     } else {
       demoteSSA(M, MAM);
     }

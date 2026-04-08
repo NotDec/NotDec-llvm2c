@@ -39,6 +39,7 @@ struct Options {
   bool enableColor = false;
   bool filterUnusedDefinitions = false;
   StructuralAlgorithms algo;
+  std::string workDir;
 };
 
 using notdec::ast::HType;

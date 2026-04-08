@@ -28,6 +28,7 @@ static cl::opt<bool>
       .enableColor = enableColor,
       .filterUnusedDefinitions = filterUnusedDefinitions,
       .algo = Algo,
+      .workDir = "",
   };
   return Opts;
 }
