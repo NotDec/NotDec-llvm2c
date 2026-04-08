@@ -331,6 +331,9 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
 
 void HTypeSnapshotFormatter::collectDecl(const TypedDecl &Decl) {
   getDeclName(Decl);
+  if (!CollectedDecls.insert(&Decl).second) {
+    return;
+  }
 
   if (auto *RD = llvm::dyn_cast<RecordDecl>(&Decl)) {
     for (const auto &Field : RD->getFields()) {

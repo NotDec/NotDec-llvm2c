@@ -778,6 +778,7 @@ private:
                               unsigned PaddingIndex) const;
   const HTypeContext *Ctx = nullptr;
   std::map<const TypedDecl *, std::string> DeclNames;
+  std::set<const TypedDecl *> CollectedDecls;
   std::vector<const TypedDecl *> DeclOrder;
   unsigned NextStructId = 0;
   unsigned NextUnionId = 0;
