@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -46,6 +47,7 @@ using notdec::ast::HType;
 struct HTypeResult {
   std::shared_ptr<ast::HTypeContext> HTCtx;
   std::map<ExtValuePtr, HType *> ValueTypes;
+  std::set<ExtValuePtr> ContraVariantValues;
   // std::map<clang::Decl *, std::string> DeclComments;
   // std::map<clang::Decl *, StructInfo> StructInfos;
   // std::set<clang::Decl*> AllDecls;
@@ -72,6 +74,10 @@ struct HTypeResult {
 private:
   static std::string formatValueKey(const ExtValuePtr &Value) {
     return toStableString(Value);
+  }
+
+  std::string formatValuePosition(const ExtValuePtr &Value) const {
+    return ContraVariantValues.count(Value) != 0 ? "[-]" : "[+]";
   }
 
   void primeFormatter(ast::HTypeSnapshotFormatter &Formatter) const {
@@ -112,15 +118,17 @@ private:
                          const std::map<ExtValuePtr, HType *> &Map,
                          ast::HTypeSnapshotFormatter &Formatter) const {
     OS << "[" << Name << "]\n";
-    std::vector<std::pair<std::string, std::string>> Entries;
+    std::vector<std::tuple<std::string, std::string, std::string>> Entries;
     Entries.reserve(Map.size());
     for (const auto &Ent : Map) {
       Entries.emplace_back(formatValueKey(Ent.first),
+                           formatValuePosition(Ent.first),
                            Formatter.formatType(Ent.second));
     }
     std::sort(Entries.begin(), Entries.end());
     for (const auto &Ent : Entries) {
-      OS << Ent.first << " => " << Ent.second << "\n";
+      OS << std::get<1>(Ent) << " " << std::get<0>(Ent) << " => "
+         << std::get<2>(Ent) << "\n";
     }
     OS << "\n";
   }
