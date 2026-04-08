@@ -60,8 +60,8 @@ public:
       : Result(Result), AM(AM), Ctx(AM->getASTContext()) {}
 
   std::shared_ptr<ASTManager> getASTManager() { return AM; }
-  bool hasType(ExtValuePtr Val, bool isUpperBound = false);
-  clang::QualType getType(ExtValuePtr Val, bool isUpperBound = false);
+  bool hasType(ExtValuePtr Val);
+  clang::QualType getType(ExtValuePtr Val);
 
   clang::RecordDecl *convertUnion(ast::UnionDecl *UD);
   clang::RecordDecl *convertStruct(ast::RecordDecl *RD, bool isMemory = false);

@@ -755,7 +755,7 @@ public:
 //
 // 设计成独立类而不是直接改 HType::getAsString()，主要有两个原因：
 // 1. snapshot 需要“整份结果级别”的稳定命名。像 struct_0 / union_0 /
-//    field_0 这类 canonical 名，必须在 [decls]、[upper]、[lower]、
+//    field_0 这类 canonical 名，必须在 [decls]、[types]、
 //    [memory] 四个 section 之间共享同一份状态，单个 HType 自己无法完成。
 // 2. getAsString() 仍然保留给调试和其他非 snapshot 路径使用，避免把
 //    测试基线格式的约束扩散到普通展示逻辑。

@@ -54,20 +54,12 @@ clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty) {
   }
 }
 
-bool ClangTypeResult::hasType(ExtValuePtr Val, bool isUpperBound) {
-  if (!isUpperBound) {
-    return Result->ValueTypesLowerBound.count(Val) > 0;
-  } else {
-    return Result->ValueTypes.count(Val) > 0;
-  }
+bool ClangTypeResult::hasType(ExtValuePtr Val) {
+  return Result->ValueTypes.count(Val) > 0;
 }
 
-clang::QualType ClangTypeResult::getType(ExtValuePtr Val, bool isUpperBound) {
-  if (!isUpperBound) {
-    return convertType(Result->ValueTypesLowerBound.at(Val));
-  } else {
-    return convertType(Result->ValueTypes.at(Val));
-  }
+clang::QualType ClangTypeResult::getType(ExtValuePtr Val) {
+  return convertType(Result->ValueTypes.at(Val));
 }
 
 clang::RecordDecl *createRecordDecl(clang::ASTContext &Ctx,

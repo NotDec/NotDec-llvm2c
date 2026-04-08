@@ -46,7 +46,6 @@ using notdec::ast::HType;
 struct HTypeResult {
   std::shared_ptr<ast::HTypeContext> HTCtx;
   std::map<ExtValuePtr, HType *> ValueTypes;
-  std::map<ExtValuePtr, HType *> ValueTypesLowerBound;
   // std::map<clang::Decl *, std::string> DeclComments;
   // std::map<clang::Decl *, StructInfo> StructInfos;
   // std::set<clang::Decl*> AllDecls;
@@ -65,8 +64,7 @@ struct HTypeResult {
     primeFormatter(Formatter);
     OS << "# HTypeResult\n\n";
     printDeclSection(OS, Formatter);
-    printValueSection(OS, "upper", ValueTypes, Formatter);
-    printValueSection(OS, "lower", ValueTypesLowerBound, Formatter);
+    printValueSection(OS, "types", ValueTypes, Formatter);
     printMemorySection(OS, Formatter);
   }
   void dump() const { print(llvm::errs()); }
@@ -90,7 +88,6 @@ private:
     };
 
     CollectMap(ValueTypes);
-    CollectMap(ValueTypesLowerBound);
     if (MemoryType != nullptr) {
       Formatter.collectType(MemoryType);
     }

@@ -1465,9 +1465,7 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 
 void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                     HTypeResult &HT, const char *DebugDir) {
-  std::map<std::pair<llvm::Function *, std::string>,
-           std::pair<HType *, HType *>>
-      NameMap;
+  std::map<std::pair<llvm::Function *, std::string>, HType *> NameMap;
   auto PointerSize = M.getDataLayout().getPointerSize();
   // first find all phi and its address. move the type to name map.
   for (llvm::Function &F : M) {
@@ -1476,7 +1474,6 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
         if (llvm::isa<llvm::PHINode>(&I)) {
           llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
           HType *T = nullptr;
-          HType *TU = nullptr;
           if (HT.ValueTypes.count(&PN)) {
             T = HT.ValueTypes.at(&PN);
             if (T != nullptr) {
@@ -1484,15 +1481,7 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
             }
           }
           HT.ValueTypes.erase(&PN);
-          if (HT.ValueTypesLowerBound.count(&PN)) {
-            TU = HT.ValueTypesLowerBound.at(&PN);
-            if (TU != nullptr) {
-              TU = HT.HTCtx->getPointerType(false, PointerSize, TU);
-            }
-            HT.ValueTypesLowerBound.erase(&PN);
-          }
-          auto it =
-              NameMap.insert({{&F, PN.getName().str()}, std::make_pair(T, TU)});
+          auto it = NameMap.insert({{&F, PN.getName().str()}, T});
           assert(it.second && "decompileModule: duplicate phi name?");
         }
       }
@@ -1521,14 +1510,10 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                    "decompileModule: alloca not from reg2mem?");
             auto N = N1.substr(0, N1.length() - 8);
             AI.setName(N);
-            auto Ts = NameMap.at({&F, N});
-            if (Ts.first != nullptr) {
-              auto I1 = HT.ValueTypes.insert({&AI, Ts.first});
+            auto Ty = NameMap.at({&F, N});
+            if (Ty != nullptr) {
+              auto I1 = HT.ValueTypes.insert({&AI, Ty});
               assert(I1.second && "decompileModule: duplicate alloca name?");
-            }
-            if (Ts.second != nullptr) {
-              auto I2 = HT.ValueTypesLowerBound.insert({&AI, Ts.second});
-              assert(I2.second && "decompileModule: duplicate alloca name?");
             }
           }
         }
