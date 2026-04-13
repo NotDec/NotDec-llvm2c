@@ -115,7 +115,7 @@ struct OffsetRange {
       int64_t size = std::stoll(s.substr(pos, iPos - pos));
       pos = iPos + 1; // skip 'i'
 
-      uint64_t count = static_cast<uint64_t>(-1); // default when no [] part
+      uint64_t count = 0; // default when no [] part
       if (pos < s.length() && s[pos] == '[') {
         pos++; // skip '['
         size_t bracketEnd = s.find(']', pos);
@@ -130,7 +130,8 @@ struct OffsetRange {
   }
 
   int64_t maxAccess() const {
-    assert(offset > 0);
+    // Array-like accesses may legally start at the base object itself.
+    assert(offset >= 0);
     auto MaxSize =
         std::max_element(access.begin(), access.end(),
                          [](const ArrayOffset &O1, const ArrayOffset &O2) {
