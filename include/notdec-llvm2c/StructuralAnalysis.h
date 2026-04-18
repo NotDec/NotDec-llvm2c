@@ -189,18 +189,9 @@ public:
     }
     return Ret;
   }
-  clang::QualType getHighType(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    return getHighType(canonicalizeExtValue(Val, User, OpInd));
-  }
   clang::QualType getType(ExtValuePtr Val);
-  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    return getType(canonicalizeExtValue(Val, User, OpInd));
-  }
   clang::QualType getTypeL(ExtValuePtr Val) {
     return toLValueType(Ctx, getType(Val));
-  }
-  clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    return getTypeL(canonicalizeExtValue(Val, User, OpInd));
   }
   clang::QualType
   getFunctionType(llvm::Function &Func,
@@ -319,8 +310,8 @@ protected:
 
   clang::Expr *visitConstant(llvm::Constant &I, llvm::User *User, long OpInd,
                              clang::QualType Ty = clang::QualType());
-  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    return TB.getType(Val, User, OpInd);
+  clang::QualType getType(llvm::Value *Val, llvm::User *User, long OpInd) {
+    return TB.getType(getExtValuePtr(Val, User, OpInd));
   }
 
   clang::Expr *getNull(clang::QualType Ty);
@@ -836,8 +827,8 @@ protected:
   std::vector<clang::Stmt *> &VarDecls; // put all var decl at the beginning
 
   TypeBuilder &getTypeBuilder() { return FCtx.getTypeBuilder(); }
-  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    return FCtx.getTypeBuilder().getType(Val, User, OpInd);
+  clang::QualType getType(llvm::Value *Val, llvm::User *User, long OpInd) {
+    return FCtx.getTypeBuilder().getType(getExtValuePtr(Val, User, OpInd));
   }
 
   void addExprOrStmt(llvm::Value &v, clang::Stmt &Stmt,
@@ -856,7 +847,7 @@ public:
       clang::ParmVarDecl *PD = clang::ParmVarDecl::Create(
           Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
           clang::SourceLocation(), II,
-          FCtx.getTypeBuilder().getTypeL(&Arg, nullptr, -1), nullptr,
+          FCtx.getTypeBuilder().getTypeL(&Arg), nullptr,
           clang::SC_None, nullptr);
       addExprOrStmt(Arg, *makeDeclRefExpr(PD));
       FCtx.getFunctionDecl()->addDecl(PD);

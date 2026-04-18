@@ -220,7 +220,7 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
   if (isEntryLikeBlock(*I.getParent()) && !I.isArrayAllocation()) {
     // create a local variable
     auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(I));
-    auto PTy = FCtx.getTypeBuilder().getType(&I, nullptr, -1);
+    auto PTy = FCtx.getTypeBuilder().getType(&I);
 
     // for array type, we do not need to get pointee type.
     auto VDTy = toLValueType(
@@ -666,18 +666,17 @@ clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
     lhs = createBinaryOperator(
         Ctx, lhs, lhs,
         OpCode == llvm::CmpInst::FCMP_ORD ? clang::BO_EQ : clang::BO_NE,
-        TB.getType(Result, nullptr, -1), clang::VK_PRValue);
+        TB.getType(Result), clang::VK_PRValue);
     if (llvm::isa<llvm::Constant>(Op1)) {
       return lhs;
     } else {
       rhs = EB.visitValue(Op1, Result, 1);
       rhs = createBinaryOperator(Ctx, rhs, rhs, clang::BO_NE,
-                                 TB.getType(Result, nullptr, -1),
-                                 clang::VK_PRValue);
+                                 TB.getType(Result), clang::VK_PRValue);
       cmp = createBinaryOperator(
           Ctx, lhs, rhs,
           OpCode == llvm::CmpInst::FCMP_ORD ? clang::BO_LAnd : clang::BO_LOr,
-          TB.getType(Result, nullptr, -1), clang::VK_PRValue);
+          TB.getType(Result), clang::VK_PRValue);
       return cmp;
     }
     // unreachable.
@@ -710,8 +709,8 @@ clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
       lhs = TB.checkCast(lhs, rhs->getType());
     }
   }
-  cmp = createBinaryOperator(
-      Ctx, lhs, rhs, *op, TB.getType(Result, nullptr, -1), clang::VK_PRValue);
+  cmp = createBinaryOperator(Ctx, lhs, rhs, *op, TB.getType(Result),
+                             clang::VK_PRValue);
   return cmp;
 }
 
@@ -926,7 +925,7 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     // Function pointer call.
     // TODO: What is the return type here?
     auto CalleeExpr = EB.visitValue(I.getCalledOperand(), &I, I.arg_size());
-    auto RetTy = getTypeBuilder().getType(&I, nullptr, -1);
+    auto RetTy = getTypeBuilder().getType(&I);
     llvm::SmallVector<clang::QualType, 16> ArgTypes;
     for (auto Arg : Args) {
       ArgTypes.push_back(Arg->getType());
@@ -963,7 +962,7 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
       clang::FPOptionsOverride());
 
   // Check for High type
-  auto Ty2 = getTypeBuilder().getHighType(&I, nullptr, -1);
+  auto Ty2 = getTypeBuilder().getHighType(&I);
   if (!Ty2.isNull()) {
     Call = getTypeBuilder().checkCast(Call, Ty2);
   }
@@ -985,7 +984,7 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
               Ctx, EB, FCtx.getTypeBuilder(), llvm::Instruction::Mul, *Call,
               Op0, Op1,
               nullptr, // &FCtx.getSAContext().getHighTypes().StructInfos
-              getTypeBuilder().getType(&I, nullptr, -1));
+              getTypeBuilder().getType(&I));
           addExprOrStmt(I, *binop);
           return;
         } else if (Ind == 1) {
@@ -1329,7 +1328,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
   }
 
   if (ExpectedTy.isNull()) {
-    ExpectedTy = TB.getType(&Result, nullptr, -1);
+    ExpectedTy = TB.getType(&Result);
   }
   auto ArithTy = ExpectedTy;
   if (ArithTy->isPointerType()) {
@@ -1376,7 +1375,7 @@ void CFGBuilder::visitReturnInst(llvm::ReturnInst &I) {
 /// If the usage matches the and/or logical operator, then convert to && or ||
 void CFGBuilder::visitSelectInst(llvm::SelectInst &I) {
   auto &TB = FCtx.getTypeBuilder();
-  auto RTy = TB.getTypeL(&I, nullptr, -1);
+  auto RTy = TB.getTypeL(&I);
   clang::Expr *cond = EB.visitValue(I.getCondition(), &I, 0);
   if (I.getType()->isIntegerTy(1)) {
     // select i1 expr1, i1 true, i1 expr2 -> expr1 || expr2
@@ -1889,7 +1888,7 @@ void SAContext::createDecls() {
           getIdentifierInfo(getValueNamer().getArgName(Arg));
       clang::ParmVarDecl *PVD = clang::ParmVarDecl::Create(
           getASTContext(), FD, clang::SourceLocation(), clang::SourceLocation(),
-          ArgII, TB.getTypeL(&Arg, &F, -1), nullptr, clang::SC_None, nullptr);
+          ArgII, TB.getTypeL(&Arg), nullptr, clang::SC_None, nullptr);
       Params.push_back(PVD);
     }
     FD->setParams(Params);
@@ -1934,7 +1933,7 @@ void SAContext::createDecls() {
     if (GV.getName().startswith("table_")) {
       PTy = TB.visitType(*GV.getType());
     } else {
-      PTy = TB.getType(&GV, nullptr, -1)->getPointeeType();
+      PTy = TB.getType(&GV)->getPointeeType();
     }
 
     if (GV.isConstant()) {
@@ -2088,7 +2087,7 @@ void SAFuncContext::run() {
 clang::Expr *ExprBuilder::createCompoundLiteralExpr(llvm::Value *Val,
                                                     llvm::User *User,
                                                     long OpInd) {
-  auto ObjTy = TB.getType(Val, User, OpInd);
+  auto ObjTy = TB.getType(getExtValuePtr(Val, User, OpInd));
   clang::Expr *ret = new (Ctx) clang::CompoundLiteralExpr(
       clang::SourceLocation(), Ctx.getTrivialTypeSourceInfo(ObjTy), ObjTy,
       clang::VK_LValue, visitValue(Val, User, OpInd), false);
@@ -2146,7 +2145,7 @@ clang::QualType TypeBuilder::visitFunctionType(
   llvm::SmallVector<clang::QualType, 8> Args(Ty.getNumParams());
   for (unsigned i = 0; i < Ty.getNumParams(); i++) {
     if (ActualFunc != nullptr) {
-      Args[i] = getTypeL(ActualFunc->getArg(i), nullptr, -1);
+      Args[i] = getTypeL(ActualFunc->getArg(i));
     } else {
       Args[i] = visitType(*Ty.getParamType(i));
     }
@@ -2157,7 +2156,7 @@ clang::QualType TypeBuilder::visitFunctionType(
     auto RetV = ReturnValue{.Func = ActualFunc};
     if (CT != nullptr && CT->hasType(RetV)) {
       InHighType = true;
-      RetTy = getTypeL(RetV, nullptr, -1);
+      RetTy = getTypeL(RetV);
     }
   }
 
@@ -2531,7 +2530,8 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     case llvm::Instruction::AddrSpaceCast:
       return createCCast(
           Ctx, *this, TB, (llvm::Instruction::CastOps)CE->getOpcode(), CE,
-          TB.getType(CE, User, OpInd), visitValue(CE->getOperand(0), CE, 0));
+          TB.getType(getExtValuePtr(CE, User, OpInd)),
+          visitValue(CE->getOperand(0), CE, 0));
 
     case llvm::Instruction::ICmp:
     case llvm::Instruction::FCmp:
