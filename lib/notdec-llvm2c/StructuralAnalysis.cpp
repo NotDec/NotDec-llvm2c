@@ -2235,10 +2235,8 @@ clang::QualType TypeBuilder::visitStructType(llvm::StructType &Ty) {
   }
 }
 
-clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
-                                     long OpInd) {
+clang::QualType TypeBuilder::getType(ExtValuePtr Val) {
   clang::QualType Ret;
-  llvmValue2ExtVal(Val, User, OpInd);
   auto *V = std::get_if<llvm::Value *>(&Val);
 
   // Override main func sig
@@ -2256,7 +2254,7 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val, llvm::User *User,
 
   llvm::Function *F;
   if (CT != nullptr && CT->hasType(Val)) {
-    Ret = getHighType(Val, User, OpInd);
+    Ret = getHighType(Val);
   } else if ((V != nullptr) &&
              (F = llvm::dyn_cast_or_null<llvm::Function>(*V))) {
     llvm::errs()
@@ -2364,8 +2362,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
   // Check HighTypes for possible type.
   auto CT = TB.CT;
   if (CT != nullptr) {
-    ExtValuePtr Val = &C;
-    llvmValue2ExtVal(Val, User, OpInd);
+    ExtValuePtr Val = getExtValuePtr(&C, User, OpInd);
     if (CT->hasType(Val)) {
       Ty = CT->getType(Val);
     } else if (CT->hasType(&C)) {

@@ -243,19 +243,32 @@ unsigned int getSize(const ExtValuePtr &Val, unsigned int pointer_size) {
   return getSize(getType(Val), pointer_size);
 }
 
-// TODO refactor: increase code reusability
-ExtValuePtr getExtValuePtr(llvm::Value *V, llvm::User *User, long OpInd) {
+ExtValuePtr canonicalizeExtValue(ExtValuePtr Val, llvm::User *User,
+                                 long OpInd) {
   using namespace llvm;
-  ExtValuePtr Val = V;
-  if (!isa<GlobalValue>(*V)) {
-    if (isa<Constant>(V)) {
-      assert(User != nullptr && "RetypdGenerator::getTypeVar: User is Null!");
-      assert(hasUser(V, User) &&
-             "convertTypeVarVal: constant not used by user");
-      Val = UConstant{.Val = cast<Constant>(V), .User = User, .OpInd = OpInd};
+  if (auto V = std::get_if<llvm::Value *>(&Val)) {
+    if (isa<GlobalValue>(*V)) {
+      return Val;
+    }
+    if (auto *C = dyn_cast<Constant>(*V)) {
+      if (auto *CExpr = dyn_cast<ConstantExpr>(C)) {
+        if (CExpr->isCast() && CExpr->getOpcode() == Instruction::IntToPtr) {
+          if (auto *CI = dyn_cast<ConstantInt>(CExpr->getOperand(0))) {
+            return ConstantAddr{.Val = CI};
+          }
+        }
+      }
+      assert(User != nullptr && "llvmValue2ExtVal: Constant User is Null!");
+      assert(hasUser(*V, User) &&
+             "llvmValue2ExtVal: constant not used by user");
+      return UConstant{.Val = cast<Constant>(*V), .User = User, .OpInd = OpInd};
     }
   }
   return Val;
+}
+
+ExtValuePtr getExtValuePtr(llvm::Value *V, llvm::User *User, long OpInd) {
+  return canonicalizeExtValue(ExtValuePtr{V}, User, OpInd);
 }
 
 std::string getName(const ExtValuePtr &Val) {

@@ -85,6 +85,12 @@ struct HeapObject {
 using ExtValuePtr = std::variant<llvm::Value *, ReturnValue, UConstant,
                                  ConstantAddr, StackObject, HeapObject>;
 
+ExtValuePtr canonicalizeExtValue(ExtValuePtr Val, llvm::User *User = nullptr,
+                                 long OpInd = -1);
+inline ExtValuePtr canonicalizeExtValue(llvm::Value *Val, llvm::User *User,
+                                        long OpInd = -1) {
+  return canonicalizeExtValue(ExtValuePtr{Val}, User, OpInd);
+}
 ExtValuePtr getExtValuePtr(llvm::Value *Val, llvm::User *User, long OpInd = -1);
 std::string getName(const ExtValuePtr &Val);
 std::string toString(const ExtValuePtr &Val, bool Verbose);
@@ -95,29 +101,7 @@ llvm::Type *getType(const ExtValuePtr &Val);
 unsigned int getSize(llvm::Type *Ty, unsigned int pointer_size);
 unsigned int getSize(const ExtValuePtr &Val, unsigned int pointer_size);
 inline void llvmValue2ExtVal(ExtValuePtr &Val, llvm::User *User, long OpInd) {
-  using namespace llvm;
-  // Differentiate int32/int64 by User.
-  if (auto V = std::get_if<llvm::Value *>(&Val)) {
-    if (isa<GlobalValue>(*V)) {
-      return;
-    }
-    if (auto CI = dyn_cast<Constant>(*V)) {
-      // Convert inttoptr constant int to ConstantAddr
-      if (auto CExpr = dyn_cast<ConstantExpr>(CI)) {
-        if (CExpr->isCast() && CExpr->getOpcode() == Instruction::IntToPtr) {
-          if (auto CI1 = dyn_cast<ConstantInt>(CExpr->getOperand(0))) {
-            V = nullptr;
-            Val = ConstantAddr{.Val = CI1};
-            return;
-          }
-        }
-      }
-      assert(User != nullptr && "llvmValue2ExtVal: Constant User is Null!");
-      assert(hasUser(*V, User) &&
-             "llvmValue2ExtVal: constant not used by user");
-      Val = UConstant{.Val = cast<Constant>(*V), .User = User, .OpInd = OpInd};
-    }
-  }
+  Val = canonicalizeExtValue(Val, User, OpInd);
 }
 
 // Check if differentiated constants (especially int32/int64 constants) by User.

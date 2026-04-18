@@ -181,8 +181,7 @@ public:
               std::shared_ptr<ASTManager> AM,
               std::shared_ptr<ClangTypeResult> CT, const llvm::DataLayout &DL)
       : Ctx(Ctx), VN(&VN), Names(Names), AM(AM), CT(CT), DL(DL) {}
-  clang::QualType getHighType(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    llvmValue2ExtVal(Val, User, OpInd);
+  clang::QualType getHighType(ExtValuePtr Val) {
     clang::QualType Ret;
     if (CT != nullptr && CT->hasType(Val)) {
       Ret = CT->getType(Val);
@@ -190,9 +189,18 @@ public:
     }
     return Ret;
   }
-  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd);
+  clang::QualType getHighType(ExtValuePtr Val, llvm::User *User, long OpInd) {
+    return getHighType(canonicalizeExtValue(Val, User, OpInd));
+  }
+  clang::QualType getType(ExtValuePtr Val);
+  clang::QualType getType(ExtValuePtr Val, llvm::User *User, long OpInd) {
+    return getType(canonicalizeExtValue(Val, User, OpInd));
+  }
+  clang::QualType getTypeL(ExtValuePtr Val) {
+    return toLValueType(Ctx, getType(Val));
+  }
   clang::QualType getTypeL(ExtValuePtr Val, llvm::User *User, long OpInd) {
-    return toLValueType(Ctx, getType(Val, User, OpInd));
+    return getTypeL(canonicalizeExtValue(Val, User, OpInd));
   }
   clang::QualType
   getFunctionType(llvm::Function &Func,
