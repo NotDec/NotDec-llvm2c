@@ -62,6 +62,7 @@ public:
   std::shared_ptr<ASTManager> getASTManager() { return AM; }
   bool hasType(ExtValuePtr Val);
   clang::QualType getType(ExtValuePtr Val);
+  void writeValueCTypes(llvm::StringRef Path);
 
   clang::RecordDecl *convertUnion(ast::UnionDecl *UD);
   clang::RecordDecl *convertStruct(ast::RecordDecl *RD, bool isMemory = false);

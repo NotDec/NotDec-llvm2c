@@ -80,6 +80,8 @@
 
 namespace notdec::llvm2c {
 
+static constexpr llvm::StringLiteral kValueCTypesFile = "ValueCTypes.txt";
+
 static std::string escapeName(std::string Name) {
   for (auto &c : Name) {
     if (!std::isalnum(c) && c != '_') {
@@ -1567,6 +1569,9 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
 
   if (CT != nullptr) {
     CT->defineDecls();
+    if (WorkDir) {
+      CT->writeValueCTypes(join(WorkDir, kValueCTypesFile.str()));
+    }
   }
 
   SAContext Ctx(const_cast<llvm::Module &>(M), MAM, AM, opts, CT);
@@ -1928,12 +1933,24 @@ void SAContext::createDecls() {
     }
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getGlobName(GV));
-    QualType PTy;
+    QualType StorageTy = TB.visitType(*GV.getType());
+    QualType PTy =
+        StorageTy->getPointeeType().isNull() ? StorageTy : StorageTy->getPointeeType();
 
-    if (GV.getName().startswith("table_")) {
-      PTy = TB.visitType(*GV.getType());
-    } else {
-      PTy = TB.getType(&GV)->getPointeeType();
+    if (!GV.getName().startswith("table_") && CT != nullptr &&
+        CT->hasType(&GV)) {
+      QualType RecoveredTy = TB.getType(&GV);
+      if (TB.isTypeCompatible(RecoveredTy, PTy)) {
+        PTy = RecoveredTy;
+      } else {
+        QualType RecoveredPointeeTy = RecoveredTy->getPointeeType();
+        if (!RecoveredPointeeTy.isNull() &&
+            TB.isTypeCompatible(RecoveredPointeeTy, PTy)) {
+          PTy = RecoveredPointeeTy;
+        } else {
+          PTy = RecoveredTy;
+        }
+      }
     }
 
     if (GV.isConstant()) {
@@ -1941,8 +1958,7 @@ void SAContext::createDecls() {
     }
     clang::VarDecl *VD = clang::VarDecl::Create(
         getASTContext(), TUD, clang::SourceLocation(), clang::SourceLocation(),
-        II, PTy->getPointeeType().isNull() ? PTy : PTy->getPointeeType(),
-        nullptr, getStorageClass(GV));
+        II, PTy, nullptr, getStorageClass(GV));
 
     TUD->addDecl(VD);
     globalDecls.insert(std::make_pair(&GV, VD));

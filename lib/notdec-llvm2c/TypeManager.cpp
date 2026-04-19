@@ -32,6 +32,14 @@
 
 namespace notdec::llvm2c {
 
+namespace {
+
+std::string sanitizeSingleLine(llvm::StringRef Text);
+std::string formatIRTypeForValue(const ExtValuePtr &Val);
+bool canLowerToClangType(const HType *Ty);
+
+} // namespace
+
 clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty) {
   unsigned Quals = Ty.getQualifiers().getFastQualifiers();
   if (Ty->isArrayType()) {
@@ -62,6 +70,68 @@ clang::QualType ClangTypeResult::getType(ExtValuePtr Val) {
   return convertType(Result->ValueTypes.at(Val));
 }
 
+void ClangTypeResult::writeValueCTypes(llvm::StringRef Path) {
+  std::error_code EC;
+  llvm::raw_fd_ostream Out(Path, EC);
+  if (EC) {
+    llvm::errs() << "Cannot open output file " << Path << ": " << EC.message()
+                 << "\n";
+    return;
+  }
+
+  struct ValueCTypeEntry {
+    std::string Stable;
+    std::string Line;
+  };
+
+  std::vector<ValueCTypeEntry> Entries;
+  Entries.reserve(Result->ValueTypes.size());
+  for (const auto &Ent : Result->ValueTypes) {
+    const auto &Value = Ent.first;
+    if (auto V = std::get_if<llvm::Value *>(&Value); V != nullptr && *V == nullptr) {
+      continue;
+    }
+    HType *HTy = Ent.second;
+    std::string Stable = toStableString(Value);
+    std::string Verbose = sanitizeSingleLine(toString(Value, true));
+    std::string Line = Result->ContraVariantValues.count(Value) != 0 ? "[-]" : "[+]";
+    Line += " ";
+    Line += Stable;
+    if (!Verbose.empty() && Verbose != Stable) {
+      Line += " (" + Verbose + ")";
+    }
+    Line += " => ";
+    if (HTy != nullptr && canLowerToClangType(HTy)) {
+      Line += sanitizeSingleLine(clangObjToString(convertType(HTy)));
+    } else {
+      Line += "<unlowered>";
+    }
+    Line += " ; ir=" + formatIRTypeForValue(Value);
+    Line += " ; htype=";
+    Line += HTy == nullptr ? "<null>" : sanitizeSingleLine(HTy->getAsString());
+    Entries.push_back({Stable, std::move(Line)});
+  }
+
+  std::sort(Entries.begin(), Entries.end(),
+            [](const ValueCTypeEntry &LHS, const ValueCTypeEntry &RHS) {
+              return LHS.Stable < RHS.Stable;
+            });
+
+  Out << "# Final Value -> lowered Clang C type mapping\n\n";
+  for (const auto &Entry : Entries) {
+    Out << Entry.Line << "\n";
+  }
+  if (Result->MemoryType != nullptr) {
+    Out << "\n[memory] <memory> => "
+        << (canLowerToClangType(Result->MemoryType)
+                ? sanitizeSingleLine(
+                      clangObjToString(convertType(Result->MemoryType)))
+                : std::string("<unlowered>"))
+        << " ; htype="
+        << sanitizeSingleLine(Result->MemoryType->getAsString()) << "\n";
+  }
+}
+
 clang::RecordDecl *createRecordDecl(clang::ASTContext &Ctx,
                                     TranslationUnitDecl *TUD,
                                     clang::TagDecl::TagKind Kind,
@@ -79,6 +149,103 @@ namespace {
 bool useDualPointerTemplateMode() {
   const char *Env = std::getenv("NOTDEC_LLVM2C_DUAL_PTR_TEMPLATE");
   return Env != nullptr && Env[0] != '\0' && Env[0] != '0';
+}
+
+std::string sanitizeSingleLine(llvm::StringRef Text) {
+  std::string Result = Text.str();
+  for (char &Ch : Result) {
+    if (Ch == '\n' || Ch == '\r' || Ch == '\t') {
+      Ch = ' ';
+    }
+  }
+  return Result;
+}
+
+std::string formatIRTypeForValue(const ExtValuePtr &Val) {
+  llvm::Type *Ty = nullptr;
+  if (auto V = std::get_if<llvm::Value *>(&Val)) {
+    if (*V != nullptr) {
+      if (auto *F = llvm::dyn_cast<llvm::Function>(*V)) {
+        Ty = F->getFunctionType();
+      } else {
+        Ty = (*V)->getType();
+      }
+    }
+  } else if (auto Ret = std::get_if<ReturnValue>(&Val)) {
+    Ty = Ret->Func->getReturnType();
+  } else if (auto Const = std::get_if<UConstant>(&Val)) {
+    Ty = Const->Val->getType();
+  } else if (auto Addr = std::get_if<ConstantAddr>(&Val)) {
+    Ty = Addr->Val->getType();
+  } else if (auto Stack = std::get_if<StackObject>(&Val)) {
+    Ty = Stack->Allocator->getAllocatedType();
+  } else if (auto Heap = std::get_if<HeapObject>(&Val)) {
+    Ty = Heap->Allocator->getType();
+  }
+  return Ty == nullptr ? "<null>" : sanitizeSingleLine(llvmObjToString(Ty));
+}
+
+bool canLowerToClangTypeImpl(const HType *Ty, std::set<const HType *> &Visited) {
+  if (Ty == nullptr) {
+    return false;
+  }
+  if (!Visited.insert(Ty).second) {
+    return true;
+  }
+  if (Ty->isTopType() || Ty->isBottomType() || Ty->isIntType() ||
+      Ty->isFloatType() || Ty->isTypeVariableType()) {
+    return true;
+  }
+  if (auto *PT = llvm::dyn_cast<ast::PointerType>(Ty)) {
+    return PT->getPointeeType() == nullptr ||
+           canLowerToClangTypeImpl(PT->getPointeeType(), Visited);
+  }
+  if (auto *FT = llvm::dyn_cast<ast::FunctionType>(Ty)) {
+    for (auto *Ret : FT->getReturnType()) {
+      if (!canLowerToClangTypeImpl(Ret, Visited)) {
+        return false;
+      }
+    }
+    for (auto *Param : FT->getParamTypes()) {
+      if (!canLowerToClangTypeImpl(Param, Visited)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(Ty)) {
+    bool LoadOK = DPT->getLoadType() == nullptr ||
+                  canLowerToClangTypeImpl(DPT->getLoadType(), Visited);
+    bool StoreOK = DPT->getStoreType() == nullptr ||
+                   canLowerToClangTypeImpl(DPT->getStoreType(), Visited);
+    return LoadOK && StoreOK;
+  }
+  if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
+    return canLowerToClangTypeImpl(Set->getLhs(), Visited) &&
+           canLowerToClangTypeImpl(Set->getRhs(), Visited);
+  }
+  if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
+    return canLowerToClangTypeImpl(Set->getLhs(), Visited) &&
+           canLowerToClangTypeImpl(Set->getRhs(), Visited);
+  }
+  if (auto *AT = llvm::dyn_cast<ast::ArrayType>(Ty)) {
+    return canLowerToClangTypeImpl(AT->getElementType(), Visited);
+  }
+  if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(Ty)) {
+    return RT->getDecl() != nullptr && RT->getDecl()->getASTDecl() != nullptr;
+  }
+  if (auto *UT = llvm::dyn_cast<ast::UnionType>(Ty)) {
+    return UT->getDecl() != nullptr && UT->getDecl()->getASTDecl() != nullptr;
+  }
+  if (auto *TT = llvm::dyn_cast<ast::TypedefType>(Ty)) {
+    return TT->getDecl() != nullptr && TT->getDecl()->getASTDecl() != nullptr;
+  }
+  return false;
+}
+
+bool canLowerToClangType(const HType *Ty) {
+  std::set<const HType *> Visited;
+  return canLowerToClangTypeImpl(Ty, Visited);
 }
 
 clang::QualType lowerIntegerFallback(clang::ASTContext &Ctx, unsigned BitSize,
@@ -1218,7 +1385,9 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
     if (llvm::isa<clang::RecordType>(PointeeTy)) {
       if (!OffsetNum) {
         // TODO try to resolve this case using zero offset conversion?
-        llvm::errs() << "Error: Struct/Union type with non-constant index!\n";
+        llvm::errs()
+            << "Warning: struct/union pointer arithmetic with non-constant "
+               "index; falling back to byte-wise pointer arithmetic.\n";
         return nullptr;
       }
       auto *Decl = llvm::cast<clang::RecordDecl>(PointeeTy->getAsTagDecl());
@@ -1227,8 +1396,9 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(*OffsetNum);
         if (Target == nullptr) {
           Decl->dump();
-          llvm::errs() << "Error: failed to get field at offset: " << *OffsetNum
-                       << "\n";
+          llvm::errs()
+              << "Warning: failed to get field at offset " << *OffsetNum
+              << "; falling back to byte-wise pointer arithmetic.\n";
           return nullptr;
         }
         assert(Target->ASTDecl != nullptr && "Field not declared?");
@@ -1279,8 +1449,9 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
           // failed to create array subscript
           ValTy->dump();
           llvm::errs()
-              << "Error: failed to create array subscript, cannnot divide by"
-              << *ElemSize << ":\n";
+              << "Warning: failed to create array subscript, cannot divide by "
+              << *ElemSize
+              << "; falling back to byte-wise pointer arithmetic:\n";
           Index->dump();
           return nullptr;
         }
@@ -1308,7 +1479,9 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
       // }
     } else {
       ValTy->dump();
-      llvm::errs() << "Error: Unsupported type for pointer arithmetic\n";
+      llvm::errs()
+          << "Warning: unsupported type for pointer arithmetic; falling back "
+             "to byte-wise pointer arithmetic.\n";
       return nullptr;
     }
   }
