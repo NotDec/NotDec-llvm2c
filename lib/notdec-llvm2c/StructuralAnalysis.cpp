@@ -1467,6 +1467,8 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                     HTypeResult &HT, const char *DebugDir) {
   std::map<std::pair<llvm::Function *, std::string>, HType *> NameMap;
+  std::set<std::pair<llvm::Function *, std::string>> ContraVariantNameSet;
+  std::set<const llvm::Value *> DemotedValues;
   auto PointerSize = M.getDataLayout().getPointerSize();
   // first find all phi and its address. move the type to name map.
   for (llvm::Function &F : M) {
@@ -1481,11 +1483,47 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
               T = HT.HTCtx->getPointerType(false, PointerSize, T);
             }
           }
-          HT.ValueTypes.erase(&PN);
-          auto it = NameMap.insert({{&F, PN.getName().str()}, T});
+          auto NameKey = std::make_pair(&F, PN.getName().str());
+          if (HT.ContraVariantValues.count(&PN) != 0) {
+            ContraVariantNameSet.insert(NameKey);
+          }
+          DemotedValues.insert(&PN);
+          auto it = NameMap.insert({NameKey, T});
           assert(it.second && "decompileModule: duplicate phi name?");
         }
       }
+    }
+  }
+
+  auto referencesDemotedValue = [&](const ExtValuePtr &Val) {
+    if (auto V = std::get_if<llvm::Value *>(&Val)) {
+      return *V != nullptr && DemotedValues.count(*V) != 0;
+    }
+    if (auto C = std::get_if<UConstant>(&Val)) {
+      return (C->Val != nullptr && DemotedValues.count(C->Val) != 0) ||
+             (C->User != nullptr && DemotedValues.count(C->User) != 0);
+    }
+    if (auto S = std::get_if<StackObject>(&Val)) {
+      return S->Allocator != nullptr && DemotedValues.count(S->Allocator) != 0;
+    }
+    if (auto H = std::get_if<HeapObject>(&Val)) {
+      return H->Allocator != nullptr && DemotedValues.count(H->Allocator) != 0;
+    }
+    return false;
+  };
+
+  for (auto It = HT.ValueTypes.begin(); It != HT.ValueTypes.end();) {
+    if (referencesDemotedValue(It->first)) {
+      It = HT.ValueTypes.erase(It);
+    } else {
+      ++It;
+    }
+  }
+  for (auto It = HT.ContraVariantValues.begin(); It != HT.ContraVariantValues.end();) {
+    if (referencesDemotedValue(*It)) {
+      It = HT.ContraVariantValues.erase(It);
+    } else {
+      ++It;
     }
   }
 
@@ -1515,6 +1553,9 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
             if (Ty != nullptr) {
               auto I1 = HT.ValueTypes.insert({&AI, Ty});
               assert(I1.second && "decompileModule: duplicate alloca name?");
+            }
+            if (ContraVariantNameSet.count({&F, N}) != 0) {
+              HT.ContraVariantValues.insert(&AI);
             }
           }
         }
