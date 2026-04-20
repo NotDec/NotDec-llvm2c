@@ -280,6 +280,61 @@ getFallbackBitSize(const std::vector<const ast::TypeVariableType *> &Vars) {
   return Ret;
 }
 
+std::optional<uint64_t> estimateTypeWidthBitsImpl(
+    const HType *Ty, std::set<const HType *> &Visited) {
+  if (Ty == nullptr) {
+    return std::nullopt;
+  }
+  if (!Visited.insert(Ty).second) {
+    return std::nullopt;
+  }
+
+  if (auto *ST = llvm::dyn_cast<ast::SimpleType>(Ty)) {
+    return ST->getBitSize();
+  }
+  if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(Ty)) {
+    return DPT->getPointerSize();
+  }
+  if (auto *TV = llvm::dyn_cast<ast::TypeVariableType>(Ty)) {
+    if (auto SizeBits = TV->getSizeBits()) {
+      return *SizeBits;
+    }
+    return std::nullopt;
+  }
+  if (auto *TT = llvm::dyn_cast<ast::TypedefType>(Ty)) {
+    return estimateTypeWidthBitsImpl(TT->getDecl()->getType(), Visited);
+  }
+  if (auto *AT = llvm::dyn_cast<ast::ArrayType>(Ty)) {
+    auto ElemBits = estimateTypeWidthBitsImpl(AT->getElementType(), Visited);
+    if (!ElemBits || !AT->getNumElements().has_value()) {
+      return std::nullopt;
+    }
+    return (*ElemBits) * (*AT->getNumElements());
+  }
+  if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
+    auto LhsBits = estimateTypeWidthBitsImpl(Set->getLhs(), Visited);
+    auto RhsBits = estimateTypeWidthBitsImpl(Set->getRhs(), Visited);
+    if (LhsBits && RhsBits) {
+      return std::max(*LhsBits, *RhsBits);
+    }
+    return LhsBits ? LhsBits : RhsBits;
+  }
+  if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
+    auto LhsBits = estimateTypeWidthBitsImpl(Set->getLhs(), Visited);
+    auto RhsBits = estimateTypeWidthBitsImpl(Set->getRhs(), Visited);
+    if (LhsBits && RhsBits) {
+      return std::max(*LhsBits, *RhsBits);
+    }
+    return LhsBits ? LhsBits : RhsBits;
+  }
+  return std::nullopt;
+}
+
+std::optional<uint64_t> estimateTypeWidthBits(const HType *Ty) {
+  std::set<const HType *> Visited;
+  return estimateTypeWidthBitsImpl(Ty, Visited);
+}
+
 } // namespace
 
 clang::ClassTemplateDecl *ClangTypeResult::getOrCreateDualPointerTemplateDecl() {
@@ -441,41 +496,21 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
         return convertType(UniqueConcreteTypes.front());
       }
 
-      bool AllInts = llvm::all_of(UniqueConcreteTypes, [](HType *Ty) {
-        return Ty->isIntType();
-      });
-      if (AllInts) {
-        unsigned MaxBitSize = 0;
-        bool IsSigned = false;
-        for (auto *Ty : UniqueConcreteTypes) {
-          auto *IT = llvm::cast<ast::IntegerType>(Ty);
-          MaxBitSize = std::max(MaxBitSize, IT->getBitSize());
-          IsSigned = IsSigned || IT->isSigned();
-        }
-        return lowerIntegerFallback(Ctx, MaxBitSize, IsSigned);
-      }
-
-      bool AllFloats = llvm::all_of(UniqueConcreteTypes, [](HType *Ty) {
-        return Ty->isFloatType();
-      });
-      if (AllFloats) {
-        unsigned MaxBitSize = 0;
-        for (auto *Ty : UniqueConcreteTypes) {
-          MaxBitSize = std::max(
-              MaxBitSize, llvm::cast<ast::FloatingType>(Ty)->getBitSize());
-        }
-        if (MaxBitSize == 32) {
-          return Ctx.FloatTy;
-        }
-        if (MaxBitSize == 64) {
-          return Ctx.DoubleTy;
+      HType *Chosen = UniqueConcreteTypes.front();
+      auto ChosenWidthBits = estimateTypeWidthBits(Chosen);
+      for (auto *Candidate : llvm::drop_begin(UniqueConcreteTypes)) {
+        auto CandidateWidthBits = estimateTypeWidthBits(Candidate);
+        if (CandidateWidthBits &&
+            (!ChosenWidthBits || *CandidateWidthBits > *ChosenWidthBits)) {
+          Chosen = Candidate;
+          ChosenWidthBits = CandidateWidthBits;
         }
       }
 
       llvm::errs() << "Warning: lossy lowering of set type " << Root->getAsString()
-                   << " to " << UniqueConcreteTypes.front()->getAsString()
+                   << " to " << Chosen->getAsString()
                    << "\n";
-      return convertType(UniqueConcreteTypes.front());
+      return convertType(Chosen);
     };
 
     if (auto *TT = llvm::dyn_cast<ast::TopType>(T)) {
