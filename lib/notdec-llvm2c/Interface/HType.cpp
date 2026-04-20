@@ -180,7 +180,7 @@ std::string HType::getAsString() const {
     Result +=
         (DPT->getStoreType() == nullptr ? "void"
                                         : DPT->getStoreType()->getAsString());
-    Result += ", psize=" + std::to_string(DPT->getPointerSize()) + ">";
+    Result += ", psize=" + std::to_string(DPT->getAccessSize()) + ">";
     return Result;
   }
   case TK_SetUnion: {
@@ -444,7 +444,7 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
     Result += ", store=";
     Result += DPT->getStoreType() == nullptr ? "void"
                                              : formatType(DPT->getStoreType());
-    Result += ", psize=" + std::to_string(DPT->getPointerSize()) + ">";
+    Result += ", psize=" + std::to_string(DPT->getAccessSize()) + ">";
     return Result;
   }
   case HType::TK_SetUnion: {

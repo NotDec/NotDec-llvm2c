@@ -406,12 +406,12 @@ public:
 class DualPointerType : public HType {
   HType *LoadType;
   HType *StoreType;
-  unsigned PointerSize;
+  unsigned AccessSize;
 
-  DualPointerType(bool IsConst, HType *Canon, unsigned PointerSize,
+  DualPointerType(bool IsConst, HType *Canon, unsigned AccessSize,
                   HType *LoadType, HType *StoreType)
       : HType(TK_DualPointer, Canon, IsConst), LoadType(LoadType),
-        StoreType(StoreType), PointerSize(PointerSize) {}
+        StoreType(StoreType), AccessSize(AccessSize) {}
   friend class HTypeContext;
 
 public:
@@ -421,7 +421,8 @@ public:
 
   HType *getLoadType() const { return LoadType; }
   HType *getStoreType() const { return StoreType; }
-  unsigned getPointerSize() const { return PointerSize; }
+  unsigned getAccessSize() const { return AccessSize; }
+  unsigned getPointerSize() const { return getAccessSize(); }
 };
 
 class SetUnionType : public HType {
@@ -687,9 +688,9 @@ public:
     return entry.get();
   }
 
-  HType *getDualPointerType(bool IsConst, unsigned PtrSize, HType *LoadType,
+  HType *getDualPointerType(bool IsConst, unsigned AccessSize, HType *LoadType,
                             HType *StoreType) {
-    auto key = std::make_tuple(IsConst, PtrSize, LoadType, StoreType);
+    auto key = std::make_tuple(IsConst, AccessSize, LoadType, StoreType);
     auto &entry = DualPointerTypes[key];
     if (!entry) {
       HType *Canon = nullptr;
@@ -697,12 +698,12 @@ public:
           LoadType == nullptr ? nullptr : LoadType->getCanonicalType();
       auto CanonStore =
           StoreType == nullptr ? nullptr : StoreType->getCanonicalType();
-      auto canonKey = std::make_tuple(false, PtrSize, CanonLoad, CanonStore);
+      auto canonKey = std::make_tuple(false, AccessSize, CanonLoad, CanonStore);
       if (key != canonKey) {
-        Canon = getDualPointerType(false, PtrSize, CanonLoad, CanonStore);
+        Canon = getDualPointerType(false, AccessSize, CanonLoad, CanonStore);
       }
       entry.reset(
-          new DualPointerType(IsConst, Canon, PtrSize, LoadType, StoreType));
+          new DualPointerType(IsConst, Canon, AccessSize, LoadType, StoreType));
     }
     return entry.get();
   }
