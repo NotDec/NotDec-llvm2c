@@ -303,6 +303,7 @@ public:
   std::string getAsString() const;
 
 private:
+  std::string getAsString(int Precedence) const;
   HTypeKind Kind;
   // points to the type without qualifier and typedef
   HType *CanonicalType = nullptr;
@@ -828,6 +829,7 @@ public:
   std::vector<const TypedDecl *> getOrderedDecls();
 
 private:
+  std::string formatType(const HType *Type, int Precedence);
   std::string getDeclName(const TypedDecl &Decl);
   std::string formatFieldName(const FieldDecl &Field, unsigned Index,
                               unsigned PaddingIndex) const;

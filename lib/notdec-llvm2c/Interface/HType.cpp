@@ -7,10 +7,67 @@ namespace notdec::ast {
 
 namespace {
 
-template <typename T> void sortPairForDisplay(T &Lhs, T &Rhs) {
-  if (Rhs < Lhs) {
-    std::swap(Lhs, Rhs);
+constexpr int kFunctionPrecedence = 1;
+constexpr int kUnionPrecedence = 3;
+constexpr int kInterPrecedence = 4;
+constexpr int kAtomicPrecedence = 6;
+
+void collectSetTerms(const HType *Type, HType::HTypeKind Kind,
+                     std::vector<const HType *> &Terms) {
+  if (Type == nullptr) {
+    Terms.push_back(Type);
+    return;
   }
+  if (Kind == HType::TK_SetUnion) {
+    if (auto *UT = llvm::dyn_cast<SetUnionType>(Type)) {
+      collectSetTerms(UT->getLhs(), Kind, Terms);
+      collectSetTerms(UT->getRhs(), Kind, Terms);
+      return;
+    }
+  } else {
+    assert(Kind == HType::TK_SetInter);
+    if (auto *IT = llvm::dyn_cast<SetInterType>(Type)) {
+      collectSetTerms(IT->getLhs(), Kind, Terms);
+      collectSetTerms(IT->getRhs(), Kind, Terms);
+      return;
+    }
+  }
+  Terms.push_back(Type);
+}
+
+template <typename RenderFn>
+std::string renderSetType(const HType *Type, HType::HTypeKind Kind,
+                          int ParentPrecedence, llvm::StringRef Separator,
+                          bool SortTerms, RenderFn &&Render) {
+  std::vector<const HType *> Terms;
+  collectSetTerms(Type, Kind, Terms);
+
+  std::vector<std::string> Parts;
+  Parts.reserve(Terms.size());
+  int OperatorPrecedence =
+      Kind == HType::TK_SetUnion ? kUnionPrecedence : kInterPrecedence;
+  for (const auto *Term : Terms) {
+    Parts.push_back(Render(Term, OperatorPrecedence));
+  }
+  if (SortTerms) {
+    std::sort(Parts.begin(), Parts.end());
+  }
+
+  std::string Result;
+  bool NeedParens = ParentPrecedence > OperatorPrecedence;
+  if (NeedParens) {
+    Result += "(";
+  }
+  for (size_t I = 0; I < Parts.size(); ++I) {
+    if (I > 0) {
+      Result += Separator.str();
+    }
+    Result += Parts[I];
+  }
+  if (NeedParens) {
+    Result += ")";
+  }
+  return Result;
 }
 
 void appendCommentIfPresent(llvm::raw_ostream &OS, llvm::StringRef Comment) {
@@ -118,7 +175,9 @@ TypedefDecl *HType::getAsTypedefDecl() const {
   return llvm::dyn_cast<TypedefType>(this)->getDecl();
 }
 
-std::string HType::getAsString() const {
+std::string HType::getAsString() const { return getAsString(0); }
+
+std::string HType::getAsString(int Precedence) const {
   switch (getKind()) {
   case TK_Top:
     return "top:" + std::to_string(llvm::cast<TopType>(this)->getBitSize());
@@ -131,7 +190,8 @@ std::string HType::getAsString() const {
     return "f" + std::to_string(llvm::cast<FloatingType>(this)->getBitSize());
   case TK_Pointer:
     return (getPointeeType() == nullptr ? "void"
-                                        : getPointeeType()->getAsString()) +
+                                        : getPointeeType()->getAsString(
+                                              kAtomicPrecedence)) +
            "*";
   case TK_Record:
     return "struct " + llvm::cast<RecordPtrType>(this)->getDecl()->getName() +
@@ -141,23 +201,27 @@ std::string HType::getAsString() const {
   case TK_Array: {
     auto *AT = llvm::cast<ArrayType>(this);
     bool hasSize = AT->getNumElements().has_value();
-    return AT->getElementType()->getAsString() + "[" +
+    return AT->getElementType()->getAsString(kAtomicPrecedence) + "[" +
            (!hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
   }
   case TK_Function: {
     auto *FT = llvm::cast<FunctionType>(this);
+    bool NeedParens = Precedence > kFunctionPrecedence;
     std::string Result;
+    if (NeedParens) {
+      Result += "(";
+    }
     auto &Ret = FT->getReturnType();
     if (Ret.empty()) {
-      Result = "void";
+      Result += "void";
     } else if (Ret.size() == 1) {
-      Result = Ret[0]->getAsString();
+      Result += Ret[0]->getAsString(kFunctionPrecedence);
     } else {
-      Result = "(";
+      Result += "(";
       for (size_t i = 0; i < Ret.size(); i++) {
         if (i > 0)
           Result += ", ";
-        Result += Ret[i]->getAsString();
+        Result += Ret[i]->getAsString(kFunctionPrecedence);
       }
       Result += ")";
     }
@@ -166,9 +230,12 @@ std::string HType::getAsString() const {
     for (size_t i = 0; i < Params.size(); i++) {
       if (i > 0)
         Result += ", ";
-      Result += Params[i]->getAsString();
+      Result += Params[i]->getAsString(kFunctionPrecedence + 1);
     }
     Result += ")";
+    if (NeedParens) {
+      Result += ")";
+    }
     return Result;
   }
   case TK_DualPointer: {
@@ -184,14 +251,20 @@ std::string HType::getAsString() const {
     return Result;
   }
   case TK_SetUnion: {
-    auto *UT = llvm::cast<SetUnionType>(this);
-    return "(" + UT->getLhs()->getAsString() + " | " +
-           UT->getRhs()->getAsString() + ")";
+    return renderSetType(this, TK_SetUnion, Precedence, " | ", false,
+                         [](const HType *Type, int ChildPrecedence) {
+                           return Type == nullptr
+                                      ? std::string("<null>")
+                                      : Type->getAsString(ChildPrecedence);
+                         });
   }
   case TK_SetInter: {
-    auto *IT = llvm::cast<SetInterType>(this);
-    return "(" + IT->getLhs()->getAsString() + " & " +
-           IT->getRhs()->getAsString() + ")";
+    return renderSetType(this, TK_SetInter, Precedence, " & ", false,
+                         [](const HType *Type, int ChildPrecedence) {
+                           return Type == nullptr
+                                      ? std::string("<null>")
+                                      : Type->getAsString(ChildPrecedence);
+                         });
   }
   case TK_Typedef:
     return llvm::cast<TypedefType>(this)->getDecl()->getName();
@@ -375,6 +448,11 @@ void HTypeSnapshotFormatter::collectDecl(const TypedDecl &Decl) {
 }
 
 std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
+  return formatType(Type, 0);
+}
+
+std::string HTypeSnapshotFormatter::formatType(const HType *Type,
+                                               int Precedence) {
   if (Type == nullptr) {
     return "<null>";
   }
@@ -394,8 +472,9 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
   case HType::TK_Float:
     return "f" + std::to_string(llvm::cast<FloatingType>(Type)->getBitSize());
   case HType::TK_Pointer:
-    return (Type->getPointeeType() == nullptr ? "void"
-                                              : formatType(Type->getPointeeType())) +
+    return (Type->getPointeeType() == nullptr
+                ? "void"
+                : formatType(Type->getPointeeType(), kAtomicPrecedence)) +
            "*";
   case HType::TK_Record:
     return getDeclName(*llvm::cast<RecordPtrType>(Type)->getDecl()) + "*";
@@ -404,24 +483,28 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
   case HType::TK_Array: {
     auto *AT = llvm::cast<ArrayType>(Type);
     bool HasSize = AT->getNumElements().has_value();
-    return formatType(AT->getElementType()) + "[" +
+    return formatType(AT->getElementType(), kAtomicPrecedence) + "[" +
            (HasSize ? std::to_string(*AT->getNumElements()) : "") + "]";
   }
   case HType::TK_Function: {
     auto *FT = llvm::cast<FunctionType>(Type);
+    bool NeedParens = Precedence > kFunctionPrecedence;
     std::string Result;
+    if (NeedParens) {
+      Result += "(";
+    }
     auto &Ret = FT->getReturnType();
     if (Ret.empty()) {
-      Result = "void";
+      Result += "void";
     } else if (Ret.size() == 1) {
-      Result = formatType(Ret[0]);
+      Result += formatType(Ret[0], kFunctionPrecedence);
     } else {
-      Result = "(";
+      Result += "(";
       for (size_t I = 0; I < Ret.size(); I++) {
         if (I > 0) {
           Result += ", ";
         }
-        Result += formatType(Ret[I]);
+        Result += formatType(Ret[I], kFunctionPrecedence);
       }
       Result += ")";
     }
@@ -431,9 +514,12 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
       if (I > 0) {
         Result += ", ";
       }
-      Result += formatType(Params[I]);
+      Result += formatType(Params[I], kFunctionPrecedence + 1);
     }
     Result += ")";
+    if (NeedParens) {
+      Result += ")";
+    }
     return Result;
   }
   case HType::TK_DualPointer: {
@@ -448,18 +534,16 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type) {
     return Result;
   }
   case HType::TK_SetUnion: {
-    auto *UT = llvm::cast<SetUnionType>(Type);
-    auto Lhs = formatType(UT->getLhs());
-    auto Rhs = formatType(UT->getRhs());
-    sortPairForDisplay(Lhs, Rhs);
-    return "(" + Lhs + " | " + Rhs + ")";
+    return renderSetType(Type, HType::TK_SetUnion, Precedence, " | ", true,
+                         [this](const HType *Term, int ChildPrecedence) {
+                           return formatType(Term, ChildPrecedence);
+                         });
   }
   case HType::TK_SetInter: {
-    auto *IT = llvm::cast<SetInterType>(Type);
-    auto Lhs = formatType(IT->getLhs());
-    auto Rhs = formatType(IT->getRhs());
-    sortPairForDisplay(Lhs, Rhs);
-    return "(" + Lhs + " & " + Rhs + ")";
+    return renderSetType(Type, HType::TK_SetInter, Precedence, " & ", true,
+                         [this](const HType *Term, int ChildPrecedence) {
+                           return formatType(Term, ChildPrecedence);
+                         });
   }
   case HType::TK_Typedef:
     return getDeclName(*llvm::cast<TypedefType>(Type)->getDecl());
