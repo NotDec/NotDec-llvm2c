@@ -14,6 +14,8 @@
 #include <variant>
 #include <vector>
 
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include "Range.h"
@@ -427,33 +429,32 @@ public:
 };
 
 class SetUnionType : public HType {
-  HType *Lhs;
-  HType *Rhs;
+  // 这里保存已经按“同类 flatten 后”的 set 项列表。
+  // 当前仍保留构造顺序，不排序、不去重。
+  std::vector<HType *> Types;
 
-  SetUnionType(bool IsConst, HType *Canon, HType *Lhs, HType *Rhs)
-      : HType(TK_SetUnion, Canon, IsConst), Lhs(Lhs), Rhs(Rhs) {}
+  SetUnionType(bool IsConst, HType *Canon, std::vector<HType *> Types)
+      : HType(TK_SetUnion, Canon, IsConst), Types(std::move(Types)) {}
   friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_SetUnion; }
 
-  HType *getLhs() const { return Lhs; }
-  HType *getRhs() const { return Rhs; }
+  llvm::ArrayRef<HType *> getTypes() const { return Types; }
 };
 
 class SetInterType : public HType {
-  HType *Lhs;
-  HType *Rhs;
+  // 与 SetUnionType 一样，这里直接表达一条 set term 链。
+  std::vector<HType *> Types;
 
-  SetInterType(bool IsConst, HType *Canon, HType *Lhs, HType *Rhs)
-      : HType(TK_SetInter, Canon, IsConst), Lhs(Lhs), Rhs(Rhs) {}
+  SetInterType(bool IsConst, HType *Canon, std::vector<HType *> Types)
+      : HType(TK_SetInter, Canon, IsConst), Types(std::move(Types)) {}
   friend class HTypeContext;
 
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_SetInter; }
 
-  HType *getLhs() const { return Lhs; }
-  HType *getRhs() const { return Rhs; }
+  llvm::ArrayRef<HType *> getTypes() const { return Types; }
 };
 
 class RecordPtrType : public HType {
@@ -549,9 +550,10 @@ class HTypeContext {
   using ArrayKey = std::tuple<bool, HType *, std::optional<unsigned>>;
   std::map<ArrayKey, std::unique_ptr<ArrayType>> ArrayTypes;
 
-  using SetBinaryKey = std::tuple<bool, HType *, HType *>;
-  std::map<SetBinaryKey, std::unique_ptr<SetUnionType>> SetUnionTypes;
-  std::map<SetBinaryKey, std::unique_ptr<SetInterType>> SetInterTypes;
+  // set key 直接把 term 序列作为 identity，一轮内不做交换律合并。
+  using SetKey = std::tuple<bool, std::vector<HType *>>;
+  std::map<SetKey, std::unique_ptr<SetUnionType>> SetUnionTypes;
+  std::map<SetKey, std::unique_ptr<SetInterType>> SetInterTypes;
 
   using TypeVariableKey =
       std::tuple<bool, std::string, std::optional<unsigned>>;
@@ -751,33 +753,77 @@ public:
   }
 
   HType *getSetUnionType(bool IsConst, HType *Lhs, HType *Rhs) {
-    auto key = std::make_tuple(IsConst, Lhs, Rhs);
+    return getSetUnionType(IsConst, std::vector<HType *>{Lhs, Rhs});
+  }
+
+  HType *getSetUnionType(bool IsConst, std::vector<HType *> Types) {
+    std::vector<HType *> FlatTypes;
+    FlatTypes.reserve(Types.size());
+    for (auto *Type : Types) {
+      if (auto *Set = llvm::dyn_cast<SetUnionType>(Type)) {
+        auto Terms = Set->getTypes();
+        FlatTypes.insert(FlatTypes.end(), Terms.begin(), Terms.end());
+        continue;
+      }
+      FlatTypes.push_back(Type);
+    }
+    assert(!FlatTypes.empty() && "getSetUnionType requires at least one term");
+    if (FlatTypes.size() == 1) {
+      return FlatTypes.front();
+    }
+
+    auto key = std::make_tuple(IsConst, FlatTypes);
     auto &entry = SetUnionTypes[key];
     if (!entry) {
       HType *Canon = nullptr;
-      auto CanonLhs = Lhs->getCanonicalType();
-      auto CanonRhs = Rhs->getCanonicalType();
-      auto canonKey = std::make_tuple(false, CanonLhs, CanonRhs);
-      if (key != canonKey) {
-        Canon = getSetUnionType(false, CanonLhs, CanonRhs);
+      std::vector<HType *> CanonTypes;
+      CanonTypes.reserve(FlatTypes.size());
+      for (auto *Type : FlatTypes) {
+        CanonTypes.push_back(Type->getCanonicalType());
       }
-      entry.reset(new SetUnionType(IsConst, Canon, Lhs, Rhs));
+      auto canonKey = std::make_tuple(false, CanonTypes);
+      if (key != canonKey) {
+        Canon = getSetUnionType(false, std::move(CanonTypes));
+      }
+      entry.reset(new SetUnionType(IsConst, Canon, std::move(FlatTypes)));
     }
     return entry.get();
   }
 
   HType *getSetInterType(bool IsConst, HType *Lhs, HType *Rhs) {
-    auto key = std::make_tuple(IsConst, Lhs, Rhs);
+    return getSetInterType(IsConst, std::vector<HType *>{Lhs, Rhs});
+  }
+
+  HType *getSetInterType(bool IsConst, std::vector<HType *> Types) {
+    std::vector<HType *> FlatTypes;
+    FlatTypes.reserve(Types.size());
+    for (auto *Type : Types) {
+      if (auto *Set = llvm::dyn_cast<SetInterType>(Type)) {
+        auto Terms = Set->getTypes();
+        FlatTypes.insert(FlatTypes.end(), Terms.begin(), Terms.end());
+        continue;
+      }
+      FlatTypes.push_back(Type);
+    }
+    assert(!FlatTypes.empty() && "getSetInterType requires at least one term");
+    if (FlatTypes.size() == 1) {
+      return FlatTypes.front();
+    }
+
+    auto key = std::make_tuple(IsConst, FlatTypes);
     auto &entry = SetInterTypes[key];
     if (!entry) {
       HType *Canon = nullptr;
-      auto CanonLhs = Lhs->getCanonicalType();
-      auto CanonRhs = Rhs->getCanonicalType();
-      auto canonKey = std::make_tuple(false, CanonLhs, CanonRhs);
-      if (key != canonKey) {
-        Canon = getSetInterType(false, CanonLhs, CanonRhs);
+      std::vector<HType *> CanonTypes;
+      CanonTypes.reserve(FlatTypes.size());
+      for (auto *Type : FlatTypes) {
+        CanonTypes.push_back(Type->getCanonicalType());
       }
-      entry.reset(new SetInterType(IsConst, Canon, Lhs, Rhs));
+      auto canonKey = std::make_tuple(false, CanonTypes);
+      if (key != canonKey) {
+        Canon = getSetInterType(false, std::move(CanonTypes));
+      }
+      entry.reset(new SetInterType(IsConst, Canon, std::move(FlatTypes)));
     }
     return entry.get();
   }

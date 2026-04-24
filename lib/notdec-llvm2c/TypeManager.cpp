@@ -223,12 +223,20 @@ bool canLowerToClangTypeImpl(const HType *Ty, std::set<const HType *> &Visited) 
     return LoadOK && StoreOK;
   }
   if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
-    return canLowerToClangTypeImpl(Set->getLhs(), Visited) &&
-           canLowerToClangTypeImpl(Set->getRhs(), Visited);
+    for (auto *Term : Set->getTypes()) {
+      if (!canLowerToClangTypeImpl(Term, Visited)) {
+        return false;
+      }
+    }
+    return true;
   }
   if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
-    return canLowerToClangTypeImpl(Set->getLhs(), Visited) &&
-           canLowerToClangTypeImpl(Set->getRhs(), Visited);
+    for (auto *Term : Set->getTypes()) {
+      if (!canLowerToClangTypeImpl(Term, Visited)) {
+        return false;
+      }
+    }
+    return true;
   }
   if (auto *AT = llvm::dyn_cast<ast::ArrayType>(Ty)) {
     return canLowerToClangTypeImpl(AT->getElementType(), Visited);
@@ -314,20 +322,26 @@ std::optional<uint64_t> estimateTypeWidthBitsImpl(
     return (*ElemBits) * (*AT->getNumElements());
   }
   if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
-    auto LhsBits = estimateTypeWidthBitsImpl(Set->getLhs(), Visited);
-    auto RhsBits = estimateTypeWidthBitsImpl(Set->getRhs(), Visited);
-    if (LhsBits && RhsBits) {
-      return std::max(*LhsBits, *RhsBits);
+    std::optional<uint64_t> MaxBits;
+    for (auto *Term : Set->getTypes()) {
+      auto Bits = estimateTypeWidthBitsImpl(Term, Visited);
+      if (!Bits) {
+        continue;
+      }
+      MaxBits = MaxBits ? std::max(*MaxBits, *Bits) : *Bits;
     }
-    return LhsBits ? LhsBits : RhsBits;
+    return MaxBits;
   }
   if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
-    auto LhsBits = estimateTypeWidthBitsImpl(Set->getLhs(), Visited);
-    auto RhsBits = estimateTypeWidthBitsImpl(Set->getRhs(), Visited);
-    if (LhsBits && RhsBits) {
-      return std::max(*LhsBits, *RhsBits);
+    std::optional<uint64_t> MaxBits;
+    for (auto *Term : Set->getTypes()) {
+      auto Bits = estimateTypeWidthBitsImpl(Term, Visited);
+      if (!Bits) {
+        continue;
+      }
+      MaxBits = MaxBits ? std::max(*MaxBits, *Bits) : *Bits;
     }
-    return LhsBits ? LhsBits : RhsBits;
+    return MaxBits;
   }
   return std::nullopt;
 }
@@ -446,33 +460,24 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
     };
 
     auto lowerSetLikeType = [&](HType *Root) -> clang::QualType {
-      std::vector<HType *> WorkList{Root};
       std::vector<HType *> ConcreteTypes;
       std::vector<const ast::TypeVariableType *> TypeVars;
-      auto ShouldFlatten = [Root](HType *Node) {
-        return Root->isSetUnionType() ? Node->isSetUnionType()
-                                      : Node->isSetInterType();
-      };
 
-      while (!WorkList.empty()) {
-        HType *Cur = WorkList.back();
-        WorkList.pop_back();
-        if (ShouldFlatten(Cur)) {
-          if (auto *UT = llvm::dyn_cast<ast::SetUnionType>(Cur)) {
-            WorkList.push_back(UT->getLhs());
-            WorkList.push_back(UT->getRhs());
+      auto CollectTerms = [&](llvm::ArrayRef<HType *> Terms) {
+        for (auto *Cur : Terms) {
+          if (auto *TV = llvm::dyn_cast<ast::TypeVariableType>(Cur)) {
+            TypeVars.push_back(TV);
             continue;
           }
-          auto *IT = llvm::cast<ast::SetInterType>(Cur);
-          WorkList.push_back(IT->getLhs());
-          WorkList.push_back(IT->getRhs());
-          continue;
+          ConcreteTypes.push_back(Cur);
         }
-        if (auto *TV = llvm::dyn_cast<ast::TypeVariableType>(Cur)) {
-          TypeVars.push_back(TV);
-          continue;
-        }
-        ConcreteTypes.push_back(Cur);
+      };
+
+      if (auto *UT = llvm::dyn_cast<ast::SetUnionType>(Root)) {
+        CollectTerms(UT->getTypes());
+      } else {
+        auto *IT = llvm::cast<ast::SetInterType>(Root);
+        CollectTerms(IT->getTypes());
       }
 
       std::vector<HType *> UniqueConcreteTypes;
@@ -510,8 +515,7 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
       }
 
       llvm::errs() << "Warning: lossy lowering of set type " << Root->getAsString()
-                   << " to " << Chosen->getAsString()
-                   << "\n";
+                   << " to " << Chosen->getAsString() << "\n";
       return convertType(Chosen);
     };
 

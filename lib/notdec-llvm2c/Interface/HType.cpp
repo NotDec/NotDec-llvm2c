@@ -22,21 +22,17 @@ std::string formatIntegerTypeName(const IntegerType *Type) {
 
 void collectSetTerms(const HType *Type, HType::HTypeKind Kind,
                      std::vector<const HType *> &Terms) {
-  if (Type == nullptr) {
-    Terms.push_back(Type);
-    return;
-  }
   if (Kind == HType::TK_SetUnion) {
     if (auto *UT = llvm::dyn_cast<SetUnionType>(Type)) {
-      collectSetTerms(UT->getLhs(), Kind, Terms);
-      collectSetTerms(UT->getRhs(), Kind, Terms);
+      auto SetTerms = UT->getTypes();
+      Terms.insert(Terms.end(), SetTerms.begin(), SetTerms.end());
       return;
     }
   } else {
     assert(Kind == HType::TK_SetInter);
     if (auto *IT = llvm::dyn_cast<SetInterType>(Type)) {
-      collectSetTerms(IT->getLhs(), Kind, Terms);
-      collectSetTerms(IT->getRhs(), Kind, Terms);
+      auto SetTerms = IT->getTypes();
+      Terms.insert(Terms.end(), SetTerms.begin(), SetTerms.end());
       return;
     }
   }
@@ -415,14 +411,16 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
   }
   case HType::TK_SetUnion: {
     auto *UT = llvm::cast<SetUnionType>(Type);
-    collectType(UT->getLhs());
-    collectType(UT->getRhs());
+    for (auto *Term : UT->getTypes()) {
+      collectType(Term);
+    }
     return;
   }
   case HType::TK_SetInter: {
     auto *IT = llvm::cast<SetInterType>(Type);
-    collectType(IT->getLhs());
-    collectType(IT->getRhs());
+    for (auto *Term : IT->getTypes()) {
+      collectType(Term);
+    }
     return;
   }
   case HType::TK_Typedef:
