@@ -63,11 +63,13 @@ clang::QualType toLValueType(clang::ASTContext &Ctx, clang::QualType Ty) {
 }
 
 bool ClangTypeResult::hasType(ExtValuePtr Val) {
-  return Result->ValueTypes.count(Val) > 0;
+  return Result->hasDefaultValueType(Val);
 }
 
 clang::QualType ClangTypeResult::getType(ExtValuePtr Val) {
-  return convertType(Result->ValueTypes.at(Val));
+  auto *Ty = Result->getDefaultValueType(Val);
+  assert(Ty != nullptr && "ClangTypeResult::getType: missing default type");
+  return convertType(Ty);
 }
 
 void ClangTypeResult::writeValueCTypes(llvm::StringRef Path) {
@@ -91,7 +93,7 @@ void ClangTypeResult::writeValueCTypes(llvm::StringRef Path) {
     if (auto V = std::get_if<llvm::Value *>(&Value); V != nullptr && *V == nullptr) {
       continue;
     }
-    HType *HTy = Ent.second;
+    HType *HTy = Result->getDefaultValueType(Value);
     std::string Stable = toStableString(Value);
     std::string Verbose = sanitizeSingleLine(toString(Value, true));
     std::string Line = Result->ContraVariantValues.count(Value) != 0 ? "[-]" : "[+]";
@@ -604,13 +606,17 @@ void ClangTypeResult::calcUseRelation() {
   }
 
   for (auto &Ent : Result->ValueTypes) {
-    if (auto *RD = Ent.second->getAsRecordDecl()) {
+    auto *Ty = Result->getDefaultValueType(Ent.first);
+    if (Ty == nullptr) {
+      continue;
+    }
+    if (auto *RD = Ty->getAsRecordDecl()) {
       ValueUsage[RD].insert(Ent.first);
     }
-    if (auto *UD = Ent.second->getAsUnionDecl()) {
+    if (auto *UD = Ty->getAsUnionDecl()) {
       ValueUsage[UD].insert(Ent.first);
     }
-    if (auto *TD = Ent.second->getAsTypedefDecl()) {
+    if (auto *TD = Ty->getAsTypedefDecl()) {
       ValueUsage[TD].insert(Ent.first);
     }
   }

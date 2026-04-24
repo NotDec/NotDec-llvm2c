@@ -1466,7 +1466,8 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 
 void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                     HTypeResult &HT, const char *DebugDir) {
-  std::map<std::pair<llvm::Function *, std::string>, HType *> NameMap;
+  std::map<std::pair<llvm::Function *, std::string>, HType *> NameMapUpper;
+  std::map<std::pair<llvm::Function *, std::string>, HType *> NameMapLower;
   std::set<std::pair<llvm::Function *, std::string>> ContraVariantNameSet;
   std::set<const llvm::Value *> DemotedValues;
   auto PointerSize = M.getDataLayout().getPointerSize();
@@ -1476,20 +1477,23 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
       for (llvm::Instruction &I : BB) {
         if (llvm::isa<llvm::PHINode>(&I)) {
           llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
-          HType *T = nullptr;
-          if (HT.ValueTypes.count(&PN)) {
-            T = HT.ValueTypes.at(&PN);
-            if (T != nullptr) {
-              T = HT.HTCtx->getPointerType(false, PointerSize, T);
+          auto wrapDemotedType = [&](HType *Ty) {
+            if (Ty == nullptr) {
+              return Ty;
             }
-          }
+            return HT.HTCtx->getPointerType(false, PointerSize, Ty);
+          };
           auto NameKey = std::make_pair(&F, PN.getName().str());
+          auto *UpperTy = wrapDemotedType(HT.getValueType(&PN, false));
+          auto *LowerTy = wrapDemotedType(HT.getValueType(&PN, true));
           if (HT.ContraVariantValues.count(&PN) != 0) {
             ContraVariantNameSet.insert(NameKey);
           }
           DemotedValues.insert(&PN);
-          auto it = NameMap.insert({NameKey, T});
-          assert(it.second && "decompileModule: duplicate phi name?");
+          auto ItUpper = NameMapUpper.insert({NameKey, UpperTy});
+          auto ItLower = NameMapLower.insert({NameKey, LowerTy});
+          assert(ItUpper.second && "decompileModule: duplicate phi name?");
+          assert(ItLower.second && "decompileModule: duplicate phi name?");
         }
       }
     }
@@ -1519,6 +1523,13 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
       ++It;
     }
   }
+  for (auto It = HT.ValueTypesLower.begin(); It != HT.ValueTypesLower.end();) {
+    if (referencesDemotedValue(It->first)) {
+      It = HT.ValueTypesLower.erase(It);
+    } else {
+      ++It;
+    }
+  }
   for (auto It = HT.ContraVariantValues.begin(); It != HT.ContraVariantValues.end();) {
     if (referencesDemotedValue(*It)) {
       It = HT.ContraVariantValues.erase(It);
@@ -1543,15 +1554,21 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
       for (llvm::Instruction &I : BB) {
         if (llvm::isa<llvm::AllocaInst>(&I)) {
           llvm::AllocaInst &AI = llvm::cast<llvm::AllocaInst>(I);
-          if (HT.ValueTypes.count(&AI) == 0) {
+          if (!HT.hasValueType(&AI, false) && !HT.hasValueType(&AI, true)) {
             auto N1 = AI.getName().str();
             assert(N1.rfind(".reg2mem", N1.length() - 8) == (N1.length() - 8) &&
                    "decompileModule: alloca not from reg2mem?");
             auto N = N1.substr(0, N1.length() - 8);
             AI.setName(N);
-            auto Ty = NameMap.at({&F, N});
-            if (Ty != nullptr) {
-              auto I1 = HT.ValueTypes.insert({&AI, Ty});
+            auto Key = std::make_pair(&F, N);
+            auto UpperTy = NameMapUpper.at(Key);
+            auto LowerTy = NameMapLower.at(Key);
+            if (UpperTy != nullptr) {
+              auto I1 = HT.ValueTypes.insert({&AI, UpperTy});
+              assert(I1.second && "decompileModule: duplicate alloca name?");
+            }
+            if (LowerTy != nullptr) {
+              auto I1 = HT.ValueTypesLower.insert({&AI, LowerTy});
               assert(I1.second && "decompileModule: duplicate alloca name?");
             }
             if (ContraVariantNameSet.count({&F, N}) != 0) {
