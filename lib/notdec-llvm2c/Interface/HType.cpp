@@ -12,6 +12,14 @@ constexpr int kUnionPrecedence = 3;
 constexpr int kInterPrecedence = 4;
 constexpr int kAtomicPrecedence = 6;
 
+std::string formatIntegerTypeName(const IntegerType *Type) {
+  if (Type->getBitSize() == 1) {
+    return "bool";
+  }
+  return std::string(Type->isUnsigned() ? "u" : "i") +
+         std::to_string(Type->getBitSize());
+}
+
 void collectSetTerms(const HType *Type, HType::HTypeKind Kind,
                      std::vector<const HType *> &Terms) {
   if (Type == nullptr) {
@@ -185,7 +193,7 @@ std::string HType::getAsString(int Precedence) const {
     return "bottom:" +
            std::to_string(llvm::cast<BottomType>(this)->getBitSize());
   case TK_Integer:
-    return "i" + std::to_string(llvm::cast<IntegerType>(this)->getBitSize());
+    return formatIntegerTypeName(llvm::cast<IntegerType>(this));
   case TK_Float:
     return "f" + std::to_string(llvm::cast<FloatingType>(this)->getBitSize());
   case TK_Pointer:
@@ -468,7 +476,7 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
     return "bottom:" +
            std::to_string(llvm::cast<BottomType>(Type)->getBitSize());
   case HType::TK_Integer:
-    return "i" + std::to_string(llvm::cast<IntegerType>(Type)->getBitSize());
+    return formatIntegerTypeName(llvm::cast<IntegerType>(Type));
   case HType::TK_Float:
     return "f" + std::to_string(llvm::cast<FloatingType>(Type)->getBitSize());
   case HType::TK_Pointer:
