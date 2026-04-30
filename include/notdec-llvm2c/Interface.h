@@ -80,7 +80,15 @@ struct HTypeResult {
     return hasValueType(Value, !prefersUpperValueType(Value));
   }
   HType *getDefaultValueType(const ExtValuePtr &Value) const {
-    return getValueType(Value, !prefersUpperValueType(Value));
+    auto *Ty = getValueType(Value, !prefersUpperValueType(Value));
+    // Bottom carries little information for C emission. If the default choice
+    // falls to bottom, try the upper-side result before giving up.
+    if (Ty != nullptr && Ty->isBottomType()) {
+      if (auto *UpperTy = getValueType(Value, false)) {
+        return UpperTy;
+      }
+    }
+    return Ty;
   }
   void print(llvm::raw_ostream &OS) const {
     // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
