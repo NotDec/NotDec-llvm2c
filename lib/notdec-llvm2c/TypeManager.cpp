@@ -87,8 +87,8 @@ void ClangTypeResult::writeValueCTypes(llvm::StringRef Path) {
   };
 
   std::vector<ValueCTypeEntry> Entries;
-  Entries.reserve(Result->ValueTypes.size());
-  for (const auto &Ent : Result->ValueTypes) {
+  Entries.reserve(Result->ValueTypesLower.size());
+  for (const auto &Ent : Result->ValueTypesLower) {
     const auto &Value = Ent.first;
     if (auto V = std::get_if<llvm::Value *>(&Value); V != nullptr && *V == nullptr) {
       continue;
@@ -609,7 +609,7 @@ void ClangTypeResult::calcUseRelation() {
     }
   }
 
-  for (auto &Ent : Result->ValueTypes) {
+  for (auto &Ent : Result->ValueTypesLower) {
     auto *Ty = Result->getDefaultValueType(Ent.first);
     if (Ty == nullptr) {
       continue;

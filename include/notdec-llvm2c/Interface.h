@@ -47,10 +47,12 @@ using notdec::ast::HType;
 
 struct HTypeResult {
   std::shared_ptr<ast::HTypeContext> HTCtx;
-  std::map<ExtValuePtr, HType *> ValueTypes;
-  // ValueTypes stores the covariant upper bound. Keep a parallel map for the
-  // contravariant lower bound so llvm2c can pick the right one per use site.
+  // `pos=true` follows lower bounds and computes their least common upper
+  // bound. In the user-facing lattice naming this is the lower-side result.
   std::map<ExtValuePtr, HType *> ValueTypesLower;
+  // `pos=false` follows upper bounds and computes their greatest common lower
+  // bound. In the user-facing lattice naming this is the upper-side result.
+  std::map<ExtValuePtr, HType *> ValueTypesUpper;
   std::set<ExtValuePtr> ContraVariantValues;
   // std::map<clang::Decl *, std::string> DeclComments;
   // std::map<clang::Decl *, StructInfo> StructInfos;
@@ -62,23 +64,23 @@ struct HTypeResult {
   HTypeResult() = default;
   HTypeResult(HTypeResult &&Other) = default;
   HTypeResult &operator=(HTypeResult &&Other) = default;
-  bool prefersLowerValueType(const ExtValuePtr &Value) const {
+  bool prefersUpperValueType(const ExtValuePtr &Value) const {
     return ContraVariantValues.count(Value) != 0;
   }
   bool hasValueType(const ExtValuePtr &Value, bool Lower) const {
-    const auto &Map = Lower ? ValueTypesLower : ValueTypes;
+    const auto &Map = Lower ? ValueTypesLower : ValueTypesUpper;
     return Map.count(Value) != 0;
   }
   HType *getValueType(const ExtValuePtr &Value, bool Lower) const {
-    const auto &Map = Lower ? ValueTypesLower : ValueTypes;
+    const auto &Map = Lower ? ValueTypesLower : ValueTypesUpper;
     auto It = Map.find(Value);
     return It == Map.end() ? nullptr : It->second;
   }
   bool hasDefaultValueType(const ExtValuePtr &Value) const {
-    return hasValueType(Value, prefersLowerValueType(Value));
+    return hasValueType(Value, !prefersUpperValueType(Value));
   }
   HType *getDefaultValueType(const ExtValuePtr &Value) const {
-    return getValueType(Value, prefersLowerValueType(Value));
+    return getValueType(Value, !prefersUpperValueType(Value));
   }
   void print(llvm::raw_ostream &OS) const {
     // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
@@ -126,8 +128,8 @@ private:
       }
     };
 
-    CollectMap(ValueTypes);
     CollectMap(ValueTypesLower);
+    CollectMap(ValueTypesUpper);
     if (MemoryType != nullptr) {
       Formatter.collectType(MemoryType);
     }
@@ -152,10 +154,10 @@ private:
                          ast::HTypeSnapshotFormatter &Formatter) const {
     OS << "[" << Name << "]\n";
     std::set<ExtValuePtr> Values;
-    for (const auto &Ent : ValueTypes) {
+    for (const auto &Ent : ValueTypesLower) {
       Values.insert(Ent.first);
     }
-    for (const auto &Ent : ValueTypesLower) {
+    for (const auto &Ent : ValueTypesUpper) {
       Values.insert(Ent.first);
     }
     std::vector<std::tuple<std::string, std::string, std::string, std::string>>
@@ -163,14 +165,14 @@ private:
     Entries.reserve(Values.size());
     for (const auto &Value : Values) {
       Entries.emplace_back(formatValueKey(Value), formatValuePosition(Value),
-                           formatMaybeType(getValueType(Value, false), Formatter),
-                           formatMaybeType(getValueType(Value, true), Formatter));
+                           formatMaybeType(getValueType(Value, true), Formatter),
+                           formatMaybeType(getValueType(Value, false), Formatter));
     }
     std::sort(Entries.begin(), Entries.end());
     for (const auto &Ent : Entries) {
       OS << std::get<1>(Ent) << " " << std::get<0>(Ent)
-         << " => lower=" << std::get<3>(Ent)
-         << " ; upper=" << std::get<2>(Ent) << "\n";
+         << " => lower=" << std::get<2>(Ent)
+         << " ; upper=" << std::get<3>(Ent) << "\n";
     }
     OS << "\n";
   }

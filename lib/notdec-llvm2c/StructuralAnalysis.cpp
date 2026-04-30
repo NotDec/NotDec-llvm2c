@@ -1516,9 +1516,9 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
     return false;
   };
 
-  for (auto It = HT.ValueTypes.begin(); It != HT.ValueTypes.end();) {
+  for (auto It = HT.ValueTypesUpper.begin(); It != HT.ValueTypesUpper.end();) {
     if (referencesDemotedValue(It->first)) {
-      It = HT.ValueTypes.erase(It);
+      It = HT.ValueTypesUpper.erase(It);
     } else {
       ++It;
     }
@@ -1564,7 +1564,7 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
             auto UpperTy = NameMapUpper.at(Key);
             auto LowerTy = NameMapLower.at(Key);
             if (UpperTy != nullptr) {
-              auto I1 = HT.ValueTypes.insert({&AI, UpperTy});
+              auto I1 = HT.ValueTypesUpper.insert({&AI, UpperTy});
               assert(I1.second && "decompileModule: duplicate alloca name?");
             }
             if (LowerTy != nullptr) {
