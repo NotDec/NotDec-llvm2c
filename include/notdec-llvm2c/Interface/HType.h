@@ -25,7 +25,7 @@ namespace notdec::ast {
 
 class HTypeContext;
 class TypedefType;
-class RecordPtrType;
+class RecordType;
 class HType;
 class HTypeSnapshotFormatter;
 class RecursiveBinder;
@@ -77,6 +77,10 @@ private:
 class FieldDecl {
 public:
   SimpleRange R;
+  // Field.Type describes the recovered field storage/address shape. For a
+  // normal by-value member this means one extra pointer-like layer around the
+  // actual member type; callers that need the C member type must strip that
+  // layer first.
   HType *Type;
   std::string Name;
   std::string Comment;
@@ -309,8 +313,7 @@ public:
   bool isDualPointerType() const { return Kind == TK_DualPointer; }
   bool isSetUnionType() const { return Kind == TK_SetUnion; }
   bool isSetInterType() const { return Kind == TK_SetInter; }
-  bool isRecordPtrType() const { return Kind == TK_Record; }
-  bool isRecordType() const { return isRecordPtrType(); }
+  bool isRecordType() const { return Kind == TK_Record; }
   bool isUnionType() const { return Kind == TK_Union; }
   bool isArrayType() const { return Kind == TK_Array; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
@@ -489,9 +492,9 @@ public:
   llvm::ArrayRef<HType *> getTypes() const { return Types; }
 };
 
-class RecordPtrType : public HType {
+class RecordType : public HType {
   RecordDecl *Decl;
-  RecordPtrType(bool IsConst, HType *Canon, RecordDecl *Decl)
+  RecordType(bool IsConst, HType *Canon, RecordDecl *Decl)
       : HType(TK_Record, Canon, IsConst), Decl(Decl) {}
   friend class HTypeContext;
 
@@ -778,11 +781,11 @@ public:
     return entry.get();
   }
 
-  HType *getRecordPtrType(bool IsConst, RecordDecl *Decl) {
+  HType *getRecordType(bool IsConst, RecordDecl *Decl) {
     if (!Decl->TypeForDecl) {
-      Decl->TypeForDecl.reset(new RecordPtrType(false, nullptr, Decl));
+      Decl->TypeForDecl.reset(new RecordType(false, nullptr, Decl));
       Decl->TypeForDeclConst.reset(
-          new RecordPtrType(true, Decl->TypeForDecl.get(), Decl));
+          new RecordType(true, Decl->TypeForDecl.get(), Decl));
     }
 
     if (!IsConst) {

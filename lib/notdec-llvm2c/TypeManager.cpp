@@ -326,7 +326,7 @@ bool canLowerToClangTypeImpl(const HType *Ty, std::set<const HType *> &Visited) 
   if (auto *AT = llvm::dyn_cast<ast::ArrayType>(Ty)) {
     return canLowerToClangTypeImpl(AT->getElementType(), Visited);
   }
-  if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(Ty)) {
+  if (auto *RT = llvm::dyn_cast<ast::RecordType>(Ty)) {
     return RT->getDecl() != nullptr && RT->getDecl()->getASTDecl() != nullptr;
   }
   if (auto *UT = llvm::dyn_cast<ast::UnionType>(Ty)) {
@@ -464,7 +464,7 @@ ClangTypeResult::getDirectAggregateFieldValueDecl(HType *StorageTy) {
         ValueTy->isDualPointerType()) {
       return nullptr;
     }
-    if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(ValueTy)) {
+    if (auto *RT = llvm::dyn_cast<ast::RecordType>(ValueTy)) {
       return RT->getDecl();
     }
     if (auto *UT = llvm::dyn_cast<ast::UnionType>(ValueTy)) {
@@ -826,7 +826,7 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
                                         llvm::APInt(32, 0), nullptr,
                                         clang::ArrayType::Star, 0);
       }
-    } else if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(T)) {
+    } else if (auto *RT = llvm::dyn_cast<ast::RecordType>(T)) {
       return Ctx.getRecordType(
           llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl())));
     } else if (auto *UT = llvm::dyn_cast<ast::UnionType>(T)) {

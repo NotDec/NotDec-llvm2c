@@ -176,7 +176,7 @@ TypedDecl *HType::getAsRecordOrUnionDecl() const {
 }
 
 RecordDecl *HType::getAsRecordDecl() const {
-  if (auto *RT = llvm::dyn_cast<RecordPtrType>(this)) {
+  if (auto *RT = llvm::dyn_cast<RecordType>(this)) {
     return RT->getDecl();
   }
   return nullptr;
@@ -215,7 +215,7 @@ std::string HType::getAsString(int Precedence) const {
                                               kAtomicPrecedence)) +
            "*";
   case TK_Record:
-    return "struct " + llvm::cast<RecordPtrType>(this)->getDecl()->getName();
+    return "struct " + llvm::cast<RecordType>(this)->getDecl()->getName();
   case TK_Union:
     return "union " + llvm::cast<UnionType>(this)->getDecl()->getName();
   case TK_Array: {
@@ -430,7 +430,7 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
     collectType(Type->getPointeeType());
     return;
   case HType::TK_Record:
-    collectDecl(*llvm::cast<RecordPtrType>(Type)->getDecl());
+    collectDecl(*llvm::cast<RecordType>(Type)->getDecl());
     return;
   case HType::TK_Union:
     collectDecl(*llvm::cast<UnionType>(Type)->getDecl());
@@ -528,7 +528,7 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
                 : formatType(Type->getPointeeType(), kAtomicPrecedence)) +
            "*";
   case HType::TK_Record:
-    return getDeclName(*llvm::cast<RecordPtrType>(Type)->getDecl());
+    return getDeclName(*llvm::cast<RecordType>(Type)->getDecl());
   case HType::TK_Union:
     return getDeclName(*llvm::cast<UnionType>(Type)->getDecl());
   case HType::TK_Array: {
