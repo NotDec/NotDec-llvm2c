@@ -41,6 +41,10 @@ class ClangTypeResult {
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
   clang::QualType convertType(HType *T);
+  HType *getStoredFieldValueType(HType *T);
+  clang::QualType convertStoredFieldType(HType *T) {
+    return toLValueType(Ctx, convertType(getStoredFieldValueType(T)));
+  }
   clang::ClassTemplateDecl *getOrCreateDualPointerTemplateDecl();
   clang::QualType convertDualPointerTemplateType(const ast::DualPointerType *T);
   clang::QualType convertTypeL(HType *T) {

@@ -153,6 +153,15 @@ bool useDualPointerTemplateMode() {
   return Env != nullptr && Env[0] != '\0' && Env[0] != '0';
 }
 
+HType *stripStoredFieldAddressType(HType *Ty) {
+  if (auto *PT = llvm::dyn_cast<ast::PointerType>(Ty)) {
+    if (PT->getPointeeType() != nullptr) {
+      return PT->getPointeeType();
+    }
+  }
+  return Ty;
+}
+
 std::string sanitizeSingleLine(llvm::StringRef Text) {
   std::string Result = Text.str();
   for (char &Ch : Result) {
@@ -352,6 +361,10 @@ std::optional<uint64_t> estimateTypeWidthBits(const HType *Ty) {
 }
 
 } // namespace
+
+HType *ClangTypeResult::getStoredFieldValueType(HType *T) {
+  return stripStoredFieldAddressType(T);
+}
 
 clang::ClassTemplateDecl *ClangTypeResult::getOrCreateDualPointerTemplateDecl() {
   if (DualPointerTemplateDecl != nullptr) {
@@ -566,8 +579,8 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
                                         clang::ArrayType::Star, 0);
       }
     } else if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(T)) {
-      return Ctx.getPointerType(Ctx.getRecordType(
-          llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl()))));
+      return Ctx.getRecordType(
+          llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl())));
     } else if (auto *UT = llvm::dyn_cast<ast::UnionType>(T)) {
       return Ctx.getRecordType(
           llvm::cast<clang::RecordDecl>(getDecl(UT->getDecl())));
@@ -596,13 +609,14 @@ void ClangTypeResult::calcUseRelation() {
   for (auto &Ent : Result->HTCtx->getDecls()) {
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Ent.second.get())) {
       for (auto &Field : RD->getFields()) {
-        if (auto Decl = Field.Type->getAsRecordDecl()) {
+        auto *ValueTy = getStoredFieldValueType(Field.Type);
+        if (auto Decl = ValueTy->getAsRecordDecl()) {
           DeclUsage[RD].insert(Decl);
         }
-        if (auto Decl = Field.Type->getAsUnionDecl()) {
+        if (auto Decl = ValueTy->getAsUnionDecl()) {
           DeclUsage[RD].insert(Decl);
         }
-        if (auto Decl = Field.Type->getAsTypedefDecl()) {
+        if (auto Decl = ValueTy->getAsTypedefDecl()) {
           DeclUsage[RD].insert(Decl);
         }
       }
@@ -631,7 +645,7 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
   Ret->startDefinition();
   for (auto &Member : UD->getMembers()) {
-    auto QT = convertTypeL(Member.Type);
+    auto QT = convertStoredFieldType(Member.Type);
     auto *II = &Ctx.Idents.get(Member.Name);
     auto *FD = clang::FieldDecl::Create(
         Ctx, Ret, clang::SourceLocation(), clang::SourceLocation(), II, QT,
@@ -653,7 +667,7 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
-    auto QT = convertTypeL(Field.Type);
+    auto QT = convertStoredFieldType(Field.Type);
     auto *II = &Ctx.Idents.get(Field.Name);
     auto *FD = clang::FieldDecl::Create(
         Ctx, Ret, clang::SourceLocation(), clang::SourceLocation(), II, QT,
@@ -677,6 +691,7 @@ void ClangTypeResult::defineDecls() {
       [&](notdec::ast::TypedDecl *Decl) -> void {
     std::function<void(notdec::ast::HType *)> VisitType =
         [&](notdec::ast::HType *Ty) {
+          Ty = getStoredFieldValueType(Ty);
           if (Ty->isArrayType()) {
             VisitType(Ty->getArrayElementType());
           } else if (Ty->isTypedefType()) {
@@ -1056,7 +1071,7 @@ void ClangTypeResult::createMemoryDecls() {
           Name = "global_" + Name;
         }
         clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
-        auto CType = convertTypeL(Field.Type);
+        auto CType = convertStoredFieldType(Field.Type);
         clang::VarDecl *VD = clang::VarDecl::Create(
             Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
             CType, nullptr, clang::SC_None);

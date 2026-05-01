@@ -198,8 +198,7 @@ std::string HType::getAsString(int Precedence) const {
                                               kAtomicPrecedence)) +
            "*";
   case TK_Record:
-    return "struct " + llvm::cast<RecordPtrType>(this)->getDecl()->getName() +
-           "*";
+    return "struct " + llvm::cast<RecordPtrType>(this)->getDecl()->getName();
   case TK_Union:
     return "union " + llvm::cast<UnionType>(this)->getDecl()->getName();
   case TK_Array: {
@@ -483,7 +482,7 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
                 : formatType(Type->getPointeeType(), kAtomicPrecedence)) +
            "*";
   case HType::TK_Record:
-    return getDeclName(*llvm::cast<RecordPtrType>(Type)->getDecl()) + "*";
+    return getDeclName(*llvm::cast<RecordPtrType>(Type)->getDecl());
   case HType::TK_Union:
     return getDeclName(*llvm::cast<UnionType>(Type)->getDecl());
   case HType::TK_Array: {
