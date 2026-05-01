@@ -8,6 +8,10 @@
 #include <clang/AST/Type.h>
 #include <clang/Frontend/ASTUnit.h>
 #include <cstdint>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
 
 #include "ASTManager.h"
 #include "Interface.h"
@@ -37,6 +41,14 @@ class ClangTypeResult {
   // map from field decl to ast field decl. For globals, may map VarDecl to ast
   // FieldDecl
   std::map<clang::Decl *, const ast::FieldDecl *> FieldDeclMap;
+  // Some recovered fields form by-value aggregate cycles. Clang cannot lay
+  // those records out, so their internal AST field type is a pointer while the
+  // printer uses this original aggregate spelling to show the recovered shape.
+  std::map<clang::FieldDecl *, std::string> ForcedFieldTypeStrings;
+  // Original HType fields that participate in a direct by-value aggregate
+  // cycle after stored-field address stripping.
+  std::set<const ast::FieldDecl *> CyclicByValueFields;
+  bool HasAnalyzedByValueCycles = false;
   clang::ClassTemplateDecl *DualPointerTemplateDecl = nullptr;
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
@@ -50,6 +62,10 @@ class ClangTypeResult {
   clang::QualType convertTypeL(HType *T) {
     return toLValueType(Ctx, convertType(T));
   }
+  void analyzeByValueAggregateCycles();
+  bool isCyclicByValueField(const ast::FieldDecl &Field);
+  ast::TypedDecl *getDirectAggregateFieldValueDecl(HType *StorageTy);
+  std::string formatAggregateDeclType(ast::TypedDecl *Decl);
 
   // map from struct/union decl to its users
   std::map<ast::TypedDecl *, std::set<ast::TypedDecl *>> DeclUsage;
@@ -121,6 +137,13 @@ public:
       return It2->second->Comment;
     }
     return "";
+  }
+  std::optional<std::string> getForcedFieldTypeString(clang::FieldDecl *Decl) {
+    auto It = ForcedFieldTypeStrings.find(Decl);
+    if (It == ForcedFieldTypeStrings.end()) {
+      return std::nullopt;
+    }
+    return It->second;
   }
 };
 

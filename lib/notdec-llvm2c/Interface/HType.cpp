@@ -176,15 +176,24 @@ TypedDecl *HType::getAsRecordOrUnionDecl() const {
 }
 
 RecordDecl *HType::getAsRecordDecl() const {
-  return llvm::dyn_cast<RecordPtrType>(this)->getDecl();
+  if (auto *RT = llvm::dyn_cast<RecordPtrType>(this)) {
+    return RT->getDecl();
+  }
+  return nullptr;
 }
 
 UnionDecl *HType::getAsUnionDecl() const {
-  return llvm::dyn_cast<UnionType>(this)->getDecl();
+  if (auto *UT = llvm::dyn_cast<UnionType>(this)) {
+    return UT->getDecl();
+  }
+  return nullptr;
 }
 
 TypedefDecl *HType::getAsTypedefDecl() const {
-  return llvm::dyn_cast<TypedefType>(this)->getDecl();
+  if (auto *TT = llvm::dyn_cast<TypedefType>(this)) {
+    return TT->getDecl();
+  }
+  return nullptr;
 }
 
 std::string HType::getAsString() const { return getAsString(0); }

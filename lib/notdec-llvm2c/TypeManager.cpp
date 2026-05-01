@@ -321,6 +321,14 @@ bool canLowerToClangTypeImpl(const HType *Ty, std::set<const HType *> &Visited) 
   if (auto *TT = llvm::dyn_cast<ast::TypedefType>(Ty)) {
     return TT->getDecl() != nullptr && TT->getDecl()->getASTDecl() != nullptr;
   }
+  if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(Ty)) {
+    auto *Anchor = RT->getBinder()->getAnchorDecl();
+    return Anchor != nullptr && Anchor->getASTDecl() != nullptr;
+  }
+  if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(Ty)) {
+    auto *Anchor = RT->getBinder()->getAnchorDecl();
+    return Anchor != nullptr && Anchor->getASTDecl() != nullptr;
+  }
   return false;
 }
 
@@ -382,6 +390,12 @@ std::optional<uint64_t> estimateTypeWidthBitsImpl(
     }
     return std::nullopt;
   }
+  if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(Ty)) {
+    return RT->getBinder()->getSizeBits();
+  }
+  if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(Ty)) {
+    return RT->getBinder()->getSizeBits();
+  }
   if (auto *TT = llvm::dyn_cast<ast::TypedefType>(Ty)) {
     return estimateTypeWidthBitsImpl(TT->getDecl()->getType(), Visited);
   }
@@ -426,6 +440,147 @@ std::optional<uint64_t> estimateTypeWidthBits(const HType *Ty) {
 
 HType *ClangTypeResult::getStoredFieldValueType(HType *T, bool IsCovariant) {
   return stripStoredFieldAddressType(*Result->HTCtx, T, IsCovariant);
+}
+
+ast::TypedDecl *
+ClangTypeResult::getDirectAggregateFieldValueDecl(HType *StorageTy) {
+  auto *PT = llvm::dyn_cast<ast::PointerType>(StorageTy);
+  if (PT == nullptr || PT->getPointeeType() == nullptr) {
+    return nullptr;
+  }
+
+  HType *ValueTy = PT->getPointeeType();
+  if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(ValueTy)) {
+    return RT->getDecl();
+  }
+  if (auto *UT = llvm::dyn_cast<ast::UnionType>(ValueTy)) {
+    return UT->getDecl();
+  }
+  if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(ValueTy)) {
+    return RT->getBinder()->getAnchorDecl();
+  }
+  if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(ValueTy)) {
+    return RT->getBinder()->getAnchorDecl();
+  }
+  return nullptr;
+}
+
+std::string ClangTypeResult::formatAggregateDeclType(ast::TypedDecl *Decl) {
+  assert(Decl != nullptr && "aggregate decl cannot be null");
+  if (llvm::isa<ast::RecordDecl>(Decl)) {
+    return "struct " + Decl->getName();
+  }
+  if (llvm::isa<ast::UnionDecl>(Decl)) {
+    return "union " + Decl->getName();
+  }
+  llvm_unreachable("unsupported aggregate decl kind");
+}
+
+void ClangTypeResult::analyzeByValueAggregateCycles() {
+  if (HasAnalyzedByValueCycles) {
+    return;
+  }
+  HasAnalyzedByValueCycles = true;
+
+  std::map<ast::TypedDecl *,
+           std::vector<std::pair<ast::TypedDecl *, const ast::FieldDecl *>>>
+      Graph;
+  for (auto &Ent : Result->HTCtx->getDecls()) {
+    auto *Decl = Ent.second.get();
+    if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
+      for (const auto &Field : RD->getFields()) {
+        if (auto *Target = getDirectAggregateFieldValueDecl(Field.Type)) {
+          Graph[Decl].push_back({Target, &Field});
+        }
+      }
+    } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
+      for (const auto &Member : UD->getMembers()) {
+        if (auto *Target = getDirectAggregateFieldValueDecl(Member.Type)) {
+          Graph[Decl].push_back({Target, &Member});
+        }
+      }
+    }
+  }
+
+  std::map<ast::TypedDecl *, unsigned> Index;
+  std::map<ast::TypedDecl *, unsigned> LowLink;
+  std::vector<ast::TypedDecl *> Stack;
+  std::set<ast::TypedDecl *> OnStack;
+  unsigned NextIndex = 0;
+
+  std::function<void(ast::TypedDecl *)> Visit = [&](ast::TypedDecl *Decl) {
+    Index[Decl] = NextIndex;
+    LowLink[Decl] = NextIndex;
+    ++NextIndex;
+    Stack.push_back(Decl);
+    OnStack.insert(Decl);
+
+    for (const auto &Edge : Graph[Decl]) {
+      auto *Target = Edge.first;
+      if (!Index.count(Target)) {
+        Visit(Target);
+        LowLink[Decl] = std::min(LowLink[Decl], LowLink[Target]);
+      } else if (OnStack.count(Target)) {
+        LowLink[Decl] = std::min(LowLink[Decl], Index[Target]);
+      }
+    }
+
+    if (LowLink[Decl] != Index[Decl]) {
+      return;
+    }
+
+    std::set<ast::TypedDecl *> Component;
+    while (true) {
+      auto *Cur = Stack.back();
+      Stack.pop_back();
+      OnStack.erase(Cur);
+      Component.insert(Cur);
+      if (Cur == Decl) {
+        break;
+      }
+    }
+
+    bool IsCycle = Component.size() > 1;
+    if (!IsCycle) {
+      auto *Only = *Component.begin();
+      for (const auto &Edge : Graph[Only]) {
+        if (Edge.first == Only) {
+          IsCycle = true;
+          break;
+        }
+      }
+    }
+    if (!IsCycle) {
+      return;
+    }
+
+    for (auto *Cur : Component) {
+      for (const auto &Edge : Graph[Cur]) {
+        if (Component.count(Edge.first)) {
+          CyclicByValueFields.insert(Edge.second);
+        }
+      }
+    }
+  };
+
+  for (const auto &Ent : Result->HTCtx->getDecls()) {
+    auto *Decl = Ent.second.get();
+    if (!Index.count(Decl)) {
+      Visit(Decl);
+    }
+  }
+
+  if (!CyclicByValueFields.empty()) {
+    llvm::errs() << "notdec-llvm2c: detected " << CyclicByValueFields.size()
+                 << " by-value recursive aggregate field(s); printing the "
+                    "recovered invalid C shape while using pointer fields "
+                    "inside Clang AST\n";
+  }
+}
+
+bool ClangTypeResult::isCyclicByValueField(const ast::FieldDecl &Field) {
+  analyzeByValueAggregateCycles();
+  return CyclicByValueFields.count(&Field);
 }
 
 clang::ClassTemplateDecl *ClangTypeResult::getOrCreateDualPointerTemplateDecl() {
@@ -654,6 +809,16 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
         return lowerIntegerFallback(Ctx, *SizeBits, true);
       }
       return Ctx.VoidPtrTy;
+    } else if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(T)) {
+      auto *Anchor = RT->getBinder()->getAnchorDecl();
+      assert(Anchor != nullptr && "recursive binding missing anchor decl");
+      return Ctx.getRecordType(
+          llvm::cast<clang::RecordDecl>(getDecl(Anchor)));
+    } else if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(T)) {
+      auto *Anchor = RT->getBinder()->getAnchorDecl();
+      assert(Anchor != nullptr && "recursive ref missing anchor decl");
+      return Ctx.getRecordType(
+          llvm::cast<clang::RecordDecl>(getDecl(Anchor)));
     } else {
       assert(false && "convertDecl: Unhandled type");
     }
@@ -707,13 +872,22 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
   Ret->startDefinition();
   for (auto &Member : UD->getMembers()) {
-    auto QT = convertStoredFieldType(Member.Type);
+    auto *ValueTy = getStoredFieldValueType(Member.Type);
+    auto QT = toLValueType(Ctx, convertType(ValueTy));
+    auto *CycleTarget = getDirectAggregateFieldValueDecl(Member.Type);
+    bool BreakCycle = CycleTarget != nullptr && isCyclicByValueField(Member);
+    if (BreakCycle) {
+      QT = Ctx.getPointerType(convertType(ValueTy));
+    }
     auto *II = &Ctx.Idents.get(Member.Name);
     auto *FD = clang::FieldDecl::Create(
         Ctx, Ret, clang::SourceLocation(), clang::SourceLocation(), II, QT,
         nullptr, nullptr, false, clang::ICIS_NoInit);
     Ret->addDecl(FD);
     FieldDeclMap[FD] = &Member;
+    if (BreakCycle) {
+      ForcedFieldTypeStrings[FD] = formatAggregateDeclType(CycleTarget);
+    }
   }
   Ret->completeDefinition();
   TUD->addDecl(Ret);
@@ -729,7 +903,13 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
-    auto QT = convertStoredFieldType(Field.Type);
+    auto *ValueTy = getStoredFieldValueType(Field.Type);
+    auto QT = toLValueType(Ctx, convertType(ValueTy));
+    auto *CycleTarget = getDirectAggregateFieldValueDecl(Field.Type);
+    bool BreakCycle = CycleTarget != nullptr && isCyclicByValueField(Field);
+    if (BreakCycle) {
+      QT = Ctx.getPointerType(convertType(ValueTy));
+    }
     auto *II = &Ctx.Idents.get(Field.Name);
     auto *FD = clang::FieldDecl::Create(
         Ctx, Ret, clang::SourceLocation(), clang::SourceLocation(), II, QT,
@@ -737,6 +917,9 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
     Ret->addDecl(FD);
     Field.setASTDecl(FD);
     FieldDeclMap[FD] = &Field;
+    if (BreakCycle) {
+      ForcedFieldTypeStrings[FD] = formatAggregateDeclType(CycleTarget);
+    }
   }
   Ret->completeDefinition();
   TUD->addDecl(Ret);
@@ -761,6 +944,14 @@ void ClangTypeResult::defineDecls() {
             Visit(Ty->getAsRecordDecl());
           } else if (Ty->isUnionType()) {
             Visit(Ty->getAsUnionDecl());
+          } else if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(Ty)) {
+            if (auto *Anchor = RT->getBinder()->getAnchorDecl()) {
+              Visit(Anchor);
+            }
+          } else if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(Ty)) {
+            if (auto *Anchor = RT->getBinder()->getAnchorDecl()) {
+              Visit(Anchor);
+            }
           }
           // Skip simple type, pointer type, function type
         };
