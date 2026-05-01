@@ -41,7 +41,7 @@ class ClangTypeResult {
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
   clang::QualType convertType(HType *T);
-  HType *getStoredFieldValueType(HType *T);
+  HType *getStoredFieldValueType(HType *T, bool IsCovariant = true);
   clang::QualType convertStoredFieldType(HType *T) {
     return toLValueType(Ctx, convertType(getStoredFieldValueType(T)));
   }

@@ -25,6 +25,7 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
 #include <optional>
 #include <variant>
@@ -153,13 +154,74 @@ bool useDualPointerTemplateMode() {
   return Env != nullptr && Env[0] != '\0' && Env[0] != '0';
 }
 
-HType *stripStoredFieldAddressType(HType *Ty) {
-  if (auto *PT = llvm::dyn_cast<ast::PointerType>(Ty)) {
-    if (PT->getPointeeType() != nullptr) {
-      return PT->getPointeeType();
-    }
+[[noreturn]] void failStripStoredFieldAddressType(const HType *Ty,
+                                                  llvm::StringRef Reason) {
+  std::string Msg;
+  llvm::raw_string_ostream OS(Msg);
+  OS << "stripStoredFieldAddressType: " << Reason << ": ";
+  OS << (Ty == nullptr ? "<null>" : Ty->getAsString());
+  llvm::report_fatal_error(llvm::StringRef(OS.str()));
+}
+
+bool isVagueBoundType(const HType *Ty) {
+  return Ty != nullptr && (Ty->isTopType() || Ty->isBottomType());
+}
+
+HType *chooseDualPointerMemberType(const ast::DualPointerType *Ty,
+                                   bool IsCovariant) {
+  HType *LoadTy = Ty->getLoadType();
+  HType *StoreTy = Ty->getStoreType();
+  if (LoadTy == nullptr && StoreTy == nullptr) {
+    failStripStoredFieldAddressType(Ty, "dual pointer has no load/store type");
   }
-  return Ty;
+  if (LoadTy == nullptr) {
+    return StoreTy;
+  }
+  if (StoreTy == nullptr) {
+    return LoadTy;
+  }
+
+  bool LoadVague = isVagueBoundType(LoadTy);
+  bool StoreVague = isVagueBoundType(StoreTy);
+  if (LoadVague != StoreVague) {
+    return LoadVague ? StoreTy : LoadTy;
+  }
+
+  return IsCovariant ? StoreTy : LoadTy;
+}
+
+HType *lowerDualPointerView(ast::HTypeContext &Ctx,
+                            const ast::DualPointerType *Ty,
+                            bool IsCovariant) {
+  HType *MemberTy = chooseDualPointerMemberType(Ty, IsCovariant);
+  if (MemberTy == nullptr) {
+    failStripStoredFieldAddressType(Ty, "dual pointer member type is null");
+  }
+  return Ctx.getPointerType(Ty->isConst(), Ty->getPointerSize(), MemberTy);
+}
+
+HType *stripStoredFieldAddressType(ast::HTypeContext &Ctx, HType *Ty,
+                                   bool IsCovariant) {
+  if (Ty == nullptr) {
+    failStripStoredFieldAddressType(Ty, "type is null");
+  }
+  if (auto *PT = llvm::dyn_cast<ast::PointerType>(Ty)) {
+    HType *PointeeTy = PT->getPointeeType();
+    if (PointeeTy == nullptr) {
+      failStripStoredFieldAddressType(Ty, "pointer has no pointee type");
+    }
+    // A stored DualPointer value is still a pointer value after stripping the
+    // storage-address layer. Pick one view now so later C lowering does not use
+    // the generic load-first fallback.
+    if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(PointeeTy)) {
+      return lowerDualPointerView(Ctx, DPT, IsCovariant);
+    }
+    return PointeeTy;
+  }
+  if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(Ty)) {
+    return chooseDualPointerMemberType(DPT, IsCovariant);
+  }
+  failStripStoredFieldAddressType(Ty, "not a pointer-like type");
 }
 
 std::string sanitizeSingleLine(llvm::StringRef Text) {
@@ -362,8 +424,8 @@ std::optional<uint64_t> estimateTypeWidthBits(const HType *Ty) {
 
 } // namespace
 
-HType *ClangTypeResult::getStoredFieldValueType(HType *T) {
-  return stripStoredFieldAddressType(T);
+HType *ClangTypeResult::getStoredFieldValueType(HType *T, bool IsCovariant) {
+  return stripStoredFieldAddressType(*Result->HTCtx, T, IsCovariant);
 }
 
 clang::ClassTemplateDecl *ClangTypeResult::getOrCreateDualPointerTemplateDecl() {
@@ -691,7 +753,6 @@ void ClangTypeResult::defineDecls() {
       [&](notdec::ast::TypedDecl *Decl) -> void {
     std::function<void(notdec::ast::HType *)> VisitType =
         [&](notdec::ast::HType *Ty) {
-          Ty = getStoredFieldValueType(Ty);
           if (Ty->isArrayType()) {
             VisitType(Ty->getArrayElementType());
           } else if (Ty->isTypedefType()) {
@@ -718,14 +779,14 @@ void ClangTypeResult::defineDecls() {
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
       for (auto &Field : RD->getFields()) {
-        VisitType(Field.Type);
+        VisitType(getStoredFieldValueType(Field.Type));
       }
       auto *CDecl = convertStruct(RD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
       ASTDecl = CDecl;
     } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
       for (auto &Member : UD->getMembers()) {
-        VisitType(Member.Type);
+        VisitType(getStoredFieldValueType(Member.Type));
       }
       auto *CDecl = convertUnion(UD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
