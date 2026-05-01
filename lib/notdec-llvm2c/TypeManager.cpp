@@ -219,7 +219,21 @@ HType *stripStoredFieldAddressType(ast::HTypeContext &Ctx, HType *Ty,
     return PointeeTy;
   }
   if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(Ty)) {
-    return chooseDualPointerMemberType(DPT, IsCovariant);
+    return lowerDualPointerView(Ctx, DPT, IsCovariant);
+  }
+  if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
+    std::vector<HType *> Terms;
+    for (auto *Term : Set->getTypes()) {
+      Terms.push_back(stripStoredFieldAddressType(Ctx, Term, IsCovariant));
+    }
+    return Ctx.getSetUnionType(Ty->isConst(), std::move(Terms));
+  }
+  if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
+    std::vector<HType *> Terms;
+    for (auto *Term : Set->getTypes()) {
+      Terms.push_back(stripStoredFieldAddressType(Ctx, Term, IsCovariant));
+    }
+    return Ctx.getSetInterType(Ty->isConst(), std::move(Terms));
   }
   failStripStoredFieldAddressType(Ty, "not a pointer-like type");
 }
@@ -444,25 +458,41 @@ HType *ClangTypeResult::getStoredFieldValueType(HType *T, bool IsCovariant) {
 
 ast::TypedDecl *
 ClangTypeResult::getDirectAggregateFieldValueDecl(HType *StorageTy) {
-  auto *PT = llvm::dyn_cast<ast::PointerType>(StorageTy);
-  if (PT == nullptr || PT->getPointeeType() == nullptr) {
+  std::function<ast::TypedDecl *(HType *)> FindDirectAggregate =
+      [&](HType *ValueTy) -> ast::TypedDecl * {
+    if (ValueTy == nullptr || ValueTy->isPointerType() ||
+        ValueTy->isDualPointerType()) {
+      return nullptr;
+    }
+    if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(ValueTy)) {
+      return RT->getDecl();
+    }
+    if (auto *UT = llvm::dyn_cast<ast::UnionType>(ValueTy)) {
+      return UT->getDecl();
+    }
+    if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(ValueTy)) {
+      return RT->getBinder()->getAnchorDecl();
+    }
+    if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(ValueTy)) {
+      return RT->getBinder()->getAnchorDecl();
+    }
+    if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(ValueTy)) {
+      for (auto *Term : Set->getTypes()) {
+        if (auto *Decl = FindDirectAggregate(Term)) {
+          return Decl;
+        }
+      }
+    } else if (auto *Set = llvm::dyn_cast<ast::SetInterType>(ValueTy)) {
+      for (auto *Term : Set->getTypes()) {
+        if (auto *Decl = FindDirectAggregate(Term)) {
+          return Decl;
+        }
+      }
+    }
     return nullptr;
-  }
+  };
 
-  HType *ValueTy = PT->getPointeeType();
-  if (auto *RT = llvm::dyn_cast<ast::RecordPtrType>(ValueTy)) {
-    return RT->getDecl();
-  }
-  if (auto *UT = llvm::dyn_cast<ast::UnionType>(ValueTy)) {
-    return UT->getDecl();
-  }
-  if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(ValueTy)) {
-    return RT->getBinder()->getAnchorDecl();
-  }
-  if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(ValueTy)) {
-    return RT->getBinder()->getAnchorDecl();
-  }
-  return nullptr;
+  return FindDirectAggregate(getStoredFieldValueType(StorageTy));
 }
 
 std::string ClangTypeResult::formatAggregateDeclType(ast::TypedDecl *Decl) {
@@ -833,20 +863,38 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
 
 void ClangTypeResult::calcUseRelation() {
   assert(DeclUsage.empty() && ValueUsage.empty());
+  auto CollectDeclUsage = [&](ast::TypedDecl *Owner, HType *Ty) {
+    std::function<void(HType *)> Visit = [&](HType *Cur) {
+      if (Cur == nullptr || Cur->isPointerType() || Cur->isDualPointerType()) {
+        return;
+      }
+      if (auto Decl = Cur->getAsRecordDecl()) {
+        DeclUsage[Owner].insert(Decl);
+      }
+      if (auto Decl = Cur->getAsUnionDecl()) {
+        DeclUsage[Owner].insert(Decl);
+      }
+      if (auto Decl = Cur->getAsTypedefDecl()) {
+        DeclUsage[Owner].insert(Decl);
+      }
+      if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Cur)) {
+        for (auto *Term : Set->getTypes()) {
+          Visit(Term);
+        }
+      } else if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Cur)) {
+        for (auto *Term : Set->getTypes()) {
+          Visit(Term);
+        }
+      }
+    };
+    Visit(Ty);
+  };
+
   // Only record direct usage.
   for (auto &Ent : Result->HTCtx->getDecls()) {
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Ent.second.get())) {
       for (auto &Field : RD->getFields()) {
-        auto *ValueTy = getStoredFieldValueType(Field.Type);
-        if (auto Decl = ValueTy->getAsRecordDecl()) {
-          DeclUsage[RD].insert(Decl);
-        }
-        if (auto Decl = ValueTy->getAsUnionDecl()) {
-          DeclUsage[RD].insert(Decl);
-        }
-        if (auto Decl = ValueTy->getAsTypedefDecl()) {
-          DeclUsage[RD].insert(Decl);
-        }
+        CollectDeclUsage(RD, getStoredFieldValueType(Field.Type));
       }
     }
   }
@@ -952,6 +1000,14 @@ void ClangTypeResult::defineDecls() {
           } else if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(Ty)) {
             if (auto *Anchor = RT->getBinder()->getAnchorDecl()) {
               Visit(Anchor);
+            }
+          } else if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
+            for (auto *Term : Set->getTypes()) {
+              VisitType(Term);
+            }
+          } else if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
+            for (auto *Term : Set->getTypes()) {
+              VisitType(Term);
             }
           }
           // Skip simple type, pointer type, function type
