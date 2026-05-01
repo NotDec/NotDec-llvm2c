@@ -534,6 +534,15 @@ void DeclPrinter::VisitFieldDecl(FieldDecl *D) {
   if (!Policy.SuppressSpecifiers && D->isModulePrivate())
     Out << "__module_private__ ";
 
+  if (CT) {
+    if (auto ForcedTy = CT->getForcedFieldTypeString(D)) {
+      Out << *ForcedTy << " " << D->getName();
+      prettyPrintAttributes(D);
+      printDeclComments(D);
+      return;
+    }
+  }
+
   Out << D->getASTContext()
              .getUnqualifiedObjCPointerType(D->getType())
              .stream(Policy, D->getName(), Indentation);

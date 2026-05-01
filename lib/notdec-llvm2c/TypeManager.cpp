@@ -571,7 +571,8 @@ void ClangTypeResult::analyzeByValueAggregateCycles() {
   }
 
   if (!CyclicByValueFields.empty()) {
-    llvm::errs() << "notdec-llvm2c: detected " << CyclicByValueFields.size()
+    llvm::errs() << "Warning: notdec-llvm2c detected "
+                 << CyclicByValueFields.size()
                  << " by-value recursive aggregate field(s); printing the "
                     "recovered invalid C shape while using pointer fields "
                     "inside Clang AST\n";
