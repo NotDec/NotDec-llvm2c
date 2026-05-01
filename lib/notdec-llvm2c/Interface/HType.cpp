@@ -81,6 +81,14 @@ void appendCommentIfPresent(llvm::raw_ostream &OS, llvm::StringRef Comment) {
   OS << " /* " << Comment << " */";
 }
 
+std::string getRecursiveBinderDisplayName(const RecursiveBinder *Binder) {
+  assert(Binder != nullptr && "Recursive binder cannot be null");
+  if (auto *Anchor = Binder->getAnchorDecl()) {
+    return Anchor->getName();
+  }
+  return Binder->getName();
+}
+
 } // namespace
 
 // HTypeContext HTypeContext::Instance;
@@ -279,6 +287,12 @@ std::string HType::getAsString(int Precedence) const {
     }
     return TV->getName() + ":" + std::to_string(*SizeBits);
   }
+  case TK_RecursiveBinding:
+    return "struct " + getRecursiveBinderDisplayName(
+                            llvm::cast<RecursiveBindingType>(this)->getBinder());
+  case TK_RecursiveRef:
+    return "struct " + getRecursiveBinderDisplayName(
+                            llvm::cast<RecursiveRefType>(this)->getBinder());
   default:
     assert(false && "Unknown HType");
   }
@@ -335,6 +349,12 @@ std::string HTypeSnapshotFormatter::getDeclName(const TypedDecl &Decl) {
   }
 
   std::string Name;
+  if (Decl.getName().rfind("rec_", 0) == 0) {
+    Name = Decl.getName();
+    DeclNames.emplace(&Decl, Name);
+    DeclOrder.push_back(&Decl);
+    return Name;
+  }
   switch (Decl.getKind()) {
   case TypedDecl::DK_Record:
     Name = "struct_" + std::to_string(NextStructId++);
@@ -380,6 +400,23 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
   case HType::TK_Float:
   case HType::TK_TypeVariable:
     return;
+  case HType::TK_RecursiveBinding: {
+    auto *Binder = llvm::cast<RecursiveBindingType>(Type)->getBinder();
+    if (auto *Anchor = Binder->getAnchorDecl()) {
+      collectDecl(*Anchor);
+      return;
+    }
+    collectType(Binder->getBody());
+    return;
+  }
+  case HType::TK_RecursiveRef: {
+    auto *Binder = llvm::cast<RecursiveRefType>(Type)->getBinder();
+    if (auto *Anchor = Binder->getAnchorDecl()) {
+      collectDecl(*Anchor);
+      return;
+    }
+    return;
+  }
   case HType::TK_Pointer:
     collectType(Type->getPointeeType());
     return;
@@ -559,6 +596,20 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
       return TV->getName();
     }
     return TV->getName() + ":" + std::to_string(*SizeBits);
+  }
+  case HType::TK_RecursiveBinding: {
+    auto *Binder = llvm::cast<RecursiveBindingType>(Type)->getBinder();
+    if (auto *Anchor = Binder->getAnchorDecl()) {
+      return getDeclName(*Anchor);
+    }
+    return Binder->getName();
+  }
+  case HType::TK_RecursiveRef: {
+    auto *Binder = llvm::cast<RecursiveRefType>(Type)->getBinder();
+    if (auto *Anchor = Binder->getAnchorDecl()) {
+      return getDeclName(*Anchor);
+    }
+    return Binder->getName();
   }
   }
   assert(false && "Unknown HType");

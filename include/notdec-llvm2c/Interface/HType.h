@@ -28,6 +28,7 @@ class TypedefType;
 class RecordPtrType;
 class HType;
 class HTypeSnapshotFormatter;
+class RecursiveBinder;
 
 /*
 TypedDecl Architecture:
@@ -222,6 +223,33 @@ public:
 
 SimpleRange getRange(const TypedDecl *Decl);
 
+class RecursiveBinder {
+  std::string Name;
+  HType *Body = nullptr;
+  std::optional<unsigned> SizeBits;
+  TypedDecl *AnchorDecl = nullptr;
+
+  RecursiveBinder(std::string Name, std::optional<unsigned> SizeBits)
+      : Name(std::move(Name)), SizeBits(SizeBits) {}
+  friend class HTypeContext;
+
+public:
+  const std::string &getName() const { return Name; }
+  HType *getBody() const { return Body; }
+  void setBody(HType *Ty) {
+    assert(Body == nullptr && "Recursive binder body already set");
+    assert(Ty != nullptr && "Recursive binder body cannot be null");
+    Body = Ty;
+  }
+  std::optional<unsigned> getSizeBits() const { return SizeBits; }
+  TypedDecl *getAnchorDecl() const { return AnchorDecl; }
+  void setAnchorDecl(TypedDecl *Decl) {
+    assert(AnchorDecl == nullptr && "Recursive binder anchor already set");
+    assert(Decl != nullptr && "Recursive binder anchor cannot be null");
+    AnchorDecl = Decl;
+  }
+};
+
 /*
 Type Architecture:
   - SimpleType
@@ -256,7 +284,9 @@ public:
     TK_Array,
     // End of CompoundType
     TK_Typedef,
-    TK_TypeVariable  // Type variable, similar to C++ template parameter
+    TK_TypeVariable, // Type variable, similar to C++ template parameter
+    TK_RecursiveBinding,
+    TK_RecursiveRef,
   };
 
 protected:
@@ -285,6 +315,8 @@ public:
   bool isArrayType() const { return Kind == TK_Array; }
   bool isTypedefType() const { return Kind == TK_Typedef; }
   bool isTypeVariableType() const { return Kind == TK_TypeVariable; }
+  bool isRecursiveBindingType() const { return Kind == TK_RecursiveBinding; }
+  bool isRecursiveRefType() const { return Kind == TK_RecursiveRef; }
   bool isCharType() const;
   bool isCharArrayType() const;
   bool isVoidPtrType() const;
@@ -525,6 +557,34 @@ public:
   std::optional<unsigned> getSizeBits() const { return SizeBits; }
 };
 
+class RecursiveBindingType : public HType {
+  RecursiveBinder *Binder;
+
+  RecursiveBindingType(bool IsConst, HType *Canon, RecursiveBinder *Binder)
+      : HType(TK_RecursiveBinding, Canon, IsConst), Binder(Binder) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) {
+    return T->getKind() == TK_RecursiveBinding;
+  }
+  RecursiveBinder *getBinder() const { return Binder; }
+};
+
+class RecursiveRefType : public HType {
+  RecursiveBinder *Binder;
+
+  RecursiveRefType(bool IsConst, HType *Canon, RecursiveBinder *Binder)
+      : HType(TK_RecursiveRef, Canon, IsConst), Binder(Binder) {}
+  friend class HTypeContext;
+
+public:
+  static bool classof(const HType *T) {
+    return T->getKind() == TK_RecursiveRef;
+  }
+  RecursiveBinder *getBinder() const { return Binder; }
+};
+
 /* Factory class implementation */
 class HTypeContext {
 
@@ -558,6 +618,13 @@ class HTypeContext {
   using TypeVariableKey =
       std::tuple<bool, std::string, std::optional<unsigned>>;
   std::map<TypeVariableKey, std::unique_ptr<TypeVariableType>> TypeVariableTypes;
+
+  std::vector<std::unique_ptr<RecursiveBinder>> RecursiveBinders;
+  using RecursiveTypeKey = std::tuple<bool, RecursiveBinder *>;
+  std::map<RecursiveTypeKey, std::unique_ptr<RecursiveBindingType>>
+      RecursiveBindingTypes;
+  std::map<RecursiveTypeKey, std::unique_ptr<RecursiveRefType>>
+      RecursiveRefTypes;
 
   using FunctionKey =
       std::tuple<bool, std::vector<HType *>, std::vector<HType *>>;
@@ -836,6 +903,41 @@ public:
       entry.reset(new TypeVariableType(IsConst, Name, SizeBits));
     }
     return entry.get();
+  }
+
+  RecursiveBinder *createRecursiveBinder(
+      std::string Name, std::optional<unsigned> SizeBits = std::nullopt) {
+    RecursiveBinders.emplace_back(
+        new RecursiveBinder(std::move(Name), SizeBits));
+    return RecursiveBinders.back().get();
+  }
+
+  HType *getRecursiveBindingType(bool IsConst, RecursiveBinder *Binder) {
+    assert(Binder != nullptr && "Recursive binder cannot be null");
+    auto Key = std::make_tuple(IsConst, Binder);
+    auto &Entry = RecursiveBindingTypes[Key];
+    if (!Entry) {
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getRecursiveBindingType(false, Binder);
+      }
+      Entry.reset(new RecursiveBindingType(IsConst, Canon, Binder));
+    }
+    return Entry.get();
+  }
+
+  HType *getRecursiveRefType(bool IsConst, RecursiveBinder *Binder) {
+    assert(Binder != nullptr && "Recursive binder cannot be null");
+    auto Key = std::make_tuple(IsConst, Binder);
+    auto &Entry = RecursiveRefTypes[Key];
+    if (!Entry) {
+      HType *Canon = nullptr;
+      if (IsConst) {
+        Canon = getRecursiveRefType(false, Binder);
+      }
+      Entry.reset(new RecursiveRefType(IsConst, Canon, Binder));
+    }
+    return Entry.get();
   }
 
   void printDecls(llvm::raw_ostream &OS) {
