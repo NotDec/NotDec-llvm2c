@@ -219,7 +219,7 @@ HType *stripStoredFieldAddressType(ast::HTypeContext &Ctx, HType *Ty,
     return PointeeTy;
   }
   if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(Ty)) {
-    return lowerDualPointerView(Ctx, DPT, IsCovariant);
+    return chooseDualPointerMemberType(DPT, IsCovariant);
   }
   if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
     std::vector<HType *> Terms;
