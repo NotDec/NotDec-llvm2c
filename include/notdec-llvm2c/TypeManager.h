@@ -46,17 +46,13 @@ class ClangTypeResult {
   // printer uses this original aggregate spelling to show the recovered shape.
   std::map<clang::FieldDecl *, std::string> ForcedFieldTypeStrings;
   // Original HType fields that participate in a direct by-value aggregate
-  // cycle after stored-field address stripping.
+  // cycle.
   std::set<const ast::FieldDecl *> CyclicByValueFields;
   bool HasAnalyzedByValueCycles = false;
   clang::ClassTemplateDecl *DualPointerTemplateDecl = nullptr;
 
   clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
   clang::QualType convertType(HType *T);
-  HType *getStoredFieldValueType(HType *T, bool IsCovariant = true);
-  clang::QualType convertStoredFieldType(HType *T) {
-    return toLValueType(Ctx, convertType(getStoredFieldValueType(T)));
-  }
   clang::ClassTemplateDecl *getOrCreateDualPointerTemplateDecl();
   clang::QualType convertDualPointerTemplateType(const ast::DualPointerType *T);
   clang::QualType convertTypeL(HType *T) {

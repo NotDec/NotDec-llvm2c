@@ -154,90 +154,6 @@ bool useDualPointerTemplateMode() {
   return Env != nullptr && Env[0] != '\0' && Env[0] != '0';
 }
 
-[[noreturn]] void failStripStoredFieldAddressType(const HType *Ty,
-                                                  llvm::StringRef Reason) {
-  std::string Msg;
-  llvm::raw_string_ostream OS(Msg);
-  OS << "stripStoredFieldAddressType: " << Reason << ": ";
-  OS << (Ty == nullptr ? "<null>" : Ty->getAsString());
-  llvm::report_fatal_error(llvm::StringRef(OS.str()));
-}
-
-bool isVagueBoundType(const HType *Ty) {
-  return Ty != nullptr && (Ty->isTopType() || Ty->isBottomType());
-}
-
-HType *chooseDualPointerMemberType(const ast::DualPointerType *Ty,
-                                   bool IsCovariant) {
-  HType *LoadTy = Ty->getLoadType();
-  HType *StoreTy = Ty->getStoreType();
-  if (LoadTy == nullptr && StoreTy == nullptr) {
-    failStripStoredFieldAddressType(Ty, "dual pointer has no load/store type");
-  }
-  if (LoadTy == nullptr) {
-    return StoreTy;
-  }
-  if (StoreTy == nullptr) {
-    return LoadTy;
-  }
-
-  bool LoadVague = isVagueBoundType(LoadTy);
-  bool StoreVague = isVagueBoundType(StoreTy);
-  if (LoadVague != StoreVague) {
-    return LoadVague ? StoreTy : LoadTy;
-  }
-
-  return IsCovariant ? StoreTy : LoadTy;
-}
-
-HType *lowerDualPointerView(ast::HTypeContext &Ctx,
-                            const ast::DualPointerType *Ty,
-                            bool IsCovariant) {
-  HType *MemberTy = chooseDualPointerMemberType(Ty, IsCovariant);
-  if (MemberTy == nullptr) {
-    failStripStoredFieldAddressType(Ty, "dual pointer member type is null");
-  }
-  return Ctx.getPointerType(Ty->isConst(), Ty->getPointerSize(), MemberTy);
-}
-
-HType *stripStoredFieldAddressType(ast::HTypeContext &Ctx, HType *Ty,
-                                   bool IsCovariant) {
-  if (Ty == nullptr) {
-    failStripStoredFieldAddressType(Ty, "type is null");
-  }
-  if (auto *PT = llvm::dyn_cast<ast::PointerType>(Ty)) {
-    HType *PointeeTy = PT->getPointeeType();
-    if (PointeeTy == nullptr) {
-      failStripStoredFieldAddressType(Ty, "pointer has no pointee type");
-    }
-    // A stored DualPointer value is still a pointer value after stripping the
-    // storage-address layer. Pick one view now so later C lowering does not use
-    // the generic load-first fallback.
-    if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(PointeeTy)) {
-      return lowerDualPointerView(Ctx, DPT, IsCovariant);
-    }
-    return PointeeTy;
-  }
-  if (auto *DPT = llvm::dyn_cast<ast::DualPointerType>(Ty)) {
-    return chooseDualPointerMemberType(DPT, IsCovariant);
-  }
-  if (auto *Set = llvm::dyn_cast<ast::SetUnionType>(Ty)) {
-    std::vector<HType *> Terms;
-    for (auto *Term : Set->getTypes()) {
-      Terms.push_back(stripStoredFieldAddressType(Ctx, Term, IsCovariant));
-    }
-    return Ctx.getSetUnionType(Ty->isConst(), std::move(Terms));
-  }
-  if (auto *Set = llvm::dyn_cast<ast::SetInterType>(Ty)) {
-    std::vector<HType *> Terms;
-    for (auto *Term : Set->getTypes()) {
-      Terms.push_back(stripStoredFieldAddressType(Ctx, Term, IsCovariant));
-    }
-    return Ctx.getSetInterType(Ty->isConst(), std::move(Terms));
-  }
-  failStripStoredFieldAddressType(Ty, "not a pointer-like type");
-}
-
 std::string sanitizeSingleLine(llvm::StringRef Text) {
   std::string Result = Text.str();
   for (char &Ch : Result) {
@@ -452,10 +368,6 @@ std::optional<uint64_t> estimateTypeWidthBits(const HType *Ty) {
 
 } // namespace
 
-HType *ClangTypeResult::getStoredFieldValueType(HType *T, bool IsCovariant) {
-  return stripStoredFieldAddressType(*Result->HTCtx, T, IsCovariant);
-}
-
 ast::TypedDecl *
 ClangTypeResult::getDirectAggregateFieldValueDecl(HType *StorageTy) {
   std::function<ast::TypedDecl *(HType *)> FindDirectAggregate =
@@ -492,7 +404,7 @@ ClangTypeResult::getDirectAggregateFieldValueDecl(HType *StorageTy) {
     return nullptr;
   };
 
-  return FindDirectAggregate(getStoredFieldValueType(StorageTy));
+  return FindDirectAggregate(StorageTy);
 }
 
 std::string ClangTypeResult::formatAggregateDeclType(ast::TypedDecl *Decl) {
@@ -894,7 +806,7 @@ void ClangTypeResult::calcUseRelation() {
   for (auto &Ent : Result->HTCtx->getDecls()) {
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Ent.second.get())) {
       for (auto &Field : RD->getFields()) {
-        CollectDeclUsage(RD, getStoredFieldValueType(Field.Type));
+        CollectDeclUsage(RD, Field.Type);
       }
     }
   }
@@ -921,7 +833,7 @@ clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
   Ret->startDefinition();
   for (auto &Member : UD->getMembers()) {
-    auto *ValueTy = getStoredFieldValueType(Member.Type);
+    auto *ValueTy = Member.Type;
     auto QT = toLValueType(Ctx, convertType(ValueTy));
     auto *CycleTarget = getDirectAggregateFieldValueDecl(Member.Type);
     bool BreakCycle = CycleTarget != nullptr && isCyclicByValueField(Member);
@@ -952,7 +864,7 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
   auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
-    auto *ValueTy = getStoredFieldValueType(Field.Type);
+    auto *ValueTy = Field.Type;
     auto QT = toLValueType(Ctx, convertType(ValueTy));
     auto *CycleTarget = getDirectAggregateFieldValueDecl(Field.Type);
     bool BreakCycle = CycleTarget != nullptr && isCyclicByValueField(Field);
@@ -1027,14 +939,14 @@ void ClangTypeResult::defineDecls() {
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
       for (auto &Field : RD->getFields()) {
-        VisitType(getStoredFieldValueType(Field.Type));
+        VisitType(Field.Type);
       }
       auto *CDecl = convertStruct(RD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
       ASTDecl = CDecl;
     } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
       for (auto &Member : UD->getMembers()) {
-        VisitType(getStoredFieldValueType(Member.Type));
+        VisitType(Member.Type);
       }
       auto *CDecl = convertUnion(UD);
       CDecl->setPreviousDecl(llvm::cast<clang::TagDecl>(OldDecl));
@@ -1380,7 +1292,7 @@ void ClangTypeResult::createMemoryDecls() {
           Name = "global_" + Name;
         }
         clang::IdentifierInfo *II = &Ctx.Idents.get(Name);
-        auto CType = convertStoredFieldType(Field.Type);
+        auto CType = toLValueType(Ctx, convertType(Field.Type));
         clang::VarDecl *VD = clang::VarDecl::Create(
             Ctx, TUD, clang::SourceLocation(), clang::SourceLocation(), II,
             CType, nullptr, clang::SC_None);

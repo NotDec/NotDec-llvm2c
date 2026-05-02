@@ -77,10 +77,9 @@ private:
 class FieldDecl {
 public:
   SimpleRange R;
-  // Field.Type describes the recovered field storage/address shape. For a
-  // normal by-value member this means one extra pointer-like layer around the
-  // actual member type; callers that need the C member type must strip that
-  // layer first.
+  // Field.Type stores the recovered member type directly. A top-level
+  // DualPointerType here is a pointer-like member, not a storage wrapper to
+  // strip.
   HType *Type;
   std::string Name;
   std::string Comment;
