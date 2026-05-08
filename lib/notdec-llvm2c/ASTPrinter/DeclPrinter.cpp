@@ -113,7 +113,7 @@ void DeclPrinter::printDeclType(QualType T, StringRef DeclName, bool Pack) {
   SmallString<128> PHBuf;
   StringRef PH = PlaceHolder.toStringRef(PHBuf);
 
-  if (Policy.PrintCanonicalTypes)
+  if (Policy.PrintAsCanonical)
     T = T.getCanonicalType();
   auto ty = T.split();
 
@@ -149,10 +149,12 @@ void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent, std::function<b
     QualType CurDeclType = getDeclType(*D);
     if (!Decls.empty() && !CurDeclType.isNull()) {
       QualType BaseType = GetBaseType(CurDeclType);
-      if (!BaseType.isNull() && isa<ElaboratedType>(BaseType) &&
-          cast<ElaboratedType>(BaseType)->getOwnedTagDecl() == Decls[0]) {
-        Decls.push_back(*D);
-        continue;
+      if (!BaseType.isNull()) {
+        if (const auto *TT = BaseType->getAs<TagType>();
+            TT != nullptr && TT->isTagOwned() && TT->getDecl() == Decls[0]) {
+          Decls.push_back(*D);
+          continue;
+        }
       }
     }
 
@@ -388,8 +390,8 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
   } else {
     llvm::raw_string_ostream OS(Proto);
     if (!Policy.SuppressScope) {
-      if (const NestedNameSpecifier *NS = D->getQualifier()) {
-        NS->print(OS, Policy);
+      if (auto NS = D->getQualifier()) {
+        NS.print(OS, Policy);
       }
     }
     D->getNameInfo().printName(OS, Policy);
@@ -481,10 +483,12 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
 
     Out << Proto;
 
-    if (Expr *TrailingRequiresClause = D->getTrailingRequiresClause()) {
+    if (const AssociatedConstraint &TrailingRequiresClause =
+            D->getTrailingRequiresClause();
+        TrailingRequiresClause) {
       Out << " requires ";
-      TrailingRequiresClause->printPretty(Out, nullptr, SubPolicy, Indentation,
-                                          "\n", &Context);
+      TrailingRequiresClause.ConstraintExpr->printPretty(
+          Out, nullptr, SubPolicy, Indentation, "\n", &Context);
     }
   } else {
     Ty.print(Out, Policy, Proto);
@@ -493,7 +497,7 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
   prettyPrintAttributes(D);
   printDeclComments(D);
 
-  if (D->isPure())
+  if (D->isPureVirtual())
     Out << " = 0";
   else if (D->isDeletedAsWritten())
     Out << " = delete";

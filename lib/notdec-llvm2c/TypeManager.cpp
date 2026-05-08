@@ -24,6 +24,7 @@
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/Endian.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
@@ -137,7 +138,7 @@ void ClangTypeResult::writeValueCTypes(llvm::StringRef Path) {
 
 clang::RecordDecl *createRecordDecl(clang::ASTContext &Ctx,
                                     TranslationUnitDecl *TUD,
-                                    clang::TagDecl::TagKind Kind,
+                                    clang::TagTypeKind Kind,
                                     llvm::StringRef Name) {
   auto *II = &Ctx.Idents.get(Name);
   // Create a Struct type for it.
@@ -281,7 +282,8 @@ clang::QualType lowerIntegerFallback(clang::ASTContext &Ctx, unsigned BitSize,
   auto Ret = Ctx.getIntTypeForBitwidth(BitSize, IsSigned);
   if (Ret.isNull()) {
     Ret = Ctx.getConstantArrayType(Ctx.CharTy, llvm::APInt(32, BitSize / 8),
-                                   nullptr, clang::ArrayType::Normal, 0);
+                                   nullptr, clang::ArraySizeModifier::Normal,
+                                   0);
   }
   return Ret;
 }
@@ -549,7 +551,7 @@ clang::ClassTemplateDecl *ClangTypeResult::getOrCreateDualPointerTemplateDecl() 
                                            clang::SourceLocation(), nullptr);
 
   auto *Record = clang::CXXRecordDecl::Create(
-      Ctx, clang::TTK_Union, TUD, clang::SourceLocation(),
+      Ctx, clang::TagTypeKind::Union, TUD, clang::SourceLocation(),
       clang::SourceLocation(), &PtrId);
   auto *Template = clang::ClassTemplateDecl::Create(
       Ctx, TUD, clang::SourceLocation(), clang::DeclarationName(&PtrId),
@@ -595,8 +597,9 @@ ClangTypeResult::convertDualPointerTemplateType(const ast::DualPointerType *T) {
       clang::TemplateArgument(lowerViewType(T->getLoadType())),
       clang::TemplateArgument(lowerViewType(T->getStoreType()))};
 
-  auto Ret = Ctx.getTemplateSpecializationType(clang::TemplateName(TemplateDecl),
-                                               Args);
+  auto Ret = Ctx.getTemplateSpecializationType(
+      clang::ElaboratedTypeKeyword::None, clang::TemplateName(TemplateDecl),
+      Args, {}, clang::QualType());
   if (T->isConst()) {
     Ret = Ret.withConst();
   }
@@ -732,21 +735,25 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
         return Ctx.getConstantArrayType(
             convertType(AT->getElementType()),
             llvm::APInt(32, *AT->getNumElements()), nullptr,
-            clang::ArrayType::ArraySizeModifier::Normal, 0);
+            clang::ArraySizeModifier::Normal, 0);
       } else {
         return Ctx.getConstantArrayType(convertType(AT->getElementType()),
                                         llvm::APInt(32, 0), nullptr,
-                                        clang::ArrayType::Star, 0);
+                                        clang::ArraySizeModifier::Star, 0);
       }
     } else if (auto *RT = llvm::dyn_cast<ast::RecordType>(T)) {
-      return Ctx.getRecordType(
-          llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl())));
+      return Ctx.getTagType(clang::ElaboratedTypeKeyword::None, std::nullopt,
+                            llvm::cast<clang::RecordDecl>(getDecl(RT->getDecl())),
+                            false);
     } else if (auto *UT = llvm::dyn_cast<ast::UnionType>(T)) {
-      return Ctx.getRecordType(
-          llvm::cast<clang::RecordDecl>(getDecl(UT->getDecl())));
+      return Ctx.getTagType(clang::ElaboratedTypeKeyword::None, std::nullopt,
+                            llvm::cast<clang::RecordDecl>(getDecl(UT->getDecl())),
+                            false);
     } else if (auto *TT = llvm::dyn_cast<ast::TypedefType>(T)) {
-      return Ctx.getTypedefType(
-          llvm::cast<clang::TypedefDecl>(getDecl(TT->getDecl())));
+      return Ctx.getTypedefType(clang::ElaboratedTypeKeyword::None,
+                                std::nullopt,
+                                llvm::cast<clang::TypedefDecl>(
+                                    getDecl(TT->getDecl())));
     } else if (auto *TV = llvm::dyn_cast<ast::TypeVariableType>(T)) {
       if (auto SizeBits = TV->getSizeBits()) {
         return lowerIntegerFallback(Ctx, *SizeBits, true);
@@ -755,13 +762,15 @@ clang::QualType ClangTypeResult::convertType(HType *T) {
     } else if (auto *RT = llvm::dyn_cast<ast::RecursiveBindingType>(T)) {
       auto *Anchor = RT->getBinder()->getAnchorDecl();
       assert(Anchor != nullptr && "recursive binding missing anchor decl");
-      return Ctx.getRecordType(
-          llvm::cast<clang::RecordDecl>(getDecl(Anchor)));
+      return Ctx.getTagType(clang::ElaboratedTypeKeyword::None, std::nullopt,
+                            llvm::cast<clang::RecordDecl>(getDecl(Anchor)),
+                            false);
     } else if (auto *RT = llvm::dyn_cast<ast::RecursiveRefType>(T)) {
       auto *Anchor = RT->getBinder()->getAnchorDecl();
       assert(Anchor != nullptr && "recursive ref missing anchor decl");
-      return Ctx.getRecordType(
-          llvm::cast<clang::RecordDecl>(getDecl(Anchor)));
+      return Ctx.getTagType(clang::ElaboratedTypeKeyword::None, std::nullopt,
+                            llvm::cast<clang::RecordDecl>(getDecl(Anchor)),
+                            false);
     } else {
       assert(false && "convertDecl: Unhandled type");
     }
@@ -830,7 +839,8 @@ void ClangTypeResult::calcUseRelation() {
 
 clang::RecordDecl *ClangTypeResult::convertUnion(ast::UnionDecl *UD) {
   auto *TUD = AM->getTypeDefinitions();
-  auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
+  auto Ret = createRecordDecl(Ctx, TUD, clang::TagTypeKind::Union,
+                              UD->getName());
   Ret->startDefinition();
   for (auto &Member : UD->getMembers()) {
     auto *ValueTy = Member.Type;
@@ -861,7 +871,8 @@ clang::RecordDecl *ClangTypeResult::convertStruct(ast::RecordDecl *RD,
   if (isMemory) {
     TUD = AM->getGlobalDefinitions();
   }
-  auto Ret = createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
+  auto Ret = createRecordDecl(Ctx, TUD, clang::TagTypeKind::Struct,
+                              RD->getName());
   Ret->startDefinition();
   for (auto &Field : RD->getFields()) {
     auto *ValueTy = Field.Type;
@@ -992,10 +1003,12 @@ void ClangTypeResult::declareDecls() {
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
       auto *CDecl =
-          createRecordDecl(Ctx, TUD, clang::TTK_Struct, RD->getName());
+          createRecordDecl(Ctx, TUD, clang::TagTypeKind::Struct,
+                           RD->getName());
       ASTDecl = CDecl;
     } else if (auto *UD = llvm::dyn_cast<ast::UnionDecl>(Decl)) {
-      auto *CDecl = createRecordDecl(Ctx, TUD, clang::TTK_Union, UD->getName());
+      auto *CDecl = createRecordDecl(Ctx, TUD, clang::TagTypeKind::Union,
+                                     UD->getName());
       ASTDecl = CDecl;
     } else if (auto *TD = llvm::dyn_cast<ast::TypedefDecl>(Decl)) {
       clang::TypeSourceInfo *TInfo =
@@ -1017,8 +1030,7 @@ void ClangTypeResult::declareDecls() {
   }
 }
 
-llvm::APInt stringToAPInt(const std::string &bytes,
-                          llvm::support::endianness endian) {
+llvm::APInt stringToAPInt(const std::string &bytes, llvm::endianness endian) {
   const char *ptr = bytes.data();
   size_t len = bytes.size();
   size_t remaining = len;
@@ -1041,7 +1053,7 @@ llvm::APInt stringToAPInt(const std::string &bytes,
   }
 
   unsigned numBits = bytes.size() * 8;
-  return llvm::APInt(numBits, llvm::makeArrayRef(Data.data(), Data.size()));
+  return llvm::APInt(numBits, llvm::ArrayRef<uint64_t>(Data));
 }
 
 void ClangTypeResult::increaseArraySize(ValueDecl *Decl, int64_t Size) {
@@ -1052,7 +1064,7 @@ void ClangTypeResult::increaseArraySize(ValueDecl *Decl, int64_t Size) {
   }
   auto NewAT =
       Ctx.getConstantArrayType(AT->getElementType(), llvm::APInt(32, Size),
-                               nullptr, clang::ArrayType::Normal, 0);
+                               nullptr, clang::ArraySizeModifier::Normal, 0);
   Decl->setType(NewAT);
 }
 
@@ -1090,21 +1102,21 @@ static llvm::APFloat apFloatFromBytes(const std::string &data,
   case 2: {
     // 读取16位半精度浮点数
     rawBits = llvm::support::endian::read<uint16_t,
-                                          llvm::support::endianness::little>(
+                                          llvm::endianness::little>(
         data.data());
     break;
   }
   case 4: {
     // 读取32位单精度浮点数
     rawBits = llvm::support::endian::read<uint32_t,
-                                          llvm::support::endianness::little>(
+                                          llvm::endianness::little>(
         data.data());
     break;
   }
   case 8: {
     // 读取64位双精度浮点数
     rawBits = llvm::support::endian::read<uint64_t,
-                                          llvm::support::endianness::little>(
+                                          llvm::endianness::little>(
         data.data());
     break;
   }
@@ -1137,7 +1149,7 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
     if (!Bs) {
       return nullptr;
     }
-    auto Val = stringToAPInt(*Bs, llvm::support::endianness::little);
+    auto Val = stringToAPInt(*Bs, llvm::endianness::little);
     return clang::IntegerLiteral::Create(Ctx, Val, Ty, clang::SourceLocation());
   } else if (Ty->isPointerType()) {
     auto BitSize = Ctx.getTypeSize(Ty);
@@ -1147,22 +1159,23 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
     if (!Bs) {
       return nullptr;
     }
-    auto Val = stringToAPInt(*Bs, llvm::support::endianness::little);
+    auto Val = stringToAPInt(*Bs, llvm::endianness::little);
     return getGlobal(Val.getSExtValue());
   } else if (Ty->isRecordType()) {
     auto *RD = Ty->getAsRecordDecl();
     auto ASTDecl = DeclMap.at(RD)->getAs<ast::RecordDecl>();
     llvm::SmallVector<clang::Expr *> Inits;
-    if (RD->getTagKind() == clang::TTK_Struct) {
+    if (RD->getTagKind() == clang::TagTypeKind::Struct) {
       auto &FS = ASTDecl->getFields();
       for (size_t i = 0; i < FS.size(); i++) {
         auto &Field = FS[i];
         auto VD = llvm::cast<clang::ValueDecl>(Field.ASTDecl);
         llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
         llvm::SmallVector<clang::Expr *> IndexExprs;
-        Designators.push_back(DesignatedInitExpr::Designator(
-            VD->getIdentifier(), clang::SourceLocation(),
-            clang::SourceLocation()));
+        Designators.push_back(
+            DesignatedInitExpr::Designator::CreateFieldDesignator(
+                VD->getIdentifier(), clang::SourceLocation(),
+                clang::SourceLocation()));
 
         OffsetTy EndOff = std::numeric_limits<OffsetTy>::max();
         if (i + 1 < FS.size()) {
@@ -1180,7 +1193,7 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
             Ctx, Designators, IndexExprs, clang::SourceLocation(), false, Init);
         Inits.push_back(DIE);
       }
-    } else if (RD->getTagKind() == clang::TTK_Union) {
+    } else if (RD->getTagKind() == clang::TagTypeKind::Union) {
       // TODO select which for init expr?
       // Select first member.
       auto *VD = *RD->fields().begin();
@@ -1189,9 +1202,10 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
         llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
         llvm::SmallVector<clang::Expr *> IndexExprs;
 
-        Designators.push_back(DesignatedInitExpr::Designator(
-            VD->getIdentifier(), clang::SourceLocation(),
-            clang::SourceLocation()));
+        Designators.push_back(
+            DesignatedInitExpr::Designator::CreateFieldDesignator(
+                VD->getIdentifier(), clang::SourceLocation(),
+                clang::SourceLocation()));
 
         auto DIE = clang::DesignatedInitExpr::Create(
             Ctx, Designators, IndexExprs, clang::SourceLocation(), false, Init);
@@ -1218,9 +1232,9 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
           Str.pop_back();
         }
         return clang::StringLiteral::Create(
-            Ctx, Str, clang::StringLiteral::Ascii, false,
+            Ctx, Str, clang::StringLiteralKind::Ordinary, false,
             Ctx.getStringLiteralArrayType(ElemTy, SSize),
-            clang::SourceLocation());
+            {clang::SourceLocation()});
       }
     }
     auto ElemSize = getTypeSizeInChars(ElemTy);
@@ -1340,8 +1354,8 @@ void ClangTypeResult::createMemoryDecls() {
       auto *CDecl = convertStruct(MDecl, true);
       MDecl->setASTDecl(CDecl);
       CDecl->setFreeStanding(false);
-      auto ElabTy = Ctx.getElaboratedType(clang::ETK_Struct, nullptr,
-                                          Ctx.getRecordType(CDecl), CDecl);
+      auto ElabTy = Ctx.getTagType(clang::ElaboratedTypeKeyword::Struct,
+                                   std::nullopt, CDecl, true);
 
       DeclMap[CDecl] = MDecl;
 
@@ -1456,7 +1470,7 @@ clang::Expr *ClangTypeResult::gepCast(clang::Expr *Val, clang::QualType To) {
   } else if (llvm::isa<clang::RecordType>(Val->getType())) {
     // try to cast by select union member
     auto *Decl = llvm::cast<clang::RecordDecl>(Val->getType()->getAsTagDecl());
-    if (Decl->getTagKind() == clang::TTK_Union) {
+    if (Decl->getTagKind() == clang::TagTypeKind::Union) {
       for (auto *F : Decl->fields()) {
         auto R = createMemberExpr(Ctx, Val, F);
         if (isTypeCompatible(Ctx, R->getType(), To)) {
@@ -1477,7 +1491,7 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
     if (llvm::isa<clang::RecordType>(PointeeTy)) {
       auto *Decl = llvm::cast<clang::RecordDecl>(PointeeTy->getAsTagDecl());
       auto *StructVal = deref(Ctx, Val);
-      if (Decl->getTagKind() == clang::TTK_Struct) {
+      if (Decl->getTagKind() == clang::TagTypeKind::Struct) {
         auto ASTDecl = DeclMap.at(Decl)->getAs<ast::RecordDecl>();
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(0);
         if (Target != nullptr) {
@@ -1488,7 +1502,7 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
           Result.push_back(R);
           return addZero(R);
         }
-      } else if (Decl->getTagKind() == clang::TTK_Union) {
+      } else if (Decl->getTagKind() == clang::TagTypeKind::Union) {
         for (auto *F : Decl->fields()) {
           auto *ME = createMemberExpr(Ctx, StructVal, F);
           auto R = addrOf(Ctx, ME);
@@ -1672,7 +1686,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
         return nullptr;
       }
       auto *Decl = llvm::cast<clang::RecordDecl>(PointeeTy->getAsTagDecl());
-      if (Decl->getTagKind() == clang::TTK_Struct) {
+      if (Decl->getTagKind() == clang::TagTypeKind::Struct) {
         auto ASTDecl = DeclMap.at(Decl)->getAs<ast::RecordDecl>();
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(*OffsetNum);
         if (Target == nullptr) {
@@ -1696,7 +1710,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
               Ctx, llvm::APInt(32, RemainingOffset, false), Index->getType(),
               clang::SourceLocation());
         }
-      } else if (Decl->getTagKind() == clang::TTK_Union) {
+      } else if (Decl->getTagKind() == clang::TagTypeKind::Union) {
         // assert(false && "todo");
         llvm::errs() << "Warning: TODO how to handle ptradd for union?\n";
         auto *ME = createMemberExpr(Ctx, DerefBase, *Decl->field_begin());

@@ -104,9 +104,9 @@ int main(int argc, char *argv[]) {
 
     // add instrumentations.
     PassInstrumentationCallbacks PIC;
-    StandardInstrumentations SI(::llvm::DebugFlag, false,
+    StandardInstrumentations SI(Ctx, ::llvm::DebugFlag, false,
                                 PrintPassOptions{.SkipAnalyses = true});
-    SI.registerCallbacks(PIC, &FAM);
+    SI.registerCallbacks(PIC, &MAM);
 
     PassBuilder PB(nullptr, PipelineTuningOptions(), std::nullopt, &PIC);
 

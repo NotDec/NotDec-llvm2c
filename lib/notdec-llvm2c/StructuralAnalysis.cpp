@@ -253,7 +253,8 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
       assert(I.getAllocatedType()->isIntegerTy(8));
       auto Arg = EB.visitValue(I.getOperand(0), &I, 0);
       Arg = getTypeBuilder().checkCast(Arg, FD->getParamDecl(0)->getType());
-      llvm::ArrayRef<clang::Expr *> CallArgs(&Arg, 1);
+      clang::Expr *CallArgStorage[] = {Arg};
+      llvm::ArrayRef<clang::Expr *> CallArgs(CallArgStorage);
       auto Call = clang::CallExpr::Create(
           Ctx, makeDeclRefExpr(FD), CallArgs, FD->getReturnType(),
           clang::VK_PRValue, clang::SourceLocation(),
@@ -269,7 +270,8 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
                               DL.getTypeAllocSize(AT).getFixedValue());
       auto Arg = clang::IntegerLiteral::Create(Ctx, Size, PTy,
                                                clang::SourceLocation());
-      llvm::ArrayRef<clang::Expr *> CallArgs(&Arg, 1);
+      clang::Expr *CallArgStorage[] = {Arg};
+      llvm::ArrayRef<clang::Expr *> CallArgs(CallArgStorage);
       auto Call = clang::CallExpr::Create(
           Ctx, makeDeclRefExpr(FD), CallArgs, FD->getReturnType(),
           clang::VK_PRValue, clang::SourceLocation(),
@@ -478,9 +480,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   clang::Expr *Ptr1 = Ptr;
   // load type
   QualType Ty;
-  auto Size =
-      getLLVMTypeSize(I.getPointerOperandType()->getPointerElementType(),
-                      getTypeBuilder().getPointerSizeInBits());
+  auto Size = getLLVMTypeSize(I.getType(), getTypeBuilder().getPointerSizeInBits());
 
   if (Size == 1) {
     Ty = getBoolTy(Ctx);
@@ -2261,7 +2261,7 @@ clang::RecordDecl *TypeBuilder::createRecordDecl(llvm::StructType &Ty,
   auto TUD = AM->getGlobalDefinitions();
   clang::RecordDecl *prev = nullptr;
   clang::RecordDecl *decl = clang::RecordDecl::Create(
-      Ctx, clang::TagDecl::TagKind::TTK_Struct, TUD, clang::SourceLocation(),
+      Ctx, clang::TagTypeKind::Struct, TUD, clang::SourceLocation(),
       clang::SourceLocation(), II, prev);
   // Set free standing so that unnamed struct can be combined:
   // (`struct {int x;} a,b`)
@@ -2293,7 +2293,8 @@ clang::QualType TypeBuilder::visitStructType(llvm::StructType &Ty) {
   // return if is cached in type map
   if (typeMap.find(&Ty) != typeMap.end()) {
     clang::RecordDecl *decl = llvm::cast<clang::RecordDecl>(typeMap[&Ty]);
-    return Ctx.getRecordType(decl);
+    return Ctx.getTagType(clang::ElaboratedTypeKeyword::None, std::nullopt,
+                          decl, false);
   }
   // if type not visited yet, create it.
   if (Ty.isLiteral()) {
@@ -2304,12 +2305,13 @@ clang::QualType TypeBuilder::visitStructType(llvm::StructType &Ty) {
     auto decl = createRecordDecl(Ty, true, false);
     // This also requires that the var decl uses a ElaboratedType whose owned
     // tag decl is the previous RecordDecl
-    auto ElabTy = Ctx.getElaboratedType(clang::ETK_Struct, nullptr,
-                                        Ctx.getRecordType(decl), decl);
+    auto ElabTy = Ctx.getTagType(clang::ElaboratedTypeKeyword::Struct,
+                                 std::nullopt, decl, true);
     return ElabTy;
   } else {
     // insertion is done in createRecordDecl
-    return Ctx.getRecordType(createRecordDecl(Ty, true, true));
+    return Ctx.getTagType(clang::ElaboratedTypeKeyword::None, std::nullopt,
+                          createRecordDecl(Ty, true, true), false);
   }
 }
 
@@ -2349,16 +2351,20 @@ clang::QualType TypeBuilder::getType(ExtValuePtr Val) {
   return Ret;
 }
 
-clang::QualType TypeBuilder::visitType(llvm::Type &Ty) {
+  clang::QualType TypeBuilder::visitType(llvm::Type &Ty) {
   if (Ty.isPointerTy()) {
-    return Ctx.getPointerType(visitType(*Ty.getPointerElementType()));
+    // LLVM 22 uses opaque pointers. When IR pointee information is gone,
+    // fall back to void* here and rely on recovered high-level types to
+    // recover more precise pointee types where available.
+    return Ctx.getPointerType(Ctx.VoidTy);
   } else if (Ty.isFunctionTy()) {
     return visitFunctionType(llvm::cast<llvm::FunctionType>(Ty),
                              clang::FunctionProtoType::ExtProtoInfo());
   } else if (Ty.isArrayTy()) {
     return Ctx.getConstantArrayType(visitType(*Ty.getArrayElementType()),
                                     llvm::APInt(32, Ty.getArrayNumElements()),
-                                    nullptr, clang::ArrayType::Normal, 0);
+                                    nullptr, clang::ArraySizeModifier::Normal,
+                                    0);
   } else if (Ty.isStructTy()) {
     auto StructTy = llvm::cast<llvm::StructType>(&Ty);
     return visitStructType(*StructTy);
@@ -2476,9 +2482,9 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     // TODO split into multiple C string?
     if (CS->isString()) {
       return clang::StringLiteral::Create(
-          Ctx, CS->getAsString(), clang::StringLiteral::Ascii, false,
+          Ctx, CS->getAsString(), clang::StringLiteralKind::Ordinary, false,
           Ctx.getStringLiteralArrayType(Ctx.CharTy, CS->getNumElements()),
-          clang::SourceLocation());
+          {clang::SourceLocation()});
     }
     // struct and array
     llvm::SmallVector<clang::Expr *> vec(CS->getNumElements());
@@ -2504,7 +2510,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     return getNull(Ty);
   } else if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(&C)) {
     auto Val = CI->getValue();
-    if (CI->getType()->getBitWidth() == 1) {
+    if (Val.getBitWidth() == 1) {
       bool useBool = true;
       if (useBool) {
         return new (Ctx) clang::CXXBoolLiteralExpr(!Val.isZero(), Ctx.BoolTy,
@@ -2527,7 +2533,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
 
     // if constant is zero, and type is pointer type, the use nullptr
     if (Ty->isPointerType() || Ty->isArrayType()) {
-      if (Val.isNullValue()) {
+      if (Val.isZero()) {
         return getNull(Ty);
       }
       // try to get global variable
@@ -2614,9 +2620,14 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
 
     case llvm::Instruction::ICmp:
     case llvm::Instruction::FCmp:
-      return handleCmp(Ctx, TB, *this,
-                       (llvm::CmpInst::Predicate)CE->getPredicate(), CE,
-                       CE->getOperand(0), CE->getOperand(1));
+      {
+        auto *TmpInst = CE->getAsInstruction();
+        auto *Cmp = llvm::cast<llvm::CmpInst>(TmpInst);
+        auto *Ret = handleCmp(Ctx, TB, *this, Cmp->getPredicate(), CE,
+                              CE->getOperand(0), CE->getOperand(1));
+        TmpInst->deleteValue();
+        return Ret;
+      }
     case llvm::Instruction::Add:
     case llvm::Instruction::FAdd:
     case llvm::Instruction::Sub:
