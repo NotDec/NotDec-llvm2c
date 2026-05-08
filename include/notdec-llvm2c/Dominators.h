@@ -2,11 +2,14 @@
 #define _NOTDEC_BACKEND_DOMINATORS_H_
 
 #include <clang/Analysis/AnalysisDeclContext.h>
-#include <algorithm>
+#include <llvm/ADT/DepthFirstIterator.h>
+#include <llvm/ADT/GraphTraits.h>
+#include <llvm/ADT/iterator.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/GenericDomTree.h>
 #include <llvm/Support/GenericDomTreeConstruction.h>
 #include <llvm/Support/GenericIteratedDominanceFrontier.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include "notdec-llvm2c/CFG.h"
 
@@ -163,18 +166,25 @@ template <> void CFGDominatorTreeImpl<false>::anchor();
 namespace llvm {
 namespace IDFCalculatorDetail {
 
-/// Specialize ChildrenGetterTy to skip nullpointer successors.
-template <bool IsPostDom> struct ChildrenGetterTy<clang::CFGBlock, IsPostDom> {
-  using NodeRef = typename GraphTraits<clang::CFGBlock *>::NodeRef;
+/// Our CFG edges are wrapped in AdjacentBlock, so materialize raw CFGBlock
+/// pointers here before handing them to LLVM's IDF implementation.
+template <bool IsPostDom>
+struct ChildrenGetterTy<notdec::llvm2c::CFGBlock, IsPostDom> {
+  using NodeRef = typename GraphTraits<notdec::llvm2c::CFGBlock *>::NodeRef;
   using ChildrenTy = SmallVector<NodeRef, 8>;
 
   ChildrenTy get(const NodeRef &N) {
     using OrderedNodeTy =
-        typename IDFCalculatorBase<clang::CFGBlock, IsPostDom>::OrderedNodeTy;
+        typename IDFCalculatorBase<notdec::llvm2c::CFGBlock,
+                                   IsPostDom>::OrderedNodeTy;
 
     auto Children = children<OrderedNodeTy>(N);
-    ChildrenTy Ret{Children.begin(), Children.end()};
-    Ret.erase(std::remove(Ret.begin(), Ret.end(), nullptr), Ret.end());
+    ChildrenTy Ret;
+    for (const auto &Child : Children) {
+      auto *Block = Child.getBlock();
+      if (Block != nullptr)
+        Ret.push_back(Block);
+    }
     return Ret;
   }
 };
