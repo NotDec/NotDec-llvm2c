@@ -160,7 +160,7 @@ BytesManager BytesManager::getSubBytes(int64_t Start, int64_t End) {
 
 std::shared_ptr<BytesManager> BytesManager::create(llvm::Module &M) {
   std::shared_ptr<BytesManager> BM = std::make_shared<BytesManager>();
-  for (auto &G : M.getGlobalList()) {
+  for (auto &G : M.globals()) {
     auto Name = G.getName();
     if (!Name.consume_front("__notdec_mem0_0x")) {
       continue;
