@@ -4,8 +4,9 @@
 #include "notdec-llvm2c/CFG.h"
 #include <clang/Analysis/AnalysisDeclContext.h>
 #include <llvm/ADT/BitVector.h>
-#include <llvm/ADT/None.h>
 #include <llvm/ADT/PostOrderIterator.h>
+#include <utility>
+#include <variant>
 
 namespace notdec::llvm2c {
 
@@ -34,18 +35,18 @@ public:
 
     /// Set the bit associated with a particular CFGBlock.
     /// This is the important method for the SetType template parameter.
-    std::pair<llvm::NoneType, bool> insert(const CFGBlock *Block) {
+    std::pair<std::monostate, bool> insert(const CFGBlock *Block) {
       // Note that insert() is called by po_iterator, which doesn't check to
       // make sure that Block is non-null.  Moreover, the CFGBlock iterator will
       // occasionally hand out null pointers for pruned edges, so we catch those
       // here.
       if (!Block)
-        return std::make_pair(clang::None,
+        return std::make_pair(std::monostate{},
                               false); // if an edge is trivially false.
       if (VisitedBlockIDs.test(Block->getBlockID()))
-        return std::make_pair(clang::None, false);
+        return std::make_pair(std::monostate{}, false);
       VisitedBlockIDs.set(Block->getBlockID());
-      return std::make_pair(clang::None, true);
+      return std::make_pair(std::monostate{}, true);
     }
 
     /// Check if the bit for a CFGBlock has been already set.

@@ -12,9 +12,11 @@
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/StmtOpenACC.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenMP.h"
+#include "clang/AST/StmtSYCL.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/OpenMPKinds.h"
 #include "clang/Sema/Designator.h"
@@ -215,7 +217,7 @@ public:
     return BinaryOperator::Create(
         this->Context, LHS.get(), RHS.get(), E->getOpcode(), E->getType(),
         E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
-        E->getFPFeatures(this->Context.getLangOpts()));
+        E->getFPFeatures());
   }
 
   ExprResult TransformMemberExpr(clang::MemberExpr *E) {
@@ -400,7 +402,7 @@ public:
         return BinaryOperator::Create(
             this->Context, LHS, RHS, E->getOpcode(), E->getType(),
             E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
-            E->getFPFeatures(this->Context.getLangOpts()));
+            E->getFPFeatures());
       }
 
       ExprResult RHSR = this->getDerived().TransformExpr(RHS);
@@ -409,7 +411,7 @@ public:
         return BinaryOperator::Create(
             this->Context, LHS, RHS, E->getOpcode(), E->getType(),
             E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
-            E->getFPFeatures(this->Context.getLangOpts()));
+            E->getFPFeatures());
       }
     } else if (E->getOpcode() == clang::BO_Shl) {
       clang::Expr *RHS = E->getRHS();
@@ -446,7 +448,7 @@ public:
           return BinaryOperator::Create(
               this->Context, E->getLHS(), MulC, BO_Mul, E->getType(),
               E->getValueKind(), E->getObjectKind(), E->getOperatorLoc(),
-              E->getFPFeatures(this->Context.getLangOpts()));
+              E->getFPFeatures());
         }
       }
       // cannot divide RHS, try divide LHS
@@ -455,7 +457,7 @@ public:
         return BinaryOperator::Create(
             this->Context, LHSR.get(), E->getRHS(), E->getOpcode(),
             E->getType(), E->getValueKind(), E->getObjectKind(),
-            E->getOperatorLoc(), E->getFPFeatures(this->Context.getLangOpts()));
+            E->getOperatorLoc(), E->getFPFeatures());
       }
     } else if (E->getOpcode() == clang::BO_Add ||
                E->getOpcode() == clang::BO_Sub) {
@@ -468,7 +470,7 @@ public:
               this->Context, LHSR.get(), RHSR.get(), E->getOpcode(),
               E->getType(), E->getValueKind(), E->getObjectKind(),
               E->getOperatorLoc(),
-              E->getFPFeatures(this->Context.getLangOpts()));
+              E->getFPFeatures());
         }
       }
     } else if (E->getOpcode() == clang::BO_Div ||
@@ -479,7 +481,7 @@ public:
         return BinaryOperator::Create(
             this->Context, LHSR.get(), E->getRHS(), E->getOpcode(),
             E->getType(), E->getValueKind(), E->getObjectKind(),
-            E->getOperatorLoc(), E->getFPFeatures(this->Context.getLangOpts()));
+            E->getOperatorLoc(), E->getFPFeatures());
       }
     } else if (E->getOpcode() == clang::BO_And ||
                E->getOpcode() == clang::BO_Or ||
@@ -495,7 +497,7 @@ public:
                 this->Context, LHSR.get(), RHSR.get(), E->getOpcode(),
                 E->getType(), E->getValueKind(), E->getObjectKind(),
                 E->getOperatorLoc(),
-                E->getFPFeatures(this->Context.getLangOpts()));
+                E->getFPFeatures());
           }
         }
       }

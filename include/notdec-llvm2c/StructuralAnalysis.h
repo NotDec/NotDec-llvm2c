@@ -698,6 +698,7 @@ public:
       return stmts[0];
     } else {
       return clang::CompoundStmt::Create(FCtx.getASTContext(), stmts,
+                                         clang::FPOptionsOverride(),
                                          clang::SourceLocation(),
                                          clang::SourceLocation());
     }
@@ -947,11 +948,11 @@ Conversion getSignedness(llvm::Instruction::BinaryOps op);
 Conversion getSignedness(llvm::CmpInst::Predicate op);
 
 /// Convert the LLVM compare operator to Clang binary operator op.
-clang::Optional<clang::BinaryOperatorKind>
+std::optional<clang::BinaryOperatorKind>
 convertOp(llvm::CmpInst::Predicate op);
 
 /// Convert the LLVM binary operator to a Clang binary operator op.
-clang::Optional<clang::BinaryOperatorKind>
+std::optional<clang::BinaryOperatorKind>
 convertOp(llvm::Instruction::BinaryOps op);
 /// Ensure the expression is signed, or insert a cast.
 clang::Expr *castSigned(clang::ASTContext &Ctx, TypeBuilder &TB,

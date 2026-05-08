@@ -16,6 +16,7 @@
 #include <list>
 #include <llvm/Support/Casting.h>
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 #include <variant>
@@ -82,9 +83,9 @@ public:
 
   /// Convert to the specified CFGElement type, returning None if this
   /// CFGElement is not of the desired type.
-  template <typename T> clang::Optional<T> getAs() const {
+  template <typename T> std::optional<T> getAs() const {
     if (!T::isKind(*this))
-      return clang::None;
+      return std::nullopt;
     T t;
     CFGElement &e = t;
     e = *this;

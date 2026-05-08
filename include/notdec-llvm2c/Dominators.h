@@ -2,6 +2,7 @@
 #define _NOTDEC_BACKEND_DOMINATORS_H_
 
 #include <clang/Analysis/AnalysisDeclContext.h>
+#include <algorithm>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/GenericDomTree.h>
 #include <llvm/Support/GenericDomTreeConstruction.h>
@@ -173,7 +174,7 @@ template <bool IsPostDom> struct ChildrenGetterTy<clang::CFGBlock, IsPostDom> {
 
     auto Children = children<OrderedNodeTy>(N);
     ChildrenTy Ret{Children.begin(), Children.end()};
-    llvm::erase_value(Ret, nullptr);
+    Ret.erase(std::remove(Ret.begin(), Ret.end(), nullptr), Ret.end());
     return Ret;
   }
 };

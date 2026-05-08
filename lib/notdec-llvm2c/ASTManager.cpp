@@ -201,7 +201,7 @@ clang::NamedDecl *ASTManager::getNamedDecl(const char *Name) {
 clang::FunctionDecl *ASTManager::getFuncDeclaration(const char *Name) {
   for (auto *Decl : FunctionDeclarations->decls()) {
     if (auto *FuncDecl = Decl->getAsFunction()) {
-      if (FuncDecl->getName().equals(Name)) {
+      if (FuncDecl->getName() == Name) {
         return FuncDecl;
       }
     }

@@ -46,7 +46,6 @@ using clang::LabelStmt;
 using clang::LangOptions;
 using clang::ObjCAtCatchStmt;
 using clang::ObjCAtTryStmt;
-using clang::Optional;
 using clang::PrinterHelper;
 using clang::PrintingPolicy;
 using clang::SEHExceptStmt;
@@ -76,7 +75,7 @@ public:
       unsigned j = 1;
       for (CFGBlock::const_iterator BI = (*I)->begin(), BEnd = (*I)->end();
            BI != BEnd; ++BI, ++j) {
-        if (Optional<CFGStmt> SE = BI->getAs<CFGStmt>()) {
+        if (auto SE = BI->getAs<CFGStmt>()) {
           const Stmt *stmt = SE->getStmt();
           std::pair<unsigned, unsigned> P((*I)->getBlockID(), j);
           StmtMap[stmt] = P;

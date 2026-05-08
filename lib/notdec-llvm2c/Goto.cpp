@@ -110,7 +110,8 @@ void Goto::execute() {
       sw->addSwitchCase(DS);
       stmts.push_back(DS);
       auto body = clang::CompoundStmt::Create(
-          Ctx, stmts, clang::SourceLocation(), clang::SourceLocation());
+          Ctx, stmts, clang::FPOptionsOverride(), clang::SourceLocation(),
+          clang::SourceLocation());
       sw->setBody(body);
       Current->appendStmt(sw);
     }

@@ -253,23 +253,25 @@ void CFGBuilder::visitAllocaInst(llvm::AllocaInst &I) {
       assert(I.getAllocatedType()->isIntegerTy(8));
       auto Arg = EB.visitValue(I.getOperand(0), &I, 0);
       Arg = getTypeBuilder().checkCast(Arg, FD->getParamDecl(0)->getType());
+      llvm::ArrayRef<clang::Expr *> CallArgs(&Arg, 1);
       auto Call = clang::CallExpr::Create(
-          Ctx, makeDeclRefExpr(FD), {Arg}, FD->getReturnType(),
+          Ctx, makeDeclRefExpr(FD), CallArgs, FD->getReturnType(),
           clang::VK_PRValue, clang::SourceLocation(),
           clang::FPOptionsOverride());
       addExprOrStmt(I, *Call);
     } else {
       auto AT = I.getAllocatedType();
       auto &DL = I.getModule()->getDataLayout();
-      assert(AT->isSized() && DL.getTypeAllocSize(AT).getFixedSize() != 0);
+      assert(AT->isSized() && DL.getTypeAllocSize(AT).getFixedValue() != 0);
 
       auto PTy = FD->getParamDecl(0)->getType();
       auto Size = llvm::APInt(Ctx.getTypeSize(PTy),
-                              DL.getTypeAllocSize(AT).getFixedSize());
+                              DL.getTypeAllocSize(AT).getFixedValue());
       auto Arg = clang::IntegerLiteral::Create(Ctx, Size, PTy,
                                                clang::SourceLocation());
+      llvm::ArrayRef<clang::Expr *> CallArgs(&Arg, 1);
       auto Call = clang::CallExpr::Create(
-          Ctx, makeDeclRefExpr(FD), {Arg}, FD->getReturnType(),
+          Ctx, makeDeclRefExpr(FD), CallArgs, FD->getReturnType(),
           clang::VK_PRValue, clang::SourceLocation(),
           clang::FPOptionsOverride());
       addExprOrStmt(I, *Call);
@@ -686,8 +688,8 @@ clang::Expr *handleCmp(clang::ASTContext &Ctx, TypeBuilder &TB, ExprBuilder &EB,
         "CFGBuilder.visitCmpInst FCMP_ORD / FCMP_UNO: unreachable");
   }
 
-  clang::Optional<clang::BinaryOperatorKind> op = convertOp(OpCode);
-  assert(op.hasValue() && "CFGBuilder.visitCmpInst: unexpected predicate");
+  auto op = convertOp(OpCode);
+  assert(op.has_value() && "CFGBuilder.visitCmpInst: unexpected predicate");
   Conversion cv = getSignedness(OpCode);
   if (cv == Signed) {
     lhs = castSigned(Ctx, TB, lhs);
@@ -776,7 +778,7 @@ Conversion getSignedness(llvm::CmpInst::Predicate op) {
 }
 
 /// Convert the LLVM compare operator to Clang binary operator op.
-clang::Optional<clang::BinaryOperatorKind>
+std::optional<clang::BinaryOperatorKind>
 convertOp(llvm::CmpInst::Predicate op) {
   switch (op) {
   case llvm::CmpInst::Predicate::ICMP_EQ:
@@ -830,14 +832,14 @@ convertOp(llvm::CmpInst::Predicate op) {
                      "already be handled");
   case llvm::CmpInst::BAD_FCMP_PREDICATE:
   case llvm::CmpInst::BAD_ICMP_PREDICATE:
-    return clang::None;
+    return std::nullopt;
   }
   assert(false && "Error: unhandled llvm::CmpInst::Predicate");
-  return clang::None;
+  return std::nullopt;
 }
 
 /// Convert the LLVM binary operator to a Clang binary operator op.
-clang::Optional<clang::BinaryOperatorKind>
+std::optional<clang::BinaryOperatorKind>
 convertOp(llvm::Instruction::BinaryOps op) {
   switch (op) {
   case llvm::Instruction::Add:
@@ -872,18 +874,18 @@ convertOp(llvm::Instruction::BinaryOps op) {
   case llvm::Instruction::Xor:
     return clang::BO_Xor;
   default:
-    return clang::None;
+    return std::nullopt;
   }
 }
 
 void CFGBuilder::visitCallInst(llvm::CallInst &I) {
   if (auto Target = I.getCalledFunction()) {
-    if (Target->getName().startswith("llvm.dbg") ||
-        Target->getName().startswith("llvm.lifetime") ||
-        Target->getName().startswith("llvm.assume")) {
+    if (Target->getName().starts_with("llvm.dbg") ||
+        Target->getName().starts_with("llvm.lifetime") ||
+        Target->getName().starts_with("llvm.assume")) {
       return;
     }
-    if (Target->getName().startswith("llvm.umul.with.overflow")) {
+    if (Target->getName().starts_with("llvm.umul.with.overflow")) {
       // handle it at the intrinsic function.
       return;
     }
@@ -975,7 +977,7 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
 void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
   if (auto Call = llvm::dyn_cast<llvm::CallInst>(I.getAggregateOperand())) {
     if (auto Target = Call->getCalledFunction()) {
-      if (Target->getName().startswith("llvm.umul.with.overflow")) {
+      if (Target->getName().starts_with("llvm.umul.with.overflow")) {
         assert(I.getNumIndices() == 1);
         auto Ind = *I.idx_begin();
         auto Op0 = Call->getArgOperand(0);
@@ -999,8 +1001,10 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
           Arg0 = getTypeBuilder().checkCast(Arg0, Ty);
           auto Arg1 = EB.visitValue(Op0, Call, 1);
           Arg1 = getTypeBuilder().checkCast(Arg1, Ty);
+          clang::Expr *CallArgsStorage[] = {Arg0, Arg1};
+          llvm::ArrayRef<clang::Expr *> CallArgs(CallArgsStorage);
           auto Call = clang::CallExpr::Create(
-              Ctx, makeDeclRefExpr(FD), {Arg0, Arg1}, FD->getReturnType(),
+              Ctx, makeDeclRefExpr(FD), CallArgs, FD->getReturnType(),
               clang::VK_PRValue, clang::SourceLocation(),
               clang::FPOptionsOverride());
           addExprOrStmt(I, *Call);
@@ -1267,7 +1271,7 @@ clang::Expr *handleLLVMCast(clang::ASTContext &Ctx, llvm::LLVMContext &LCtx,
 
 void CFGBuilder::visitCastInst(llvm::CastInst &I) {
   // Ignore reg2mem alloca point inserted by reg2mem.
-  if (I.getNumUses() == 0 && I.getName().startswith("reg2mem alloca point")) {
+  if (I.getNumUses() == 0 && I.getName().starts_with("reg2mem alloca point")) {
     return;
   }
   auto *Val = EB.visitValue(I.getOperand(0), &I, 0);
@@ -1289,8 +1293,8 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
                           llvm::User &Result, llvm::Value *L, llvm::Value *R,
                           std::map<clang::Decl *, StructInfo> *StructInfos,
                           QualType ExpectedTy) {
-  clang::Optional<clang::BinaryOperatorKind> op = convertOp(OpCode);
-  assert(op.hasValue() && "CFGBuilder.visitBinaryOperator: unexpected op type");
+  auto op = convertOp(OpCode);
+  assert(op.has_value() && "CFGBuilder.visitBinaryOperator: unexpected op type");
   Conversion cv = getSignedness(OpCode);
   // insert conversion if needed
   clang::Expr *lhs = EB.visitValue(L, &Result, 0);
@@ -1339,7 +1343,7 @@ clang::Expr *handleBinary(clang::ASTContext &Ctx, ExprBuilder &EB,
   lhs = TB.checkCast(lhs, ArithTy);
   rhs = TB.checkCast(rhs, ArithTy);
   // for normal arithmetic addition, use lhs's type.
-  clang::Expr *binop = createBinaryOperator(Ctx, lhs, rhs, op.getValue(),
+  clang::Expr *binop = createBinaryOperator(Ctx, lhs, rhs, *op,
                                             lhs->getType(), clang::VK_PRValue);
   binop = TB.checkCast(binop, ExpectedTy);
   return binop;
@@ -1962,12 +1966,12 @@ void SAContext::createDecls() {
 
   // handle intrinsic functions
   for (llvm::Function &F : M) {
-    if (F.getName().startswith("llvm.dbg") ||
-        F.getName().startswith("llvm.lifetime") ||
-        F.getName().startswith("llvm.assume")) {
+    if (F.getName().starts_with("llvm.dbg") ||
+        F.getName().starts_with("llvm.lifetime") ||
+        F.getName().starts_with("llvm.assume")) {
       continue;
     }
-    if (F.getName().startswith("llvm.umul.with.overflow")) {
+    if (F.getName().starts_with("llvm.umul.with.overflow")) {
       // handle it at the extractvalue inst.
       continue;
     }
@@ -1995,7 +1999,7 @@ void SAContext::createDecls() {
     QualType PTy =
         StorageTy->getPointeeType().isNull() ? StorageTy : StorageTy->getPointeeType();
 
-    if (!GV.getName().startswith("table_") && CT != nullptr &&
+    if (!GV.getName().starts_with("table_") && CT != nullptr &&
         CT->hasType(&GV)) {
       QualType RecoveredTy = TB.getType(&GV);
       if (TB.isTypeCompatible(RecoveredTy, PTy)) {
@@ -2153,7 +2157,8 @@ void SAFuncContext::run() {
 
   // create a compound stmt as function body
   auto CS = clang::CompoundStmt::Create(
-      getASTContext(), Stmts, clang::SourceLocation(), clang::SourceLocation());
+      getASTContext(), Stmts, clang::FPOptionsOverride(),
+      clang::SourceLocation(), clang::SourceLocation());
   FD->setBody(CS);
   TUD->addDecl(FD);
 }
@@ -2655,7 +2660,7 @@ clang::LabelDecl *IStructuralAnalysis::getBlockLabel(CFGBlock *Blk,
   } else {
     // if prepend and already has a label, return the label
     if (prepend) {
-      if (Blk->size() > 0 && Blk->front().getAs<CFGStmt>().hasValue()) {
+      if (Blk->size() > 0 && Blk->front().getAs<CFGStmt>().has_value()) {
         if (auto label = llvm::dyn_cast<clang::LabelStmt>(
                 Blk->front().getAs<CFGStmt>()->getStmt())) {
           return label->getDecl();

@@ -58,16 +58,7 @@ bool isSPByMetadata(llvm::GlobalVariable *GV) {
 }
 
 clang::QualType getBoolTy(clang::ASTContext &Ctx) {
-  static std::map<clang::ASTContext *, clang::TypedefNameDecl *> BoolDecls;
-  if (BoolDecls.count(&Ctx)) {
-    return Ctx.getTypedefType(BoolDecls.at(&Ctx));
-  }
-  auto BoolDecl = clang::TypedefDecl::Create(
-      Ctx, Ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-      clang::SourceLocation(), &Ctx.Idents.get("bool"),
-      Ctx.getTrivialTypeSourceInfo(Ctx.BoolTy));
-  BoolDecls.insert({&Ctx, BoolDecl});
-  return Ctx.getTypedefType(BoolDecl);
+  return Ctx.BoolTy;
 }
 
 unsigned getLLVMTypeSize(llvm::Type *Ty, unsigned PointerSizeInBits) {
@@ -98,8 +89,8 @@ void printModule(llvm::Module &M, const char *path) {
 std::unique_ptr<clang::ASTUnit> buildAST(llvm::StringRef FileName) {
   auto FileNameStr = FileName.str();
   bool UseCppMode = useDualPointerTemplateMode();
-  if (!FileName.endswith(".c") && !FileName.endswith(".cpp") &&
-      !FileName.endswith(".cc")) {
+  if (!FileName.ends_with(".c") && !FileName.ends_with(".cpp") &&
+      !FileName.ends_with(".cc")) {
     FileNameStr += UseCppMode ? ".cpp" : ".c";
   }
   std::vector<std::string> Args = {"-target", "wasm32-unknown-wasi",

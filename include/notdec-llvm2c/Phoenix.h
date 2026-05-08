@@ -4,6 +4,7 @@
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Dominators.h"
 #include "notdec-llvm2c/StructuralAnalysis.h"
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -79,7 +80,7 @@ protected:
   bool virtualizeIrregularCaseExits(CFGBlock *head, CFGBlock *caseEntry,
                                     const std::set<CFGBlock *> &caseBody,
                                     CFGBlock *follow);
-  llvm::Optional<Phoenix::VirtualEdge>
+  std::optional<Phoenix::VirtualEdge>
   findLastResortEdge(std::set<CFGBlock *> &blocks);
   CFGBlock *getSwitchFollow(CFGBlock *n);
   bool reduceIncSwitch(CFGBlock *n, CFGBlock *follow);

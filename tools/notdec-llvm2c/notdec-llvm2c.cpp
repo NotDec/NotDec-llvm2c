@@ -1,4 +1,5 @@
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -107,7 +108,7 @@ int main(int argc, char *argv[]) {
                                 PrintPassOptions{.SkipAnalyses = true});
     SI.registerCallbacks(PIC, &FAM);
 
-    PassBuilder PB(nullptr, PipelineTuningOptions(), llvm::None, &PIC);
+    PassBuilder PB(nullptr, PipelineTuningOptions(), std::nullopt, &PIC);
 
     // Register all the basic analyses with the managers.
     PB.registerModuleAnalyses(MAM);

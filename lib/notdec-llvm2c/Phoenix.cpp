@@ -12,7 +12,6 @@
 #include <variant>
 #include <vector>
 
-#include <llvm/ADT/Optional.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -323,7 +322,8 @@ bool Phoenix::ReduceCyclic(CFGBlock *Block) {
         addAllStmtTo(S, stmts);
         // create the while true
         auto body = clang::CompoundStmt::Create(
-            Ctx, stmts, clang::SourceLocation(), clang::SourceLocation());
+            Ctx, stmts, clang::FPOptionsOverride(), clang::SourceLocation(),
+            clang::SourceLocation());
         // rewrite goto to break or continue
         auto BreakTarget = Other->getLabelStmt();
         auto ContinueTarget = Block->getLabelStmt();
@@ -736,7 +736,7 @@ bool Phoenix::refineLoop(CFGBlock *head, std::set<CFGBlock *> &loopNodes) {
   return lastResort(lexicalNodes);
 }
 
-llvm::Optional<Phoenix::VirtualEdge>
+std::optional<Phoenix::VirtualEdge>
 Phoenix::findLastResortEdge(std::set<CFGBlock *> &blocks) {
   std::vector<Phoenix::VirtualEdge> edges;
   // get all in region edges.
@@ -759,7 +759,7 @@ Phoenix::findLastResortEdge(std::set<CFGBlock *> &blocks) {
     }
   }
   if (edges.empty()) {
-    return llvm::None;
+    return std::nullopt;
   } else {
     return edges.front();
   }
@@ -767,7 +767,7 @@ Phoenix::findLastResortEdge(std::set<CFGBlock *> &blocks) {
 
 bool Phoenix::lastResort(std::set<CFGBlock *> &blocks) {
   auto vEdge = findLastResortEdge(blocks);
-  if (vEdge.hasValue()) {
+  if (vEdge.has_value()) {
     virtualizeEdge(*vEdge);
     return true;
   } else {
@@ -958,14 +958,14 @@ bool Phoenix::virtualizeIrregularSwitchEntries(CFGBlock *n) {
 }
 
 bool Phoenix::virtualizeReturn(CFGBlock *n) {
-  llvm::Optional<Phoenix::VirtualEdge> returnEdge;
+  std::optional<Phoenix::VirtualEdge> returnEdge;
   for (auto &s : n->succs()) {
     if (n->succ_size() <= 2 && isPureReturn(s)) {
       returnEdge.emplace(n, s, VirtualEdgeType::Goto);
       break;
     }
   }
-  if (returnEdge.hasValue()) {
+  if (returnEdge.has_value()) {
     virtualizeEdge(*returnEdge);
     return true;
   }
@@ -1010,14 +1010,14 @@ bool Phoenix::ProcessUnresolvedRegions() {
 }
 
 bool Phoenix::lastResort(CFGBlock *n) {
-  llvm::Optional<Phoenix::VirtualEdge> vEdge;
+  std::optional<Phoenix::VirtualEdge> vEdge;
   for (auto &s : n->succs()) {
     if (!Dom.properlyDominates(n, s) && !Dom.properlyDominates(s, n)) {
       vEdge.emplace(n, s, VirtualEdgeType::Goto);
       break;
     }
   }
-  if (!vEdge.hasValue()) {
+  if (!vEdge.has_value()) {
     for (auto &s : n->succs()) {
       if (!Dom.properlyDominates(n, s)) {
         vEdge.emplace(n, s, VirtualEdgeType::Goto);
@@ -1025,14 +1025,14 @@ bool Phoenix::lastResort(CFGBlock *n) {
       }
     }
   }
-  if (!vEdge.hasValue()) {
+  if (!vEdge.has_value()) {
     for (auto &p : n->preds()) {
       if (!Dom.properlyDominates(p, n)) {
         vEdge.emplace(p, n, VirtualEdgeType::Goto);
       }
     }
   }
-  if (vEdge.hasValue()) {
+  if (vEdge.has_value()) {
     virtualizeEdge(*vEdge);
     return true;
   } else {
@@ -1238,8 +1238,9 @@ bool Phoenix::reduceIncSwitch(CFGBlock *N, CFGBlock *Follow) {
     Stmts.push_back(DS);
   }
 
-  auto Body = clang::CompoundStmt::Create(Ctx, Stmts, clang::SourceLocation(),
-                                          clang::SourceLocation());
+  auto Body = clang::CompoundStmt::Create(
+      Ctx, Stmts, clang::FPOptionsOverride(), clang::SourceLocation(),
+      clang::SourceLocation());
   SW->setBody(Body);
   N->appendStmt(SW);
 
