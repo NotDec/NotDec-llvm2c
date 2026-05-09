@@ -1420,10 +1420,11 @@ void CFGBuilder::visitSwitchInst(llvm::SwitchInst &I) {
       *Blk, SwitchTerminator(EB.visitValue(I.getCondition(), &I, 0)), I);
   // Add case expressions
   auto cases = std::get_if<SwitchTerminator>(&Blk->getTerminator());
-  long ind = 0;
   for (auto &expr : I.cases()) {
-    cases->cases().push_back(EB.visitValue(expr.getCaseValue(), &I, ind));
-    ind++;
+    auto *CaseValue = expr.getCaseValue();
+    auto CaseTy = getTypeBuilder().visitType(*CaseValue->getType());
+    cases->cases().push_back(clang::IntegerLiteral::Create(
+        Ctx, CaseValue->getValue(), CaseTy, clang::SourceLocation()));
   }
   // there is not default value for switch.
   // cases->cases().push_back(EB.visitValue(I.case_default()->getCaseValue()));
@@ -1995,7 +1996,9 @@ void SAContext::createDecls() {
     }
     clang::IdentifierInfo *II =
         getIdentifierInfo(getValueNamer().getGlobName(GV));
-    QualType StorageTy = TB.visitType(*GV.getType());
+    // LLVM 22 global pointers are opaque. Use the stored value type here so
+    // array/struct globals keep their real declaration shape.
+    QualType StorageTy = TB.visitType(*GV.getValueType());
     QualType PTy =
         StorageTy->getPointeeType().isNull() ? StorageTy : StorageTy->getPointeeType();
 
