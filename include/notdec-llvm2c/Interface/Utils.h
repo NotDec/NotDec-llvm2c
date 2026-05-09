@@ -9,15 +9,6 @@ bool inline startswith(std::string str, const char *prefix) {
   return str.rfind(prefix, 0) == 0;
 }
 
-inline bool hasUser(const llvm::Value *Val, const llvm::User *User) {
-  for (auto U : Val->users()) {
-    if (U == User) {
-      return true;
-    }
-  }
-  return false;
-}
-
 template <typename T> std::string int_to_hex(T i) {
   std::stringstream stream;
   stream << "0x"

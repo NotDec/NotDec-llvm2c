@@ -259,7 +259,8 @@ ExtValuePtr canonicalizeExtValue(ExtValuePtr Val, llvm::User *User,
         }
       }
       assert(User != nullptr && "llvmValue2ExtVal: Constant User is Null!");
-      assert(hasUser(*V, User) &&
+      assert(OpInd >= 0 && static_cast<unsigned long>(OpInd) < User->getNumOperands() &&
+             User->getOperand(OpInd) == *V &&
              "llvmValue2ExtVal: constant not used by user");
       return UConstant{.Val = cast<Constant>(*V), .User = User, .OpInd = OpInd};
     }
