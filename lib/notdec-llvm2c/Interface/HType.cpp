@@ -709,11 +709,9 @@ std::string HTypeSnapshotFormatter::formatDecl(const TypedDecl &Decl) {
 }
 
 std::vector<const TypedDecl *> HTypeSnapshotFormatter::getOrderedDecls() {
-  if (Ctx != nullptr) {
-    for (const auto &Ent : Ctx->getDecls()) {
-      collectDecl(*Ent.second);
-    }
-  }
+  // Keep decl output reachability-based. If we rescan the whole HTypeContext
+  // here, normalized-away wrapper decls reappear in ValueHTypes.txt even though
+  // no collected type/value still references them.
   return DeclOrder;
 }
 

@@ -186,6 +186,7 @@ protected:
 
 public:
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Union; }
+  std::vector<FieldDecl> &getMembers() { return Members; }
   const std::vector<FieldDecl> &getMembers() const { return Members; }
   void addMember(FieldDecl Field) { Members.push_back(Field); }
   void print(llvm::raw_ostream &OS) const;
@@ -218,6 +219,10 @@ public:
 
   static bool classof(const TypedDecl *T) { return T->getKind() == DK_Typedef; }
   HType *getType() const { return Type; }
+  void setType(HType *NewType) {
+    assert(NewType != nullptr && "Typedef type cannot be null");
+    Type = NewType;
+  }
   void print(llvm::raw_ostream &OS) const;
 
   static TypedefDecl *Create(HTypeContext &Ctx, const std::string &Name,
