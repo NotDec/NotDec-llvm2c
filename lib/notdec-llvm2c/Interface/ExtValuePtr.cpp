@@ -245,6 +245,17 @@ unsigned int getSize(llvm::Type *Ty, unsigned int pointer_size) {
   if (!Ty->isAggregateType() && !Ty->isVectorTy()) {
     return Ty->getScalarSizeInBits();
   }
+  if (auto *StructTy = llvm::dyn_cast<llvm::StructType>(Ty)) {
+    unsigned int Size = 0;
+    for (llvm::Type *ElemTy : StructTy->elements()) {
+      Size += getSize(ElemTy, pointer_size);
+    }
+    return Size;
+  }
+  if (auto *ArrayTy = llvm::dyn_cast<llvm::ArrayType>(Ty)) {
+    return ArrayTy->getNumElements() *
+           getSize(ArrayTy->getElementType(), pointer_size);
+  }
   llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                << "ERROR: getSize: unhandled llvm type: " << *Ty << "\n";
   std::abort();

@@ -75,6 +75,7 @@ struct OffsetRange {
   std::vector<ArrayOffset> access;
 
   bool isZero() const { return offset == 0 && access.size() == 0; }
+  bool hasNegativeBaseOffset() const { return offset < 0; }
   bool operator==(const OffsetRange &rhs) const {
     return offset == rhs.offset && access == rhs.access;
   }
