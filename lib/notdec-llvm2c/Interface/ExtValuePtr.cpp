@@ -184,6 +184,9 @@ std::string toString(const ExtValuePtr &Val, bool Verbose) {
     }
   } else if (auto F = std::get_if<ReturnValue>(&Val)) {
     OS << "ReturnValue: " + ValueNamer::getName(*F->Func, "func_");
+    if (F->Index != 0) {
+      OS << "[" << F->Index << "]";
+    }
   } else if (auto IC = std::get_if<UConstant>(&Val)) {
     OS << "IntConstant: " << *IC->Val << ", User: " << *IC->User;
   } else if (auto CA = std::get_if<ConstantAddr>(&Val)) {
@@ -210,7 +213,15 @@ llvm::Type *getType(const ExtValuePtr &Val) {
     }
     return (*V)->getType();
   } else if (auto F = std::get_if<ReturnValue>(&Val)) {
-    return F->Func->getReturnType();
+    auto *RetTy = F->Func->getReturnType();
+    if (RetTy->isStructTy()) {
+      return cast<StructType>(RetTy)->getElementType(F->Index);
+    }
+    if (RetTy->isArrayTy()) {
+      return cast<ArrayType>(RetTy)->getElementType();
+    }
+    assert(F->Index == 0 && "scalar return value must use index 0");
+    return RetTy;
   } else if (auto IC = std::get_if<UConstant>(&Val)) {
     return IC->Val->getType();
   } else if (auto CA = std::get_if<ConstantAddr>(&Val)) {
@@ -277,7 +288,11 @@ std::string getName(const ExtValuePtr &Val) {
   if (auto V = std::get_if<llvm::Value *>(&Val)) {
     return ValueNamer::getName(**V);
   } else if (auto F = std::get_if<ReturnValue>(&Val)) {
-    return "ReturnValue_" + ValueNamer::getName(*F->Func, "func_");
+    auto Ret = "ReturnValue_" + ValueNamer::getName(*F->Func, "func_");
+    if (F->Index != 0) {
+      Ret += "_" + std::to_string(F->Index);
+    }
+    return Ret;
   } else if (auto IC = std::get_if<UConstant>(&Val)) {
     if (auto CI = dyn_cast<ConstantInt>(IC->Val)) {
       return "IntConstant_" + int_to_hex(CI->getSExtValue());
