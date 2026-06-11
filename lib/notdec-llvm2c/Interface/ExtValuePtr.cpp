@@ -4,6 +4,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/Module.h>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/Support/raw_ostream.h>
 #include <cctype>
 #include <sstream>
@@ -40,6 +41,16 @@ std::string formatPrintedValue(const llvm::Value &V) {
   V.print(OS);
   OS.flush();
   return squashWhitespace(std::move(Ret));
+}
+
+std::string formatConstantIntId(const llvm::ConstantInt &CI) {
+  const llvm::APInt &Value = CI.getValue();
+  if (Value.isSignedIntN(64)) {
+    return int_to_hex(Value.getSExtValue());
+  }
+  llvm::SmallString<64> Text;
+  Value.toString(Text, 16, false);
+  return "0x" + Text.str().str();
 }
 
 std::string formatFunctionId(const llvm::Function &F) {
@@ -306,12 +317,12 @@ std::string getName(const ExtValuePtr &Val) {
     return Ret;
   } else if (auto IC = std::get_if<UConstant>(&Val)) {
     if (auto CI = dyn_cast<ConstantInt>(IC->Val)) {
-      return "IntConstant_" + int_to_hex(CI->getSExtValue());
+      return "IntConstant_" + formatConstantIntId(*CI);
     } else {
       return "Constant_" + ValueNamer::getName(*IC->Val, "constant_");
     }
   } else if (auto CA = std::get_if<ConstantAddr>(&Val)) {
-    return "ConstantAddr_" + int_to_hex(CA->Val->getSExtValue());
+    return "ConstantAddr_" + formatConstantIntId(*CA->Val);
   } else if (auto SO = std::get_if<StackObject>(&Val)) {
     return "StackObj_" + ValueNamer::getName(*SO->Allocator);
   } else if (auto HO = std::get_if<HeapObject>(&Val)) {
@@ -345,7 +356,7 @@ std::string toStableString(const ExtValuePtr &Val) {
     return Ret;
   }
   if (auto CA = std::get_if<ConstantAddr>(&Val)) {
-    return "addr(" + int_to_hex(CA->Val->getSExtValue()) + ")";
+    return "addr(" + formatConstantIntId(*CA->Val) + ")";
   }
   if (auto SO = std::get_if<StackObject>(&Val)) {
     return formatFunctionId(*SO->Allocator->getFunction()) + "::stack(" +
