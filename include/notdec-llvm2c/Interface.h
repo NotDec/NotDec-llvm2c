@@ -58,8 +58,10 @@ struct HTypeResult {
   // std::map<clang::Decl *, StructInfo> StructInfos;
   // std::set<clang::Decl*> AllDecls;
 
-  HType *MemoryType;
-  ast::RecordDecl *MemoryDecl;
+  HType *MemoryType = nullptr;
+  ast::RecordDecl *MemoryDecl = nullptr;
+  HType *StorageType = nullptr;
+  ast::RecordDecl *StorageDecl = nullptr;
 
   HTypeResult() = default;
   HTypeResult(HTypeResult &&Other) = default;
@@ -100,6 +102,7 @@ struct HTypeResult {
     printDeclSection(OS, Formatter);
     printValueSection(OS, "types", Formatter);
     printMemorySection(OS, Formatter);
+    printStorageSection(OS, Formatter);
   }
   void dump() const { print(llvm::errs()); }
 
@@ -143,6 +146,12 @@ private:
     }
     if (MemoryDecl != nullptr) {
       Formatter.collectDecl(*MemoryDecl);
+    }
+    if (StorageType != nullptr) {
+      Formatter.collectType(StorageType);
+    }
+    if (StorageDecl != nullptr) {
+      Formatter.collectDecl(*StorageDecl);
     }
   }
 
@@ -193,6 +202,18 @@ private:
     }
     if (MemoryType != nullptr) {
       OS << "type => " << Formatter.formatType(MemoryType) << "\n";
+    }
+    OS << "\n";
+  }
+
+  void printStorageSection(llvm::raw_ostream &OS,
+                           ast::HTypeSnapshotFormatter &Formatter) const {
+    OS << "[storage]\n";
+    if (StorageDecl != nullptr) {
+      OS << "decl => " << Formatter.formatDeclName(*StorageDecl) << "\n";
+    }
+    if (StorageType != nullptr) {
+      OS << "type => " << Formatter.formatType(StorageType) << "\n";
     }
     OS << "\n";
   }
