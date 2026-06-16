@@ -387,6 +387,9 @@ std::string HTypeSnapshotFormatter::formatFieldName(const FieldDecl &Field,
   if (Field.isPadding) {
     return "padding_" + std::to_string(PaddingIndex);
   }
+  if (Field.Comment.rfind("storage path:", 0) == 0 && !Field.Name.empty()) {
+    return Field.Name;
+  }
   return "field_" + std::to_string(Index);
 }
 
