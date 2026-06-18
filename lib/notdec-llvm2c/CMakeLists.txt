@@ -10,11 +10,6 @@ add_library(notdec-llvm2c SHARED STATIC
     Dominators.cpp
     CompoundConditionBuilder.cpp
     TypeManager.cpp
-    Interface/StructManager.cpp
-    Interface/ExtValuePtr.cpp
-    Interface/ValueNamer.cpp
-    Interface/HType.cpp
-    Range.cpp
     ASTPrinter/StmtPrinter.cpp
     ASTPrinter/DeclPrinter.cpp
     ASTPrinter/TypePrinter.cpp
@@ -23,12 +18,14 @@ add_library(notdec-llvm2c SHARED STATIC
 if (NOTDEC_HAVE_SHARED_LLVM AND NOTDEC_HAVE_SHARED_CLANG)
     target_link_libraries(notdec-llvm2c
         PUBLIC
+        notdec-backend-core
         notdec_llvm_deps
         notdec_clang_deps
     )
 else ()
     target_link_libraries(notdec-llvm2c
         PUBLIC
+        notdec-backend-core
         LLVMCore LLVMIRReader LLVMSupport LLVMPasses
         clangAST clangTooling
     )
