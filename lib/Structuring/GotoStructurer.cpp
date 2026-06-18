@@ -31,6 +31,7 @@ StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
     case TerminatorKind::Branch: {
       StructuredNode IfNode;
       IfNode.Kind = StructuredNodeKind::If;
+      IfNode.Block = Block.Id;
       IfNode.Condition = Block.Condition;
       for (BlockId Succ : Block.Successors) {
         IfNode.Children.push_back(Tree.addNode(makeGoto(Succ)));
@@ -41,6 +42,7 @@ StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
     case TerminatorKind::Switch: {
       StructuredNode SwitchNode;
       SwitchNode.Kind = StructuredNodeKind::Switch;
+      SwitchNode.Block = Block.Id;
       SwitchNode.Condition = Block.Condition;
       SwitchNode.Cases = Block.Cases;
       for (const auto &Case : Block.Cases) {

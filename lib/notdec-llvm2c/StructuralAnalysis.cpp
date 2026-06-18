@@ -74,6 +74,7 @@
 #include "notdec-llvm2c/Interface.h"
 #include "notdec-llvm2c/Phoenix.h"
 #include "notdec-llvm2c/StructuralAnalysis.h"
+#include "notdec-llvm2c/StructuredGoto.h"
 #include "notdec-llvm2c/Utils.h"
 
 #define DEBUG_TYPE "structural-analysis"
@@ -2129,6 +2130,9 @@ void SAFuncContext::run() {
     SA.execute();
   } else if (getOpts().algo == SA_Phoenix) {
     Phoenix SA(*this);
+    SA.execute();
+  } else if (getOpts().algo == SA_StructuredGoto) {
+    StructuredGoto SA(*this);
     SA.execute();
   } else {
     llvm::errs() << "SAFuncContext::run: unknown algorithm: " << getOpts().algo

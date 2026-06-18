@@ -5,6 +5,7 @@ add_library(notdec-backend-c SHARED STATIC
     Phoenix.cpp
     CFG.cpp
     Goto.cpp
+    StructuredGoto.cpp
     Utils.cpp
     PostOrderCFGView.cpp
     Dominators.cpp
@@ -25,6 +26,7 @@ if (NOTDEC_HAVE_SHARED_LLVM AND NOTDEC_HAVE_SHARED_CLANG)
     target_link_libraries(notdec-backend-c
         PUBLIC
         notdec-backend-core
+        notdec-backend-structuring
         notdec_llvm_deps
         notdec_clang_deps
     )
@@ -32,6 +34,7 @@ else ()
     target_link_libraries(notdec-backend-c
         PUBLIC
         notdec-backend-core
+        notdec-backend-structuring
         LLVMCore LLVMIRReader LLVMSupport LLVMPasses
         clangAST clangTooling
     )

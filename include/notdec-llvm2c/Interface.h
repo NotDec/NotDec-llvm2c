@@ -14,7 +14,7 @@
 
 namespace notdec::llvm2c {
 
-enum StructuralAlgorithms { SA_Goto, SA_Phoenix };
+enum StructuralAlgorithms { SA_Goto, SA_Phoenix, SA_StructuredGoto };
 
 struct Options {
   bool noDemoteSSA = false;

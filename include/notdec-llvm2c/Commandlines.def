@@ -9,7 +9,10 @@ static cl::opt<::notdec::llvm2c::StructuralAlgorithms>
     Algo("algo", cl::desc("Structural algorithm:"),
          cl::values(clEnumValN(::notdec::llvm2c::SA_Goto, "goto", "emergent"),
                     clEnumValN(::notdec::llvm2c::SA_Phoenix, "phoenix",
-                               "phoenix algorithm")),
+                               "phoenix algorithm"),
+                    clEnumValN(::notdec::llvm2c::SA_StructuredGoto,
+                               "structured-goto",
+                               "shared structuring goto adapter")),
          cl::init(::notdec::llvm2c::SA_Phoenix), cl::cat(NotdecLLVM2CCat));
 static cl::opt<bool>
     noDemoteSSA("no-demote-ssa",
