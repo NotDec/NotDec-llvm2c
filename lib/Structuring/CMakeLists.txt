@@ -1,6 +1,7 @@
 add_library(notdec-backend-structuring STATIC
     StructuredCFG.cpp
     GotoStructurer.cpp
+    LLVMFunctionCFGBuilder.cpp
 )
 
 target_link_libraries(notdec-backend-structuring

@@ -1,8 +1,8 @@
 #include "notdec-backends/Solidity/BodyBuilder.h"
 #include "notdec-backends/Structuring/GotoStructurer.h"
+#include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
 
 #include <cctype>
-#include <map>
 #include <utility>
 
 #include <llvm/ADT/SmallString.h>
@@ -16,16 +16,14 @@ namespace notdec::backend::solidity {
 namespace {
 
 using structuring::BlockId;
-using structuring::CFGBlock;
 using structuring::GotoStructurer;
 using structuring::InvalidNodeId;
+using structuring::LLVMFunctionCFGBuilder;
 using structuring::PayloadRef;
 using structuring::StructuredCFG;
 using structuring::StructuredNode;
 using structuring::StructuredNodeKind;
 using structuring::StructuredTree;
-using structuring::SwitchCase;
-using structuring::TerminatorKind;
 
 PayloadRef addPayload(std::vector<std::string> &Payloads, std::string Text) {
   Payloads.push_back(std::move(Text));
@@ -123,71 +121,46 @@ std::string llvmValueName(const llvm::Value &V, llvm::StringRef Prefix) {
 } // namespace
 
 std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
-  StructuredCFG Cfg;
   std::vector<std::string> Payloads;
-  std::map<const llvm::BasicBlock *, BlockId> BlockIds;
+  class SolidityPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
+  public:
+    explicit SolidityPayloadProvider(std::vector<std::string> &Payloads)
+        : Payloads(Payloads) {}
 
-  for (const llvm::BasicBlock &BB : F) {
-    BlockId Id = static_cast<BlockId>(BlockIds.size());
-    BlockIds[&BB] = Id;
-  }
-
-  for (const llvm::BasicBlock &BB : F) {
-    CFGBlock Block;
-    Block.Id = BlockIds[&BB];
-
-    for (const llvm::Instruction &I : BB) {
-      if (std::optional<std::string> Kind =
-              getStringMetadata(I, "notdec.solidity.revert")) {
-        Block.Statements.push_back(
-            addPayload(Payloads, formatRevertStatement(I, *Kind)));
-        continue;
-      }
-      if (std::optional<std::string> Kind =
-              getStringMetadata(I, "notdec.solidity.event")) {
-        Block.Statements.push_back(
-            addPayload(Payloads, formatEventStatement(I, *Kind)));
+    void collectStatements(const llvm::BasicBlock &BB,
+                           std::vector<PayloadRef> &Out) override {
+      for (const llvm::Instruction &I : BB) {
+        if (std::optional<std::string> Kind =
+                BodyBuilder::getStringMetadata(I, "notdec.solidity.revert")) {
+          Out.push_back(addPayload(
+              Payloads, BodyBuilder::formatRevertStatement(I, *Kind)));
+          continue;
+        }
+        if (std::optional<std::string> Kind =
+                BodyBuilder::getStringMetadata(I, "notdec.solidity.event")) {
+          Out.push_back(addPayload(
+              Payloads, BodyBuilder::formatEventStatement(I, *Kind)));
+        }
       }
     }
 
-    const llvm::Instruction *Term = BB.getTerminator();
-    if (const auto *Br = llvm::dyn_cast_or_null<llvm::BranchInst>(Term)) {
-      if (Br->isConditional()) {
-        Block.Terminator = TerminatorKind::Branch;
-        Block.Condition =
-            addPayload(Payloads, llvmValueName(*Br->getCondition(), "cond"));
-      } else {
-        Block.Terminator = TerminatorKind::Fallthrough;
-      }
-      for (const llvm::BasicBlock *Succ : Br->successors()) {
-        Block.Successors.push_back(BlockIds[Succ]);
-      }
-    } else if (const auto *Sw = llvm::dyn_cast_or_null<llvm::SwitchInst>(Term)) {
-      Block.Terminator = TerminatorKind::Switch;
-      Block.Condition =
-          addPayload(Payloads, llvmValueName(*Sw->getCondition(), "switch"));
-      for (auto Case : Sw->cases()) {
-        SwitchCase OutCase;
-        llvm::SmallString<32> Text;
-        Case.getCaseValue()->getValue().toString(Text, 10,
-                                                 /*isSigned=*/false);
-        OutCase.Value = addPayload(Payloads, Text.str().str());
-        OutCase.Target = BlockIds[Case.getCaseSuccessor()];
-        Block.Cases.push_back(OutCase);
-      }
-      for (unsigned I = 0; I < Sw->getNumSuccessors(); ++I) {
-        Block.Successors.push_back(BlockIds[Sw->getSuccessor(I)]);
-      }
-    } else if (llvm::isa_and_nonnull<llvm::ReturnInst>(Term)) {
-      Block.Terminator = TerminatorKind::Return;
-    } else if (llvm::isa_and_nonnull<llvm::UnreachableInst>(Term)) {
-      Block.Terminator = TerminatorKind::Unreachable;
-    } else {
-      Block.Terminator = TerminatorKind::Unreachable;
+    PayloadRef getCondition(const llvm::Value &V,
+                            llvm::StringRef FallbackName) override {
+      return addPayload(Payloads, llvmValueName(V, FallbackName));
     }
 
-    Cfg.addBlock(std::move(Block));
-  }
+    PayloadRef getSwitchCase(const llvm::ConstantInt &V) override {
+      llvm::SmallString<32> Text;
+      V.getValue().toString(Text, 10, /*isSigned=*/false);
+      return addPayload(Payloads, Text.str().str());
+    }
+
+  private:
+    std::vector<std::string> &Payloads;
+  };
+
+  SolidityPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(F, Provider);
 
   StructuredTree Tree = GotoStructurer().structure(Cfg);
   std::vector<std::string> Result;
