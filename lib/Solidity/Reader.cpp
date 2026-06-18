@@ -1,4 +1,5 @@
 #include "notdec-backends/Solidity/Reader.h"
+#include "notdec-backends/Solidity/TypePrinter.h"
 
 #include <algorithm>
 #include <cctype>
@@ -12,14 +13,19 @@
 
 namespace notdec::backend::solidity {
 
-SourceUnit Reader::read(const llvm::Module &M) {
+SourceUnit Reader::read(const llvm::Module &M,
+                        const ::notdec::llvm2c::HTypeResult *HT) {
   SourceUnit Unit;
-  Unit.Contracts.push_back(readContract(M));
+  Unit.Contracts.push_back(readContract(M, HT));
   return Unit;
 }
 
-Contract Reader::readContract(const llvm::Module &M) {
+Contract Reader::readContract(const llvm::Module &M,
+                              const ::notdec::llvm2c::HTypeResult *HT) {
   Contract Result;
+  if (HT != nullptr) {
+    readStateVariables(*HT, Result);
+  }
 
   std::vector<const llvm::Function *> PublicFunctions;
   for (const llvm::Function &F : M.functions()) {
@@ -37,6 +43,40 @@ Contract Reader::readContract(const llvm::Module &M) {
   }
 
   return Result;
+}
+
+void Reader::readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
+                                Contract &Result) {
+  if (HT.StorageDecl == nullptr) {
+    return;
+  }
+
+  unsigned Index = 0;
+  std::vector<std::string> Names;
+  for (const auto &Field : HT.StorageDecl->getFields()) {
+    if (Field.isPadding) {
+      continue;
+    }
+    std::string Name = Field.Name.empty()
+                           ? "storage_" + std::to_string(Index)
+                           : sanitizeIdentifier(Field.Name);
+    if (Name.empty()) {
+      Name = "storage_" + std::to_string(Index);
+    }
+
+    std::string UniqueName = Name;
+    unsigned Collision = 1;
+    while (std::find(Names.begin(), Names.end(), UniqueName) != Names.end()) {
+      UniqueName = Name + "_" + std::to_string(Collision++);
+    }
+    Names.push_back(UniqueName);
+    StateVariable Var;
+    Var.Type = TypePrinter::formatType(Field.Type);
+    Var.Name = UniqueName;
+    Var.Visibility = "public";
+    Result.StateVariables.push_back(std::move(Var));
+    ++Index;
+  }
 }
 
 bool Reader::isPublicEntryFunction(const llvm::Function &F) {

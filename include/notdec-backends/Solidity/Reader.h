@@ -3,16 +3,21 @@
 
 #include <llvm/IR/Module.h>
 
+#include "notdec-backends/Core/HTypeResult.h"
 #include "notdec-backends/Solidity/Ast.h"
 
 namespace notdec::backend::solidity {
 
 class Reader {
 public:
-  SourceUnit read(const llvm::Module &M);
+  SourceUnit read(const llvm::Module &M,
+                  const ::notdec::llvm2c::HTypeResult *HT = nullptr);
 
 private:
-  Contract readContract(const llvm::Module &M);
+  Contract readContract(const llvm::Module &M,
+                        const ::notdec::llvm2c::HTypeResult *HT);
+  static void readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
+                                 Contract &Result);
   static bool isPublicEntryFunction(const llvm::Function &F);
   static Function readFunction(const llvm::Function &F);
   static std::vector<Parameter> readReturns(const llvm::Function &F);

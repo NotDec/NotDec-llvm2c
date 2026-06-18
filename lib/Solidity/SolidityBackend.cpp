@@ -10,9 +10,8 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
   (void)M;
   (void)MAM;
   (void)Opts;
-  (void)HT;
 
-  SourceUnit Unit = Reader().read(M);
+  SourceUnit Unit = Reader().read(M, HT.get());
   Printer(OS).print(Unit);
 }
 
