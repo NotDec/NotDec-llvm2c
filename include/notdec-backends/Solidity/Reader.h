@@ -15,6 +15,7 @@ private:
   Contract readContract(const llvm::Module &M);
   static bool isPublicEntryFunction(const llvm::Function &F);
   static Function readFunction(const llvm::Function &F);
+  static std::vector<Parameter> readReturns(const llvm::Function &F);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,
                                          Function &Result);
   static std::vector<Parameter> parseAbiParameters(llvm::StringRef Encoded);

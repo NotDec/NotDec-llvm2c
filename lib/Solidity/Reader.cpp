@@ -6,7 +6,9 @@
 #include <vector>
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/Instructions.h>
 
 namespace notdec::backend::solidity {
 
@@ -47,7 +49,47 @@ Function Reader::readFunction(const llvm::Function &F) {
   Function Result;
   applyFunctionNameAndParams(F.getName(), Result);
   Result.Visibility = "public";
+  Result.Returns = readReturns(F);
   Result.Body.push_back("// TODO: recover body");
+  return Result;
+}
+
+std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
+  std::optional<std::uint64_t> StaticReturnBytes;
+  for (const llvm::BasicBlock &BB : F) {
+    for (const llvm::Instruction &I : BB) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (Call == nullptr) {
+        continue;
+      }
+      const llvm::Function *Callee = Call->getCalledFunction();
+      if (Callee == nullptr || Callee->getName() != "evm_return" ||
+          Call->arg_size() < 3) {
+        continue;
+      }
+      const auto *Len = llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(2));
+      if (Len == nullptr || Len->getValue().ugt(UINT64_MAX)) {
+        continue;
+      }
+      std::uint64_t Bytes = Len->getZExtValue();
+      if (Bytes == 0 || Bytes % 32 != 0) {
+        continue;
+      }
+      if (StaticReturnBytes.has_value() && *StaticReturnBytes != Bytes) {
+        return {};
+      }
+      StaticReturnBytes = Bytes;
+    }
+  }
+
+  std::vector<Parameter> Result;
+  if (!StaticReturnBytes.has_value()) {
+    return Result;
+  }
+  std::uint64_t Count = *StaticReturnBytes / 32;
+  for (std::uint64_t I = 0; I < Count; ++I) {
+    Result.push_back(Parameter{"uint256", "ret" + std::to_string(I)});
+  }
   return Result;
 }
 
