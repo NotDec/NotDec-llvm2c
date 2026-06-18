@@ -1,5 +1,5 @@
 include(AddLLVM)
-add_library(notdec-llvm2c SHARED STATIC
+add_library(notdec-backend-c SHARED STATIC
     ASTManager.cpp
     StructuralAnalysis.cpp
     Phoenix.cpp
@@ -15,15 +15,21 @@ add_library(notdec-llvm2c SHARED STATIC
     ASTPrinter/TypePrinter.cpp
 )
 
+add_library(notdec-llvm2c INTERFACE)
+target_link_libraries(notdec-llvm2c
+    INTERFACE
+    notdec-backend-c
+)
+
 if (NOTDEC_HAVE_SHARED_LLVM AND NOTDEC_HAVE_SHARED_CLANG)
-    target_link_libraries(notdec-llvm2c
+    target_link_libraries(notdec-backend-c
         PUBLIC
         notdec-backend-core
         notdec_llvm_deps
         notdec_clang_deps
     )
 else ()
-    target_link_libraries(notdec-llvm2c
+    target_link_libraries(notdec-backend-c
         PUBLIC
         notdec-backend-core
         LLVMCore LLVMIRReader LLVMSupport LLVMPasses
@@ -31,12 +37,12 @@ else ()
     )
 endif ()
 
-target_include_directories(notdec-llvm2c
+target_include_directories(notdec-backend-c
     PUBLIC
     ../../include
 )
 
-set_target_properties(notdec-llvm2c
+set_target_properties(notdec-backend-c
     PROPERTIES
         OUTPUT_NAME "notdec-llvm2c"
 )
