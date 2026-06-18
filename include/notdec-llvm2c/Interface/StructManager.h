@@ -4,7 +4,6 @@
 #define _NOTDEC_STRUCTMANAGER_H_
 
 #include <algorithm>
-#include <clang/AST/Decl.h>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -63,7 +62,6 @@ struct SimpleRange {
 struct FieldEntry {
   SimpleRange R;
   const retypd::CGEdge *Edge = nullptr;
-  // clang::DeclaratorDecl *Decl = nullptr;
 };
 
 struct BytesManager {

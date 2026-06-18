@@ -1,8 +1,6 @@
 #include "notdec-llvm2c/Interface/StructManager.h"
 
 #include <cassert>
-#include <clang/AST/ASTContext.h>
-#include <clang/AST/Expr.h>
 #include <cstddef>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>

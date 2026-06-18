@@ -10,13 +10,11 @@ if (NOTDEC_HAVE_SHARED_LLVM AND NOTDEC_HAVE_SHARED_CLANG)
     target_link_libraries(notdec-backend-core
         PUBLIC
         notdec_llvm_deps
-        notdec_clang_deps
     )
 else ()
     target_link_libraries(notdec-backend-core
         PUBLIC
         LLVMCore LLVMIRReader LLVMSupport
-        clangAST
     )
 endif ()
 

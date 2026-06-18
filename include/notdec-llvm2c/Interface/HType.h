@@ -21,6 +21,10 @@
 #include "Range.h"
 #include "notdec-llvm2c/Interface/StructManager.h"
 
+namespace clang {
+class Decl;
+}
+
 namespace notdec::ast {
 
 class HTypeContext;
