@@ -1,4 +1,5 @@
 add_library(notdec-backend-solidity STATIC
+    Printer.cpp
     SolidityBackend.cpp
 )
 

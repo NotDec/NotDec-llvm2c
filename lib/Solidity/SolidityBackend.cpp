@@ -1,4 +1,5 @@
 #include "notdec-backends/Solidity/Backend.h"
+#include "notdec-backends/Solidity/Printer.h"
 
 namespace notdec::backend::solidity {
 
@@ -10,8 +11,9 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
   (void)Opts;
   (void)HT;
 
-  OS << "contract Decompiled {\n";
-  OS << "}\n";
+  SourceUnit Unit;
+  Unit.Contracts.push_back(Contract{});
+  Printer(OS).print(Unit);
 }
 
 } // namespace notdec::backend::solidity
