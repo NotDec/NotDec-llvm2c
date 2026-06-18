@@ -1,5 +1,6 @@
 #include "notdec-backends/Solidity/Backend.h"
 #include "notdec-backends/Solidity/Printer.h"
+#include "notdec-backends/Solidity/Reader.h"
 
 namespace notdec::backend::solidity {
 
@@ -11,8 +12,7 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
   (void)Opts;
   (void)HT;
 
-  SourceUnit Unit;
-  Unit.Contracts.push_back(Contract{});
+  SourceUnit Unit = Reader().read(M);
   Printer(OS).print(Unit);
 }
 
