@@ -18,6 +18,7 @@ private:
   unsigned Indent = 0;
 
   void printContract(const Contract &Contract);
+  void printEvent(const EventDecl &Event);
   void printStateVariable(const StateVariable &Var);
   void printFunction(const Function &Func);
   void printParameters(const std::vector<Parameter> &Params);

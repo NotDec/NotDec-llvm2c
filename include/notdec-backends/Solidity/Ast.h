@@ -19,6 +19,11 @@ struct StateVariable {
   std::string Visibility;
 };
 
+struct EventDecl {
+  std::string Name;
+  std::vector<Parameter> Parameters;
+};
+
 struct Function {
   std::string Name;
   std::string Visibility = "public";
@@ -29,6 +34,7 @@ struct Function {
 
 struct Contract {
   std::string Name = "Decompiled";
+  std::vector<EventDecl> Events;
   std::vector<StateVariable> StateVariables;
   std::vector<Function> Functions;
 };

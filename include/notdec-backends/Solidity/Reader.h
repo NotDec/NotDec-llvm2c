@@ -18,6 +18,7 @@ public:
 private:
   Contract readContract(const llvm::Module &M,
                         const ::notdec::llvm2c::HTypeResult *HT);
+  static void readEvents(const llvm::Module &M, Contract &Result);
   static void readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
                                  Contract &Result);
   static bool isPublicEntryFunction(const llvm::Function &F);
@@ -26,9 +27,12 @@ private:
   static std::vector<Parameter> readReturns(const llvm::Function &F);
   static std::optional<std::string> getStringMetadata(const llvm::Instruction &I,
                                                       llvm::StringRef Kind);
+  static std::optional<std::string>
+  getEventName(const llvm::Instruction &I, llvm::StringRef Kind);
   static std::string formatRevertStatement(const llvm::Instruction &I,
                                            llvm::StringRef Kind);
-  static std::string formatEventStatement(llvm::StringRef Kind);
+  static std::string formatEventStatement(const llvm::Instruction &I,
+                                          llvm::StringRef Kind);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,
                                          Function &Result);
   static std::vector<Parameter> parseAbiParameters(llvm::StringRef Encoded);

@@ -14,10 +14,17 @@ void Printer::print(const SourceUnit &Unit) {
 void Printer::printContract(const Contract &Contract) {
   OS << "contract " << Contract.Name << " {\n";
   ++Indent;
+  for (const auto &Event : Contract.Events) {
+    printEvent(Event);
+  }
+  if (!Contract.Events.empty() && !Contract.StateVariables.empty()) {
+    OS << "\n";
+  }
   for (const auto &Var : Contract.StateVariables) {
     printStateVariable(Var);
   }
-  if (!Contract.StateVariables.empty() && !Contract.Functions.empty()) {
+  if ((!Contract.Events.empty() || !Contract.StateVariables.empty()) &&
+      !Contract.Functions.empty()) {
     OS << "\n";
   }
   for (std::size_t I = 0; I < Contract.Functions.size(); ++I) {
@@ -37,6 +44,13 @@ void Printer::printStateVariable(const StateVariable &Var) {
     OS << " " << Var.Visibility;
   }
   OS << " " << Var.Name << ";\n";
+}
+
+void Printer::printEvent(const EventDecl &Event) {
+  printIndent();
+  OS << "event " << Event.Name << "(";
+  printParameters(Event.Parameters);
+  OS << ");\n";
 }
 
 void Printer::printFunction(const Function &Func) {

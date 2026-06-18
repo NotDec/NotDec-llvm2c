@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
@@ -25,6 +26,7 @@ SourceUnit Reader::read(const llvm::Module &M,
 Contract Reader::readContract(const llvm::Module &M,
                               const ::notdec::llvm2c::HTypeResult *HT) {
   Contract Result;
+  readEvents(M, Result);
   if (HT != nullptr) {
     readStateVariables(*HT, Result);
   }
@@ -45,6 +47,37 @@ Contract Reader::readContract(const llvm::Module &M,
   }
 
   return Result;
+}
+
+void Reader::readEvents(const llvm::Module &M, Contract &Result) {
+  std::vector<std::string> Names;
+  for (const llvm::Function &F : M.functions()) {
+    if (F.isDeclaration()) {
+      continue;
+    }
+    for (const llvm::BasicBlock &BB : F) {
+      for (const llvm::Instruction &I : BB) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+        if (Call == nullptr) {
+          continue;
+        }
+        std::optional<std::string> Kind =
+            getStringMetadata(I, "notdec.solidity.event");
+        if (!Kind.has_value()) {
+          continue;
+        }
+        std::optional<std::string> Name = getEventName(I, *Kind);
+        if (!Name.has_value() || Name->empty()) {
+          continue;
+        }
+        if (std::find(Names.begin(), Names.end(), *Name) != Names.end()) {
+          continue;
+        }
+        Names.push_back(*Name);
+        Result.Events.push_back(EventDecl{*Name, {}});
+      }
+    }
+  }
 }
 
 void Reader::readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
@@ -107,7 +140,7 @@ std::vector<std::string> Reader::readBody(const llvm::Function &F) {
       }
       if (std::optional<std::string> Kind =
               getStringMetadata(I, "notdec.solidity.event")) {
-        Result.push_back(formatEventStatement(*Kind));
+        Result.push_back(formatEventStatement(I, *Kind));
       }
     }
   }
@@ -169,6 +202,31 @@ Reader::getStringMetadata(const llvm::Instruction &I, llvm::StringRef Kind) {
   return Value->getString().str();
 }
 
+std::optional<std::string>
+Reader::getEventName(const llvm::Instruction &I, llvm::StringRef Kind) {
+  const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+  if (Call == nullptr || !Call->getCalledFunction() ||
+      !Call->getCalledFunction()->getName().starts_with("evm_log") ||
+      Call->getCalledFunction()->getName().size() != 8 ||
+      Call->arg_size() < 3) {
+    return std::nullopt;
+  }
+  if (Kind.empty()) {
+    return std::nullopt;
+  }
+
+  std::string Name = ("Event_" + Kind).str();
+  if (Call->arg_size() >= 4) {
+    const auto *Topic0 = llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(3));
+    if (Topic0 != nullptr) {
+      llvm::SmallString<64> Text;
+      Topic0->getValue().toString(Text, 16, /*isSigned=*/false);
+      Name = "Event_0x" + Text.str().str();
+    }
+  }
+  return sanitizeIdentifier(Name);
+}
+
 std::string Reader::formatRevertStatement(const llvm::Instruction &I,
                                           llvm::StringRef Kind) {
   std::string Result = "revert();";
@@ -194,8 +252,10 @@ std::string Reader::formatRevertStatement(const llvm::Instruction &I,
   return Result + " // " + Comment;
 }
 
-std::string Reader::formatEventStatement(llvm::StringRef Kind) {
-  std::string Name = sanitizeIdentifier(("Event_" + Kind).str());
+std::string Reader::formatEventStatement(const llvm::Instruction &I,
+                                         llvm::StringRef Kind) {
+  std::string Name = getEventName(I, Kind).value_or(
+      sanitizeIdentifier(("Event_" + Kind).str()));
   return "emit " + Name + "(); // TODO: recover event signature";
 }
 
