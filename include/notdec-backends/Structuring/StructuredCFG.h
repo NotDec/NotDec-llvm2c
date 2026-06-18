@@ -1,0 +1,110 @@
+#ifndef NOTDEC_BACKENDS_STRUCTURING_STRUCTUREDCFG_H
+#define NOTDEC_BACKENDS_STRUCTURING_STRUCTUREDCFG_H
+
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <utility>
+#include <vector>
+
+namespace notdec::backend::structuring {
+
+using BlockId = std::uint32_t;
+using NodeId = std::uint32_t;
+using PayloadId = std::size_t;
+
+constexpr BlockId InvalidBlockId = std::numeric_limits<BlockId>::max();
+constexpr NodeId InvalidNodeId = std::numeric_limits<NodeId>::max();
+constexpr PayloadId InvalidPayloadId = std::numeric_limits<PayloadId>::max();
+
+// Language backends keep their own statement/expression storage and pass stable
+// ids here. The structuring layer only moves these ids around, so it does not
+// depend on Clang, Solidity AST nodes, or any other frontend-specific type.
+struct PayloadRef {
+  PayloadId Id = InvalidPayloadId;
+
+  bool isValid() const { return Id != InvalidPayloadId; }
+};
+
+enum class TerminatorKind {
+  Fallthrough,
+  Branch,
+  Switch,
+  Return,
+  Unreachable,
+};
+
+struct SwitchCase {
+  PayloadRef Value;
+  BlockId Target = InvalidBlockId;
+};
+
+struct CFGBlock {
+  BlockId Id = InvalidBlockId;
+  std::vector<PayloadRef> Statements;
+  TerminatorKind Terminator = TerminatorKind::Fallthrough;
+  PayloadRef Condition;
+  std::vector<BlockId> Successors;
+  std::vector<SwitchCase> Cases;
+};
+
+class StructuredCFG {
+public:
+  BlockId addBlock(CFGBlock Block);
+
+  const std::vector<CFGBlock> &blocks() const { return Blocks; }
+  std::vector<CFGBlock> &blocks() { return Blocks; }
+
+  const CFGBlock *getBlock(BlockId Id) const;
+
+private:
+  std::vector<CFGBlock> Blocks;
+};
+
+enum class StructuredNodeKind {
+  Sequence,
+  BasicBlock,
+  If,
+  Switch,
+  Label,
+  Goto,
+  Break,
+  Continue,
+  While,
+  DoWhile,
+  InfiniteLoop,
+  Return,
+  Unreachable,
+};
+
+struct StructuredNode {
+  StructuredNodeKind Kind = StructuredNodeKind::Sequence;
+  BlockId Block = InvalidBlockId;
+  BlockId Target = InvalidBlockId;
+  PayloadRef Condition;
+  std::vector<PayloadRef> Statements;
+  std::vector<SwitchCase> Cases;
+  std::vector<NodeId> Children;
+};
+
+class StructuredTree {
+public:
+  NodeId addNode(StructuredNode Node);
+
+  NodeId root() const { return Root; }
+  void setRoot(NodeId Id) { Root = Id; }
+
+  const std::vector<StructuredNode> &nodes() const { return Nodes; }
+  std::vector<StructuredNode> &nodes() { return Nodes; }
+
+  const StructuredNode *getNode(NodeId Id) const;
+
+private:
+  NodeId Root = InvalidNodeId;
+  std::vector<StructuredNode> Nodes;
+};
+
+} // namespace notdec::backend::structuring
+
+#endif
