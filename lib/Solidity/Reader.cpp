@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 
 namespace notdec::backend::solidity {
 
@@ -90,7 +92,28 @@ Function Reader::readFunction(const llvm::Function &F) {
   applyFunctionNameAndParams(F.getName(), Result);
   Result.Visibility = "public";
   Result.Returns = readReturns(F);
-  Result.Body.push_back("// TODO: recover body");
+  Result.Body = readBody(F);
+  return Result;
+}
+
+std::vector<std::string> Reader::readBody(const llvm::Function &F) {
+  std::vector<std::string> Result;
+  for (const llvm::BasicBlock &BB : F) {
+    for (const llvm::Instruction &I : BB) {
+      if (std::optional<std::string> Kind =
+              getStringMetadata(I, "notdec.solidity.revert")) {
+        Result.push_back(formatRevertStatement(I, *Kind));
+        continue;
+      }
+      if (std::optional<std::string> Kind =
+              getStringMetadata(I, "notdec.solidity.event")) {
+        Result.push_back(formatEventStatement(*Kind));
+      }
+    }
+  }
+
+  Result.push_back(Result.empty() ? "// TODO: recover body"
+                                  : "// TODO: recover remaining body");
   return Result;
 }
 
@@ -131,6 +154,49 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
     Result.push_back(Parameter{"uint256", "ret" + std::to_string(I)});
   }
   return Result;
+}
+
+std::optional<std::string>
+Reader::getStringMetadata(const llvm::Instruction &I, llvm::StringRef Kind) {
+  const llvm::MDNode *Node = I.getMetadata(Kind);
+  if (Node == nullptr || Node->getNumOperands() != 1) {
+    return std::nullopt;
+  }
+  const auto *Value = llvm::dyn_cast<llvm::MDString>(Node->getOperand(0));
+  if (Value == nullptr) {
+    return std::nullopt;
+  }
+  return Value->getString().str();
+}
+
+std::string Reader::formatRevertStatement(const llvm::Instruction &I,
+                                          llvm::StringRef Kind) {
+  std::string Result = "revert();";
+  std::string Comment = Kind.str();
+
+  if (std::optional<std::string> Code =
+          getStringMetadata(I, "notdec.solidity_revert.panic_code")) {
+    Comment += ", panic=" + *Code;
+  }
+  if (std::optional<std::string> Selector =
+          getStringMetadata(I, "notdec.solidity_revert.selector")) {
+    Comment += ", selector=0x" + *Selector;
+  }
+  if (std::optional<std::string> Count = getStringMetadata(
+          I, "notdec.solidity_revert.custom_error_arg_count")) {
+    Comment += ", args=" + *Count;
+  }
+  if (std::optional<std::string> Length =
+          getStringMetadata(I, "notdec.solidity_revert.error_string_length")) {
+    Comment += ", string_length=" + *Length;
+  }
+
+  return Result + " // " + Comment;
+}
+
+std::string Reader::formatEventStatement(llvm::StringRef Kind) {
+  std::string Name = sanitizeIdentifier(("Event_" + Kind).str());
+  return "emit " + Name + "(); // TODO: recover event signature";
 }
 
 void Reader::applyFunctionNameAndParams(llvm::StringRef IRName,

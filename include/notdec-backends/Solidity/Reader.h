@@ -1,6 +1,8 @@
 #ifndef NOTDEC_BACKENDS_SOLIDITY_READER_H
 #define NOTDEC_BACKENDS_SOLIDITY_READER_H
 
+#include <optional>
+
 #include <llvm/IR/Module.h>
 
 #include "notdec-backends/Core/HTypeResult.h"
@@ -20,7 +22,13 @@ private:
                                  Contract &Result);
   static bool isPublicEntryFunction(const llvm::Function &F);
   static Function readFunction(const llvm::Function &F);
+  static std::vector<std::string> readBody(const llvm::Function &F);
   static std::vector<Parameter> readReturns(const llvm::Function &F);
+  static std::optional<std::string> getStringMetadata(const llvm::Instruction &I,
+                                                      llvm::StringRef Kind);
+  static std::string formatRevertStatement(const llvm::Instruction &I,
+                                           llvm::StringRef Kind);
+  static std::string formatEventStatement(llvm::StringRef Kind);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,
                                          Function &Result);
   static std::vector<Parameter> parseAbiParameters(llvm::StringRef Encoded);
