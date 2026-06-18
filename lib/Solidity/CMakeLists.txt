@@ -1,4 +1,5 @@
 add_library(notdec-backend-solidity STATIC
+    BodyBuilder.cpp
     Printer.cpp
     Reader.cpp
     SolidityBackend.cpp
