@@ -65,14 +65,35 @@ void renderStructuredNode(const StructuredTree &Tree,
     break;
   case StructuredNodeKind::If:
     Out.push_back("// if " + payloadText(Payloads, Node->Condition));
-    for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out);
+    if (Node->Children.empty() &&
+        (Node->Then != InvalidNodeId || Node->Else != InvalidNodeId)) {
+      renderStructuredNode(Tree, Payloads, Node->Then, Out);
+      if (Node->Else != InvalidNodeId) {
+        Out.push_back("// else");
+        renderStructuredNode(Tree, Payloads, Node->Else, Out);
+      }
+    } else {
+      for (structuring::NodeId Child : Node->Children) {
+        renderStructuredNode(Tree, Payloads, Child, Out);
+      }
     }
     break;
   case StructuredNodeKind::Switch:
     Out.push_back("// switch " + payloadText(Payloads, Node->Condition));
-    for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out);
+    if (Node->Children.empty() &&
+        (!Node->StructuredCases.empty() || Node->Default != InvalidNodeId)) {
+      for (const auto &Case : Node->StructuredCases) {
+        Out.push_back("// case " + payloadText(Payloads, Case.Value));
+        renderStructuredNode(Tree, Payloads, Case.Body, Out);
+      }
+      if (Node->Default != InvalidNodeId) {
+        Out.push_back("// default");
+        renderStructuredNode(Tree, Payloads, Node->Default, Out);
+      }
+    } else {
+      for (structuring::NodeId Child : Node->Children) {
+        renderStructuredNode(Tree, Payloads, Child, Out);
+      }
     }
     break;
   case StructuredNodeKind::Goto:
@@ -92,20 +113,32 @@ void renderStructuredNode(const StructuredTree &Tree,
     break;
   case StructuredNodeKind::While:
     Out.push_back("// while " + payloadText(Payloads, Node->Condition));
-    for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out);
+    if (Node->Body != InvalidNodeId) {
+      renderStructuredNode(Tree, Payloads, Node->Body, Out);
+    } else {
+      for (structuring::NodeId Child : Node->Children) {
+        renderStructuredNode(Tree, Payloads, Child, Out);
+      }
     }
     break;
   case StructuredNodeKind::DoWhile:
     Out.push_back("// do-while " + payloadText(Payloads, Node->Condition));
-    for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out);
+    if (Node->Body != InvalidNodeId) {
+      renderStructuredNode(Tree, Payloads, Node->Body, Out);
+    } else {
+      for (structuring::NodeId Child : Node->Children) {
+        renderStructuredNode(Tree, Payloads, Child, Out);
+      }
     }
     break;
   case StructuredNodeKind::InfiniteLoop:
     Out.push_back("// infinite loop");
-    for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out);
+    if (Node->Body != InvalidNodeId) {
+      renderStructuredNode(Tree, Payloads, Node->Body, Out);
+    } else {
+      for (structuring::NodeId Child : Node->Children) {
+        renderStructuredNode(Tree, Payloads, Child, Out);
+      }
     }
     break;
   }

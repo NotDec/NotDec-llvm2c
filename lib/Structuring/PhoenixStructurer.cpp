@@ -55,11 +55,12 @@ bool isFallthroughTo(const StructuredCFG &Cfg, GraphNodeId FromId,
                      GraphNodeId ToId, const MutableRegionGraph &Graph) {
   const MutableRegionNode *From = Graph.getNode(FromId);
   const MutableRegionNode *To = Graph.getNode(ToId);
-  if (From == nullptr || To == nullptr || To->Blocks.empty()) {
+  if (From == nullptr || From->Blocks.empty() || To == nullptr ||
+      To->Blocks.empty()) {
     return false;
   }
 
-  const CFGBlock *Block = Cfg.getBlock(From->Block);
+  const CFGBlock *Block = Cfg.getBlock(From->Blocks.back());
   return Block != nullptr && Block->Terminator == TerminatorKind::Fallthrough &&
          Block->Successors.size() == 1 && Block->Successors[0] == To->Blocks[0];
 }
@@ -83,6 +84,53 @@ bool reduceSequenceOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     Blocks.insert(Blocks.end(), To->Blocks.begin(), To->Blocks.end());
     NodeId Root = buildLinearNode(Cfg, Blocks, Tree);
     Graph.collapseNodes({FromId, ToId}, From->Block, Root);
+    return true;
+  }
+  return false;
+}
+
+bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
+                  StructuredTree &Tree) {
+  for (GraphNodeId HeaderId : Graph.activeNodes()) {
+    const MutableRegionNode *Header = Graph.getNode(HeaderId);
+    if (Header == nullptr || Header->Blocks.empty() ||
+        Header->Succs.size() != 2) {
+      continue;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Header->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
+        Tail->Successors.size() != 2) {
+      continue;
+    }
+
+    GraphNodeId ThenId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FollowId = Graph.getNodeForBlock(Tail->Successors[1]);
+    const MutableRegionNode *Then = Graph.getNode(ThenId);
+    const MutableRegionNode *Follow = Graph.getNode(FollowId);
+    if (Then == nullptr || Follow == nullptr || Then->Preds.size() != 1 ||
+        Then->Succs.size() != 1 || Then->Succs[0] != FollowId) {
+      continue;
+    }
+
+    StructuredNode Sequence;
+    Sequence.Kind = StructuredNodeKind::Sequence;
+    for (BlockId Block : Header->Blocks) {
+      appendBlockLabel(Block, Sequence, Tree);
+      appendBlockBody(Cfg, Block, Sequence, Tree);
+    }
+
+    StructuredNode IfNode;
+    IfNode.Kind = StructuredNodeKind::If;
+    IfNode.Block = Tail->Id;
+    IfNode.Condition = Tail->Condition;
+    IfNode.Then = Then->StructuredRoot != InvalidNodeId
+                      ? Then->StructuredRoot
+                      : buildLinearNode(Cfg, Then->Blocks, Tree);
+    Sequence.Children.push_back(Tree.addNode(std::move(IfNode)));
+
+    NodeId Root = Tree.addNode(std::move(Sequence));
+    Graph.collapseNodes({HeaderId, ThenId}, Header->Block, Root);
     return true;
   }
   return false;
@@ -113,8 +161,13 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     IfNode.Kind = StructuredNodeKind::If;
     IfNode.Block = Tail->Id;
     IfNode.Condition = Tail->Condition;
-    for (BlockId Succ : Tail->Successors) {
-      IfNode.Children.push_back(Tree.addNode(makeGoto(Succ)));
+    if (!Tail->Successors.empty()) {
+      IfNode.Then = Tree.addNode(makeGoto(Tail->Successors[0]));
+      IfNode.Children.push_back(IfNode.Then);
+    }
+    if (Tail->Successors.size() > 1) {
+      IfNode.Else = Tree.addNode(makeGoto(Tail->Successors[1]));
+      IfNode.Children.push_back(IfNode.Else);
     }
     Root.Children.push_back(Tree.addNode(std::move(IfNode)));
     break;
@@ -125,8 +178,13 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     SwitchNode.Block = Tail->Id;
     SwitchNode.Condition = Tail->Condition;
     SwitchNode.Cases = Tail->Cases;
+    if (!Tail->Successors.empty()) {
+      SwitchNode.Default = Tree.addNode(makeGoto(Tail->Successors[0]));
+    }
     for (const auto &Case : Tail->Cases) {
-      SwitchNode.Children.push_back(Tree.addNode(makeGoto(Case.Target)));
+      NodeId CaseBody = Tree.addNode(makeGoto(Case.Target));
+      SwitchNode.StructuredCases.push_back({Case.Value, Case.Target, CaseBody});
+      SwitchNode.Children.push_back(CaseBody);
     }
     for (BlockId Succ : Tail->Successors) {
       SwitchNode.Children.push_back(Tree.addNode(makeGoto(Succ)));
@@ -165,6 +223,13 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
                                           const Region &R,
                                           StructuredTree &Tree) {
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, R);
+
+  bool Changed = false;
+  do {
+    Changed = false;
+    Changed |= reduceSequenceOnce(Cfg, Graph, Tree);
+    Changed |= reduceIfOnce(Cfg, Graph, Tree);
+  } while (Changed);
 
   while (reduceSequenceOnce(Cfg, Graph, Tree)) {
   }

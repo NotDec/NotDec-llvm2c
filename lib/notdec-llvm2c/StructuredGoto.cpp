@@ -125,10 +125,20 @@ private:
       }
       break;
     case st::StructuredNodeKind::If:
-      renderIf(*Node, Stmts);
+      if (Node->Children.empty() && (Node->Then != st::InvalidNodeId ||
+                                     Node->Else != st::InvalidNodeId)) {
+        renderIf(Tree, *Node, Stmts);
+      } else {
+        renderIf(*Node, Stmts);
+      }
       break;
     case st::StructuredNodeKind::Switch:
-      Stmts.push_back(renderSwitch(*Node));
+      if (Node->Children.empty() && (!Node->StructuredCases.empty() ||
+                                     Node->Default != st::InvalidNodeId)) {
+        Stmts.push_back(renderSwitch(Tree, *Node));
+      } else {
+        Stmts.push_back(renderSwitch(*Node));
+      }
       break;
     case st::StructuredNodeKind::Goto:
       Stmts.push_back(
@@ -143,6 +153,30 @@ private:
     case st::StructuredNodeKind::InfiniteLoop:
       break;
     }
+  }
+
+  clang::Stmt *renderCompound(const st::StructuredTree &Tree, st::NodeId Id) {
+    std::vector<clang::Stmt *> Stmts;
+    renderNode(Tree, Id, Stmts);
+    return clang::CompoundStmt::Create(Ctx, Stmts, clang::FPOptionsOverride(),
+                                       clang::SourceLocation(),
+                                       clang::SourceLocation());
+  }
+
+  void renderIf(const st::StructuredTree &Tree, const st::StructuredNode &Node,
+                std::vector<clang::Stmt *> &Stmts) {
+    auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
+    clang::Stmt *Then = Node.Then == st::InvalidNodeId
+                            ? nullptr
+                            : renderCompound(Tree, Node.Then);
+    clang::Stmt *Else = Node.Else == st::InvalidNodeId
+                            ? nullptr
+                            : renderCompound(Tree, Node.Else);
+    auto *If = clang::IfStmt::Create(
+        Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary, nullptr,
+        nullptr, Cond, clang::SourceLocation(), clang::SourceLocation(), Then,
+        clang::SourceLocation(), Else);
+    Stmts.push_back(If);
   }
 
   void renderIf(const st::StructuredNode &Node,
@@ -163,6 +197,45 @@ private:
         clang::SourceLocation(), ThenGoto, clang::SourceLocation());
     Stmts.push_back(If);
     Stmts.push_back(SA.makeGotoStmt(SA.getOrCreateBlockLabel(FalseBlock)));
+  }
+
+  clang::Stmt *renderSwitch(const st::StructuredTree &Tree,
+                            const st::StructuredNode &Node) {
+    auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
+    if (Cond->getType()->isPointerType()) {
+      Cond = FCtx.getTypeBuilder().checkCast(
+          Cond, Ctx.getIntTypeForBitwidth(
+                    FCtx.getTypeBuilder().getPointerSizeInBits(), 1));
+    }
+
+    auto *Switch = clang::SwitchStmt::Create(
+        Ctx, nullptr, nullptr, Cond, clang::SourceLocation(),
+        clang::SourceLocation());
+    std::vector<clang::Stmt *> Cases;
+
+    for (const auto &Case : Node.StructuredCases) {
+      auto *CaseStmt = clang::CaseStmt::Create(
+          Ctx, llvm::cast<clang::Expr>(getPayload(Case.Value)), nullptr,
+          clang::SourceLocation(), clang::SourceLocation(),
+          clang::SourceLocation());
+      CaseStmt->setSubStmt(renderCompound(Tree, Case.Body));
+      Switch->addSwitchCase(CaseStmt);
+      Cases.push_back(CaseStmt);
+    }
+
+    if (Node.Default != st::InvalidNodeId) {
+      auto *Default = new (Ctx)
+          clang::DefaultStmt(clang::SourceLocation(), clang::SourceLocation(),
+                             renderCompound(Tree, Node.Default));
+      Switch->addSwitchCase(Default);
+      Cases.push_back(Default);
+    }
+
+    auto *Body = clang::CompoundStmt::Create(
+        Ctx, Cases, clang::FPOptionsOverride(), clang::SourceLocation(),
+        clang::SourceLocation());
+    Switch->setBody(Body);
+    return Switch;
   }
 
   clang::Stmt *renderSwitch(const st::StructuredNode &Node) {

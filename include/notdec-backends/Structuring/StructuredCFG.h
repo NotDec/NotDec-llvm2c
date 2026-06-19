@@ -40,6 +40,12 @@ struct SwitchCase {
   BlockId Target = InvalidBlockId;
 };
 
+struct StructuredSwitchCase {
+  PayloadRef Value;
+  BlockId Target = InvalidBlockId;
+  NodeId Body = InvalidNodeId;
+};
+
 struct CFGBlock {
   BlockId Id = InvalidBlockId;
   std::vector<PayloadRef> Statements;
@@ -82,9 +88,21 @@ struct StructuredNode {
   StructuredNodeKind Kind = StructuredNodeKind::Sequence;
   BlockId Block = InvalidBlockId;
   BlockId Target = InvalidBlockId;
+  BlockId BreakTarget = InvalidBlockId;
+  BlockId ContinueTarget = InvalidBlockId;
   PayloadRef Condition;
   std::vector<PayloadRef> Statements;
+
+  // Angr-style semantic children. Sequence still uses Children. Older fallback
+  // nodes may also keep using Children until the corresponding reducer is
+  // migrated.
+  NodeId Then = InvalidNodeId;
+  NodeId Else = InvalidNodeId;
+  NodeId Body = InvalidNodeId;
+  NodeId Default = InvalidNodeId;
+
   std::vector<SwitchCase> Cases;
+  std::vector<StructuredSwitchCase> StructuredCases;
   std::vector<NodeId> Children;
 };
 

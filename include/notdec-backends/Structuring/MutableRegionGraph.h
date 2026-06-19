@@ -23,6 +23,8 @@ enum class VirtualEdgeKind {
 struct VirtualEdge {
   GraphNodeId From = InvalidGraphNodeId;
   GraphNodeId To = InvalidGraphNodeId;
+  BlockId FromBlock = InvalidBlockId;
+  BlockId ToBlock = InvalidBlockId;
   VirtualEdgeKind Kind = VirtualEdgeKind::Goto;
 };
 
@@ -54,8 +56,7 @@ public:
   void virtualizeEdge(GraphNodeId From, GraphNodeId To, VirtualEdgeKind Kind);
 
   GraphNodeId collapseNodes(const std::vector<GraphNodeId> &Members,
-                            BlockId RepresentativeBlock,
-                            NodeId StructuredRoot);
+                            BlockId RepresentativeBlock, NodeId StructuredRoot);
 
   GraphNodeId getNodeForBlock(BlockId Block) const;
   const std::vector<VirtualEdge> &virtualEdges() const {

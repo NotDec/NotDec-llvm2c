@@ -112,9 +112,9 @@ void MutableRegionGraph::removeEdge(GraphNodeId From, GraphNodeId To) {
   FromNode->Succs.erase(
       std::remove(FromNode->Succs.begin(), FromNode->Succs.end(), To),
       FromNode->Succs.end());
-  ToNode->Preds.erase(std::remove(ToNode->Preds.begin(), ToNode->Preds.end(),
-                                  From),
-                      ToNode->Preds.end());
+  ToNode->Preds.erase(
+      std::remove(ToNode->Preds.begin(), ToNode->Preds.end(), From),
+      ToNode->Preds.end());
 }
 
 void MutableRegionGraph::virtualizeEdge(GraphNodeId From, GraphNodeId To,
@@ -122,8 +122,16 @@ void MutableRegionGraph::virtualizeEdge(GraphNodeId From, GraphNodeId To,
   if (!hasEdge(From, To)) {
     return;
   }
+  const MutableRegionNode *FromNode = getNode(From);
+  const MutableRegionNode *ToNode = getNode(To);
+  BlockId FromBlock = (FromNode == nullptr || FromNode->Blocks.empty())
+                          ? InvalidBlockId
+                          : FromNode->Blocks.back();
+  BlockId ToBlock = (ToNode == nullptr || ToNode->Blocks.empty())
+                        ? InvalidBlockId
+                        : ToNode->Blocks.front();
   removeEdge(From, To);
-  VirtualizedEdges.push_back({From, To, Kind});
+  VirtualizedEdges.push_back({From, To, FromBlock, ToBlock, Kind});
 }
 
 GraphNodeId

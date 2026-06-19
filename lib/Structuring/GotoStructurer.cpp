@@ -18,8 +18,7 @@ StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
 }
 
 NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
-                                       const Region &R,
-                                       StructuredTree &Tree) {
+                                       const Region &R, StructuredTree &Tree) {
 
   StructuredNode Root;
   Root.Kind = StructuredNodeKind::Sequence;
@@ -48,8 +47,13 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
       IfNode.Kind = StructuredNodeKind::If;
       IfNode.Block = Block.Id;
       IfNode.Condition = Block.Condition;
-      for (BlockId Succ : Block.Successors) {
-        IfNode.Children.push_back(Tree.addNode(makeGoto(Succ)));
+      if (!Block.Successors.empty()) {
+        IfNode.Then = Tree.addNode(makeGoto(Block.Successors[0]));
+        IfNode.Children.push_back(IfNode.Then);
+      }
+      if (Block.Successors.size() > 1) {
+        IfNode.Else = Tree.addNode(makeGoto(Block.Successors[1]));
+        IfNode.Children.push_back(IfNode.Else);
       }
       Root.Children.push_back(Tree.addNode(std::move(IfNode)));
       break;
@@ -60,8 +64,14 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
       SwitchNode.Block = Block.Id;
       SwitchNode.Condition = Block.Condition;
       SwitchNode.Cases = Block.Cases;
+      if (!Block.Successors.empty()) {
+        SwitchNode.Default = Tree.addNode(makeGoto(Block.Successors[0]));
+      }
       for (const auto &Case : Block.Cases) {
-        SwitchNode.Children.push_back(Tree.addNode(makeGoto(Case.Target)));
+        NodeId CaseBody = Tree.addNode(makeGoto(Case.Target));
+        SwitchNode.StructuredCases.push_back(
+            {Case.Value, Case.Target, CaseBody});
+        SwitchNode.Children.push_back(CaseBody);
       }
       for (BlockId Succ : Block.Successors) {
         SwitchNode.Children.push_back(Tree.addNode(makeGoto(Succ)));
