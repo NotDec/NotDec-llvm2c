@@ -510,6 +510,17 @@ bool hasSuccessorTarget(const CFGBlock &Block, BlockId Target) {
          Block.Successors.end();
 }
 
+bool nodeHasSuccessorTarget(const StructuredCFG &Cfg,
+                            const MutableRegionNode &Node, BlockId Target) {
+  for (BlockId BlockId : Node.Blocks) {
+    const CFGBlock *Block = Cfg.getBlock(BlockId);
+    if (Block != nullptr && hasSuccessorTarget(*Block, Target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
                           StructuredNodeKind Kind) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -556,7 +567,7 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     }
     if (nodeTreeContainsStructuredControl(Tree, Node.StructuredRoot)) {
       for (const VirtualEdge &Edge : VirtualEdges) {
-        if (!hasSuccessorTarget(*Tail, Edge.ToBlock)) {
+        if (!nodeHasSuccessorTarget(Cfg, Node, Edge.ToBlock)) {
           appendControlTransfer(Root, Tree, Edge.ToBlock, Edge.Kind);
         }
       }
