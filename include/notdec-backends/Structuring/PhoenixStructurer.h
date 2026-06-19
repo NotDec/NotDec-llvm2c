@@ -24,6 +24,7 @@ protected:
   orderVirtualizableEdges(const MutableRegionGraph &Graph,
                           const MutableRegionGraphAnalysis &Analysis,
                           std::vector<VirtualEdge> Edges) const;
+  bool virtualizeOneEdge(MutableRegionGraph &Graph) const;
 };
 
 } // namespace notdec::backend::structuring

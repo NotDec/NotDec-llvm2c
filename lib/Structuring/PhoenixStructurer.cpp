@@ -5,6 +5,7 @@
 #include "notdec-backends/Structuring/RegionIdentifier.h"
 
 #include <algorithm>
+#include <map>
 
 namespace notdec::backend::structuring {
 
@@ -200,7 +201,44 @@ collectVirtualizableEdges(const MutableRegionGraph &Graph) {
   return Edges;
 }
 
+std::map<GraphNodeId, std::vector<VirtualEdge>>
+groupVirtualEdgesBySource(const MutableRegionGraph &Graph) {
+  std::map<GraphNodeId, std::vector<VirtualEdge>> Result;
+  for (const VirtualEdge &Edge : Graph.virtualEdges()) {
+    Result[Edge.From].push_back(Edge);
+  }
+  return Result;
+}
+
+void appendControlTransfer(StructuredNode &Root, StructuredTree &Tree,
+                           BlockId Target, VirtualEdgeKind Kind) {
+  if (Target == InvalidBlockId) {
+    return;
+  }
+
+  StructuredNode Node;
+  Node.Target = Target;
+  switch (Kind) {
+  case VirtualEdgeKind::Goto:
+    Node.Kind = StructuredNodeKind::Goto;
+    break;
+  case VirtualEdgeKind::Break:
+    Node.Kind = StructuredNodeKind::Break;
+    break;
+  case VirtualEdgeKind::Continue:
+    Node.Kind = StructuredNodeKind::Continue;
+    break;
+  }
+  Root.Children.push_back(Tree.addNode(std::move(Node)));
+}
+
+bool hasSuccessorTarget(const CFGBlock &Block, BlockId Target) {
+  return std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
+         Block.Successors.end();
+}
+
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
+                        const std::vector<VirtualEdge> &VirtualEdges,
                         StructuredNode &Root, StructuredTree &Tree) {
   if (Node.StructuredRoot != InvalidNodeId) {
     Root.Children.push_back(Node.StructuredRoot);
@@ -274,6 +312,12 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     break;
   }
   }
+
+  for (const VirtualEdge &Edge : VirtualEdges) {
+    if (!hasSuccessorTarget(*Tail, Edge.ToBlock)) {
+      appendControlTransfer(Root, Tree, Edge.ToBlock, Edge.Kind);
+    }
+  }
 }
 
 } // namespace
@@ -307,6 +351,19 @@ std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
   return Edges;
 }
 
+bool PhoenixStructurer::virtualizeOneEdge(MutableRegionGraph &Graph) const {
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  std::vector<VirtualEdge> Edges =
+      orderVirtualizableEdges(Graph, Analysis, collectVirtualizableEdges(Graph));
+  if (Edges.empty()) {
+    return false;
+  }
+
+  const VirtualEdge &Edge = Edges.front();
+  Graph.virtualizeEdge(Edge.From, Edge.To, Edge.Kind);
+  return true;
+}
+
 StructuredTree PhoenixStructurer::structure(const StructuredCFG &Cfg) {
   RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
   return RecursiveStructurer().structure(Cfg, Regions, *this);
@@ -317,23 +374,22 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
                                           StructuredTree &Tree) {
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, R);
 
+  unsigned Iterations = 0;
   bool Changed = false;
   do {
     Changed = false;
     Changed |= reduceSequenceOnce(Cfg, Graph, Tree);
     Changed |= reduceIfOnce(Cfg, Graph, Tree);
-  } while (Changed);
-
-  while (reduceSequenceOnce(Cfg, Graph, Tree)) {
-  }
-
-  MutableRegionGraphAnalysis Analysis = Graph.analyze();
-  std::vector<VirtualEdge> VirtualizableEdges = orderVirtualizableEdges(
-      Graph, Analysis, collectVirtualizableEdges(Graph));
-  (void)VirtualizableEdges;
+    if (!Changed && Graph.activeNodes().size() > 1) {
+      Changed = virtualizeOneEdge(Graph);
+    }
+    ++Iterations;
+  } while (Changed && Iterations < 1000);
 
   StructuredNode Root;
   Root.Kind = StructuredNodeKind::Sequence;
+  std::map<GraphNodeId, std::vector<VirtualEdge>> VirtualEdgesBySource =
+      groupVirtualEdgesBySource(Graph);
 
   std::vector<GraphNodeId> Active = Graph.activeNodes();
   std::sort(Active.begin(), Active.end(), [&](GraphNodeId A, GraphNodeId B) {
@@ -351,7 +407,13 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   for (GraphNodeId Id : Active) {
     const MutableRegionNode *Node = Graph.getNode(Id);
     if (Node != nullptr) {
-      appendFallbackNode(Cfg, *Node, Root, Tree);
+      auto It = VirtualEdgesBySource.find(Id);
+      static const std::vector<VirtualEdge> EmptyVirtualEdges;
+      appendFallbackNode(Cfg, *Node,
+                         It == VirtualEdgesBySource.end()
+                             ? EmptyVirtualEdges
+                             : It->second,
+                         Root, Tree);
     }
   }
 
