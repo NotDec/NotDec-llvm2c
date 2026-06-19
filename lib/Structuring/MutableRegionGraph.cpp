@@ -10,6 +10,165 @@ static bool contains(const std::vector<GraphNodeId> &Values, GraphNodeId Id) {
   return std::find(Values.begin(), Values.end(), Id) != Values.end();
 }
 
+static bool contains(const std::set<GraphNodeId> &Values, GraphNodeId Id) {
+  return Values.find(Id) != Values.end();
+}
+
+static std::set<GraphNodeId> intersectSets(const std::set<GraphNodeId> &A,
+                                           const std::set<GraphNodeId> &B) {
+  std::set<GraphNodeId> Result;
+  std::set_intersection(A.begin(), A.end(), B.begin(), B.end(),
+                        std::inserter(Result, Result.begin()));
+  return Result;
+}
+
+static std::set<GraphNodeId> toSet(const std::vector<GraphNodeId> &Values) {
+  return {Values.begin(), Values.end()};
+}
+
+static GraphNodeId firstWithoutActivePred(const MutableRegionGraph &Graph,
+                                          const std::vector<GraphNodeId> &Ids) {
+  for (GraphNodeId Id : Ids) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    bool HasActivePred = false;
+    for (GraphNodeId Pred : Node->Preds) {
+      if (contains(Ids, Pred)) {
+        HasActivePred = true;
+        break;
+      }
+    }
+    if (!HasActivePred) {
+      return Id;
+    }
+  }
+  return Ids.empty() ? InvalidGraphNodeId : Ids.front();
+}
+
+static GraphNodeId firstWithoutActiveSucc(const MutableRegionGraph &Graph,
+                                          const std::vector<GraphNodeId> &Ids) {
+  for (GraphNodeId Id : Ids) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    bool HasActiveSucc = false;
+    for (GraphNodeId Succ : Node->Succs) {
+      if (contains(Ids, Succ)) {
+        HasActiveSucc = true;
+        break;
+      }
+    }
+    if (!HasActiveSucc) {
+      return Id;
+    }
+  }
+  return Ids.empty() ? InvalidGraphNodeId : Ids.back();
+}
+
+static void dfsOrder(const MutableRegionGraph &Graph,
+                     const std::set<GraphNodeId> &Active, GraphNodeId Id,
+                     std::set<GraphNodeId> &Visited,
+                     std::vector<GraphNodeId> &Order) {
+  if (!contains(Active, Id) || !Visited.insert(Id).second) {
+    return;
+  }
+  const MutableRegionNode *Node = Graph.getNode(Id);
+  std::vector<GraphNodeId> Succs = Node->Succs;
+  std::sort(Succs.begin(), Succs.end());
+  for (GraphNodeId Succ : Succs) {
+    dfsOrder(Graph, Active, Succ, Visited, Order);
+  }
+  Order.push_back(Id);
+}
+
+static std::map<GraphNodeId, std::set<GraphNodeId>>
+computeDominators(const MutableRegionGraph &Graph,
+                  const std::vector<GraphNodeId> &Ids, GraphNodeId Entry) {
+  std::set<GraphNodeId> All = toSet(Ids);
+  std::map<GraphNodeId, std::set<GraphNodeId>> Dom;
+  for (GraphNodeId Id : Ids) {
+    Dom[Id] = Id == Entry ? std::set<GraphNodeId>{Id} : All;
+  }
+
+  bool Changed = false;
+  do {
+    Changed = false;
+    for (GraphNodeId Id : Ids) {
+      if (Id == Entry) {
+        continue;
+      }
+      const MutableRegionNode *Node = Graph.getNode(Id);
+      std::set<GraphNodeId> NewDom = All;
+      bool HasPred = false;
+      for (GraphNodeId Pred : Node->Preds) {
+        if (!contains(All, Pred)) {
+          continue;
+        }
+        NewDom = HasPred ? intersectSets(NewDom, Dom[Pred]) : Dom[Pred];
+        HasPred = true;
+      }
+      if (!HasPred) {
+        NewDom.clear();
+      }
+      NewDom.insert(Id);
+      if (NewDom != Dom[Id]) {
+        Dom[Id] = std::move(NewDom);
+        Changed = true;
+      }
+    }
+  } while (Changed);
+  return Dom;
+}
+
+static std::map<GraphNodeId, std::set<GraphNodeId>>
+computePostDominators(const MutableRegionGraph &Graph,
+                      const std::vector<GraphNodeId> &Ids, GraphNodeId Exit) {
+  std::set<GraphNodeId> All = toSet(Ids);
+  std::map<GraphNodeId, std::set<GraphNodeId>> PostDom;
+  for (GraphNodeId Id : Ids) {
+    PostDom[Id] = Id == Exit ? std::set<GraphNodeId>{Id} : All;
+  }
+
+  bool Changed = false;
+  do {
+    Changed = false;
+    for (GraphNodeId Id : Ids) {
+      if (Id == Exit) {
+        continue;
+      }
+      const MutableRegionNode *Node = Graph.getNode(Id);
+      std::set<GraphNodeId> NewPostDom = All;
+      bool HasSucc = false;
+      for (GraphNodeId Succ : Node->Succs) {
+        if (!contains(All, Succ)) {
+          continue;
+        }
+        NewPostDom =
+            HasSucc ? intersectSets(NewPostDom, PostDom[Succ]) : PostDom[Succ];
+        HasSucc = true;
+      }
+      if (!HasSucc) {
+        NewPostDom.clear();
+      }
+      NewPostDom.insert(Id);
+      if (NewPostDom != PostDom[Id]) {
+        PostDom[Id] = std::move(NewPostDom);
+        Changed = true;
+      }
+    }
+  } while (Changed);
+  return PostDom;
+}
+
+bool MutableRegionGraphAnalysis::dominates(GraphNodeId Dominator,
+                                           GraphNodeId Node) const {
+  auto It = Dominators.find(Node);
+  return It != Dominators.end() && contains(It->second, Dominator);
+}
+
+bool MutableRegionGraphAnalysis::postDominates(GraphNodeId Dominator,
+                                               GraphNodeId Node) const {
+  auto It = PostDominators.find(Node);
+  return It != PostDominators.end() && contains(It->second, Dominator);
+}
+
 GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot) {
   MutableRegionNode Node;
   Node.Id = static_cast<GraphNodeId>(Nodes.size());
@@ -203,6 +362,33 @@ GraphNodeId MutableRegionGraph::getNodeForBlock(BlockId Block) const {
     }
   }
   return InvalidGraphNodeId;
+}
+
+MutableRegionGraphAnalysis MutableRegionGraph::analyze() const {
+  MutableRegionGraphAnalysis Result;
+  std::vector<GraphNodeId> Ids = activeNodes();
+  std::sort(Ids.begin(), Ids.end());
+  if (Ids.empty()) {
+    return Result;
+  }
+
+  Result.Entry = firstWithoutActivePred(*this, Ids);
+  Result.Exit = firstWithoutActiveSucc(*this, Ids);
+  Result.Dominators = computeDominators(*this, Ids, Result.Entry);
+  Result.PostDominators = computePostDominators(*this, Ids, Result.Exit);
+
+  std::set<GraphNodeId> Active = toSet(Ids);
+  std::set<GraphNodeId> Visited;
+  std::vector<GraphNodeId> PostOrder;
+  dfsOrder(*this, Active, Result.Entry, Visited, PostOrder);
+  for (GraphNodeId Id : Ids) {
+    dfsOrder(*this, Active, Id, Visited, PostOrder);
+  }
+  std::reverse(PostOrder.begin(), PostOrder.end());
+  for (unsigned Index = 0; Index < PostOrder.size(); ++Index) {
+    Result.NodeOrder[PostOrder[Index]] = Index;
+  }
+  return Result;
 }
 
 } // namespace notdec::backend::structuring

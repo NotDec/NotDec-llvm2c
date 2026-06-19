@@ -177,6 +177,29 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
   return false;
 }
 
+std::vector<VirtualEdge>
+collectVirtualizableEdges(const MutableRegionGraph &Graph) {
+  std::vector<VirtualEdge> Edges;
+  for (const MutableRegionNode &Node : Graph.nodes()) {
+    if (!Node.Active) {
+      continue;
+    }
+    for (GraphNodeId Succ : Node.Succs) {
+      const MutableRegionNode *SuccNode = Graph.getNode(Succ);
+      if (SuccNode == nullptr || !SuccNode->Active) {
+        continue;
+      }
+      BlockId FromBlock =
+          Node.Blocks.empty() ? InvalidBlockId : Node.Blocks.back();
+      BlockId ToBlock =
+          SuccNode->Blocks.empty() ? InvalidBlockId : SuccNode->Blocks.front();
+      Edges.push_back(
+          {Node.Id, Succ, FromBlock, ToBlock, VirtualEdgeKind::Goto});
+    }
+  }
+  return Edges;
+}
+
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
                         StructuredNode &Root, StructuredTree &Tree) {
   if (Node.StructuredRoot != InvalidNodeId) {
@@ -255,6 +278,35 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
 
 } // namespace
 
+std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
+    const MutableRegionGraph &Graph, const MutableRegionGraphAnalysis &Analysis,
+    std::vector<VirtualEdge> Edges) const {
+  std::sort(
+      Edges.begin(), Edges.end(),
+      [&](const VirtualEdge &A, const VirtualEdge &B) {
+        auto OrderOf = [&](GraphNodeId Id) {
+          auto It = Analysis.NodeOrder.find(Id);
+          return It == Analysis.NodeOrder.end() ? 0U : It->second;
+        };
+        auto InDegreeOf = [&](GraphNodeId Id) {
+          const MutableRegionNode *Node = Graph.getNode(Id);
+          return Node == nullptr ? 0U
+                                 : static_cast<unsigned>(Node->Preds.size());
+        };
+        auto OutDegreeOf = [&](GraphNodeId Id) {
+          const MutableRegionNode *Node = Graph.getNode(Id);
+          return Node == nullptr ? 0U
+                                 : static_cast<unsigned>(Node->Succs.size());
+        };
+
+        return std::make_tuple(OrderOf(A.To), InDegreeOf(A.To),
+                               OutDegreeOf(A.From), A.FromBlock, A.ToBlock) <
+               std::make_tuple(OrderOf(B.To), InDegreeOf(B.To),
+                               OutDegreeOf(B.From), B.FromBlock, B.ToBlock);
+      });
+  return Edges;
+}
+
 StructuredTree PhoenixStructurer::structure(const StructuredCFG &Cfg) {
   RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
   return RecursiveStructurer().structure(Cfg, Regions, *this);
@@ -274,6 +326,11 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
 
   while (reduceSequenceOnce(Cfg, Graph, Tree)) {
   }
+
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  std::vector<VirtualEdge> VirtualizableEdges = orderVirtualizableEdges(
+      Graph, Analysis, collectVirtualizableEdges(Graph));
+  (void)VirtualizableEdges;
 
   StructuredNode Root;
   Root.Kind = StructuredNodeKind::Sequence;

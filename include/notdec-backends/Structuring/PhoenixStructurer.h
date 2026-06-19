@@ -1,8 +1,11 @@
 #ifndef NOTDEC_BACKENDS_STRUCTURING_PHOENIXSTRUCTURER_H
 #define NOTDEC_BACKENDS_STRUCTURING_PHOENIXSTRUCTURER_H
 
+#include "notdec-backends/Structuring/MutableRegionGraph.h"
 #include "notdec-backends/Structuring/RegionStructurer.h"
 #include "notdec-backends/Structuring/Structurer.h"
+
+#include <vector>
 
 namespace notdec::backend::structuring {
 
@@ -15,6 +18,12 @@ public:
   StructuredTree structure(const StructuredCFG &Cfg) override;
   NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                          StructuredTree &Tree) override;
+
+protected:
+  virtual std::vector<VirtualEdge>
+  orderVirtualizableEdges(const MutableRegionGraph &Graph,
+                          const MutableRegionGraphAnalysis &Analysis,
+                          std::vector<VirtualEdge> Edges) const;
 };
 
 } // namespace notdec::backend::structuring

@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <set>
 #include <vector>
 
 namespace notdec::backend::structuring {
@@ -41,6 +43,17 @@ struct MutableRegionNode {
   std::vector<GraphNodeId> Succs;
 };
 
+struct MutableRegionGraphAnalysis {
+  GraphNodeId Entry = InvalidGraphNodeId;
+  GraphNodeId Exit = InvalidGraphNodeId;
+  std::map<GraphNodeId, std::set<GraphNodeId>> Dominators;
+  std::map<GraphNodeId, std::set<GraphNodeId>> PostDominators;
+  std::map<GraphNodeId, unsigned> NodeOrder;
+
+  bool dominates(GraphNodeId Dominator, GraphNodeId Node) const;
+  bool postDominates(GraphNodeId Dominator, GraphNodeId Node) const;
+};
+
 class MutableRegionGraph {
 public:
   static MutableRegionGraph build(const StructuredCFG &Cfg, const Region &R);
@@ -59,6 +72,7 @@ public:
                             BlockId RepresentativeBlock, NodeId StructuredRoot);
 
   GraphNodeId getNodeForBlock(BlockId Block) const;
+  MutableRegionGraphAnalysis analyze() const;
   const std::vector<VirtualEdge> &virtualEdges() const {
     return VirtualizedEdges;
   }
