@@ -42,6 +42,8 @@ struct MutableRegionNode {
   std::vector<GraphNodeId> Preds;
   std::vector<GraphNodeId> Succs;
   std::vector<BlockId> ExternalSuccs;
+
+  bool hasExternalSuccessor(BlockId Target) const;
 };
 
 struct MutableRegionGraphAnalysis {

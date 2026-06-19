@@ -12,12 +12,18 @@ using RegionId = std::uint32_t;
 
 constexpr RegionId InvalidRegionId = std::numeric_limits<RegionId>::max();
 
+enum class RegionKind {
+  Root,
+  NaturalLoop,
+};
+
 // A region is the unit that recursive structuring works on. The first version
 // only needs a root region, but keeping children/successors here makes the
 // Phoenix/SAILR port use the same shape later instead of adding another CFG
 // wrapper.
 struct Region {
   RegionId Id = InvalidRegionId;
+  RegionKind Kind = RegionKind::Root;
   BlockId Head = InvalidBlockId;
   BlockId Latch = InvalidBlockId;
   BlockId Follow = InvalidBlockId;

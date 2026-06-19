@@ -175,6 +175,11 @@ bool MutableRegionGraphAnalysis::postDominates(GraphNodeId Dominator,
   return It != PostDominators.end() && contains(It->second, Dominator);
 }
 
+bool MutableRegionNode::hasExternalSuccessor(BlockId Target) const {
+  return std::find(ExternalSuccs.begin(), ExternalSuccs.end(), Target) !=
+         ExternalSuccs.end();
+}
+
 GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot) {
   MutableRegionNode Node;
   Node.Id = static_cast<GraphNodeId>(Nodes.size());
