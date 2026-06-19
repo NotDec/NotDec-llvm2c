@@ -399,6 +399,162 @@ bool collectLinearLoopBody(const StructuredCFG &Cfg,
   }
 }
 
+struct LoopBreakSite {
+  GraphNodeId Node = InvalidGraphNodeId;
+  GraphNodeId ExitNode = InvalidGraphNodeId;
+  bool NegateCondition = false;
+};
+
+bool isTerminalGraphNode(const StructuredCFG &Cfg,
+                         const MutableRegionGraph &Graph, GraphNodeId Id) {
+  const MutableRegionNode *Node = Graph.getNode(Id);
+  if (Node == nullptr || !Node->Succs.empty() || Node->Blocks.empty()) {
+    return false;
+  }
+
+  const CFGBlock *Block = Cfg.getBlock(Node->Blocks.back());
+  return Block != nullptr && (Block->Terminator == TerminatorKind::Return ||
+                              Block->Terminator == TerminatorKind::Unreachable);
+}
+
+bool isLoopBreakExit(const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+                     GraphNodeId CandidateId, GraphNodeId FollowId,
+                     GraphNodeId FromId) {
+  if (CandidateId == FollowId) {
+    return true;
+  }
+
+  const MutableRegionNode *Candidate = Graph.getNode(CandidateId);
+  if (Candidate == nullptr || Candidate->Preds.size() != 1 ||
+      Candidate->Preds[0] != FromId) {
+    return false;
+  }
+  return isTerminalGraphNode(Cfg, Graph, CandidateId) &&
+         isTerminalGraphNode(Cfg, Graph, FollowId);
+}
+
+NodeId buildBreakIfNode(const CFGBlock &Block, bool NegateCondition,
+                        StructuredTree &Tree) {
+  StructuredNode BreakNode = makeBreak();
+
+  StructuredNode IfNode;
+  IfNode.Kind = StructuredNodeKind::If;
+  IfNode.Block = Block.Id;
+  IfNode.Condition = Block.Condition;
+  IfNode.ConditionNegated = NegateCondition;
+  IfNode.Then = Tree.addNode(std::move(BreakNode));
+  return Tree.addNode(std::move(IfNode));
+}
+
+NodeId buildLoopBodyWithBreak(const StructuredCFG &Cfg,
+                              const MutableRegionGraph &Graph,
+                              const std::vector<GraphNodeId> &BodyIds,
+                              const LoopBreakSite &BreakSite,
+                              StructuredTree &Tree) {
+  StructuredNode Sequence;
+  Sequence.Kind = StructuredNodeKind::Sequence;
+
+  for (GraphNodeId BodyId : BodyIds) {
+    const MutableRegionNode *Node = Graph.getNode(BodyId);
+    if (Node == nullptr) {
+      continue;
+    }
+    appendRegionNode(Cfg, *Node, Sequence, Tree);
+
+    if (BodyId != BreakSite.Node || Node->Blocks.empty()) {
+      continue;
+    }
+    const CFGBlock *Tail = Cfg.getBlock(Node->Blocks.back());
+    if (Tail != nullptr) {
+      Sequence.Children.push_back(
+          buildBreakIfNode(*Tail, BreakSite.NegateCondition, Tree));
+    }
+  }
+
+  return Tree.addNode(std::move(Sequence));
+}
+
+bool collectLinearLoopBodyWithBreak(const StructuredCFG &Cfg,
+                                    const MutableRegionGraph &Graph,
+                                    GraphNodeId HeaderId,
+                                    GraphNodeId BodyEntryId,
+                                    GraphNodeId FollowId,
+                                    std::vector<GraphNodeId> &BodyIds,
+                                    LoopBreakSite &BreakSite) {
+  // This is a conservative fast path for `while (...) { ... if (...) break; }`.
+  // It only accepts a linear loop body and at most one break edge.
+  const MutableRegionNode *BodyEntry = Graph.getNode(BodyEntryId);
+  if (BodyEntry == nullptr || BodyEntry->Preds.size() != 1 ||
+      BodyEntry->Preds[0] != HeaderId) {
+    return false;
+  }
+
+  bool SawBreak = false;
+  std::set<GraphNodeId> Seen;
+  GraphNodeId CurrentId = BodyEntryId;
+  while (true) {
+    if (CurrentId == HeaderId || CurrentId == FollowId ||
+        !Seen.insert(CurrentId).second) {
+      return false;
+    }
+
+    const MutableRegionNode *Current = Graph.getNode(CurrentId);
+    if (Current == nullptr || Current->Blocks.empty()) {
+      return false;
+    }
+    BodyIds.push_back(CurrentId);
+
+    if (Current->Succs.size() == 1) {
+      GraphNodeId NextId = Current->Succs[0];
+      if (NextId == HeaderId) {
+        return SawBreak;
+      }
+      const MutableRegionNode *Next = Graph.getNode(NextId);
+      if (Next == nullptr || Next->Preds.size() != 1 ||
+          Next->Preds[0] != CurrentId ||
+          !isFallthroughTo(Cfg, CurrentId, NextId, Graph)) {
+        return false;
+      }
+      CurrentId = NextId;
+      continue;
+    }
+
+    if (SawBreak || Current->Succs.size() != 2) {
+      return false;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Current->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
+        Tail->Successors.size() != 2) {
+      return false;
+    }
+
+    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
+    if (isLoopBreakExit(Cfg, Graph, TrueId, FollowId, CurrentId) &&
+        FalseId != FollowId) {
+      BreakSite = {CurrentId, TrueId, false};
+      CurrentId = FalseId;
+    } else if (isLoopBreakExit(Cfg, Graph, FalseId, FollowId, CurrentId) &&
+               TrueId != FollowId) {
+      BreakSite = {CurrentId, FalseId, true};
+      CurrentId = TrueId;
+    } else {
+      return false;
+    }
+
+    if (CurrentId == HeaderId) {
+      return true;
+    }
+    const MutableRegionNode *Next = Graph.getNode(CurrentId);
+    if (Next == nullptr || Next->Preds.size() != 1 ||
+        Next->Preds[0] != Current->Id) {
+      return false;
+    }
+    SawBreak = true;
+  }
+}
+
 bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                            StructuredTree &Tree) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
@@ -458,6 +614,74 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     std::vector<GraphNodeId> Members;
     Members.push_back(HeaderId);
     Members.insert(Members.end(), BodyIds.begin(), BodyIds.end());
+    Graph.collapseNodes(Members, Header->Block,
+                        Tree.addNode(std::move(WhileNode)));
+    return true;
+  }
+  return false;
+}
+
+bool reduceLinearWhileWithBreakOnce(const StructuredCFG &Cfg,
+                                    MutableRegionGraph &Graph,
+                                    StructuredTree &Tree) {
+  for (GraphNodeId HeaderId : Graph.activeNodes()) {
+    const MutableRegionNode *Header = Graph.getNode(HeaderId);
+    if (Header == nullptr || Header->Blocks.size() != 1 ||
+        Header->Succs.size() != 2) {
+      continue;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Header->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
+        !Tail->Statements.empty() || Tail->Successors.size() != 2) {
+      continue;
+    }
+
+    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
+    if (Graph.getNode(TrueId) == nullptr || Graph.getNode(FalseId) == nullptr) {
+      continue;
+    }
+
+    GraphNodeId BodyEntryId = InvalidGraphNodeId;
+    GraphNodeId FollowId = InvalidGraphNodeId;
+    bool NegateCondition = false;
+    LoopBreakSite BreakSite;
+    std::vector<GraphNodeId> BodyIds;
+    if (collectLinearLoopBodyWithBreak(Cfg, Graph, HeaderId, TrueId, FalseId,
+                                       BodyIds, BreakSite)) {
+      BodyEntryId = TrueId;
+      FollowId = FalseId;
+    } else {
+      BodyIds.clear();
+      BreakSite = {};
+      if (collectLinearLoopBodyWithBreak(Cfg, Graph, HeaderId, FalseId, TrueId,
+                                         BodyIds, BreakSite)) {
+        BodyEntryId = FalseId;
+        FollowId = TrueId;
+        NegateCondition = true;
+      }
+    }
+
+    if (BodyEntryId == InvalidGraphNodeId || FollowId == InvalidGraphNodeId) {
+      continue;
+    }
+
+    StructuredNode WhileNode;
+    WhileNode.Kind = StructuredNodeKind::While;
+    WhileNode.Block = Tail->Id;
+    WhileNode.Condition = Tail->Condition;
+    WhileNode.ConditionNegated = NegateCondition;
+    WhileNode.Body =
+        buildLoopBodyWithBreak(Cfg, Graph, BodyIds, BreakSite, Tree);
+
+    std::vector<GraphNodeId> Members;
+    Members.push_back(HeaderId);
+    Members.insert(Members.end(), BodyIds.begin(), BodyIds.end());
+    if (BreakSite.ExitNode != FollowId &&
+        BreakSite.ExitNode != InvalidGraphNodeId) {
+      Members.push_back(BreakSite.ExitNode);
+    }
     Graph.collapseNodes(Members, Header->Block,
                         Tree.addNode(std::move(WhileNode)));
     return true;
@@ -771,6 +995,9 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   do {
     Changed = false;
     Changed = reduceLinearWhileOnce(Cfg, Graph, Tree);
+    if (!Changed) {
+      Changed = reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree);
+    }
     if (!Changed) {
       Changed = reduceSelfLoopOnce(Cfg, Graph, Tree);
     }
