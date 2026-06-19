@@ -19,6 +19,8 @@ constexpr RegionId InvalidRegionId = std::numeric_limits<RegionId>::max();
 struct Region {
   RegionId Id = InvalidRegionId;
   BlockId Head = InvalidBlockId;
+  BlockId Latch = InvalidBlockId;
+  BlockId Follow = InvalidBlockId;
   std::vector<BlockId> Blocks;
   std::vector<BlockId> Successors;
   std::vector<RegionId> Children;

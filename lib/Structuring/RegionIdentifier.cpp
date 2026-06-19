@@ -160,10 +160,15 @@ void identifyNaturalLoopChildren(const StructuredCFG &Cfg, RegionTree &Tree,
       }
 
       std::set<BlockId> BlockSet(Blocks.begin(), Blocks.end());
+      std::vector<BlockId> Successors = collectSuccessors(Cfg, BlockSet);
       Region Loop;
       Loop.Head = Succ;
+      Loop.Latch = Latch.Id;
+      if (Successors.size() == 1) {
+        Loop.Follow = Successors.front();
+      }
       Loop.Blocks = std::move(Blocks);
-      Loop.Successors = collectSuccessors(Cfg, BlockSet);
+      Loop.Successors = std::move(Successors);
       RegionId LoopId = Tree.addRegion(std::move(Loop));
       Root = Tree.getRegion(RootId);
       if (Root != nullptr) {
