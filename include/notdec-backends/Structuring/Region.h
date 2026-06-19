@@ -32,6 +32,7 @@ public:
   void setRoot(RegionId Id) { Root = Id; }
 
   const Region *getRegion(RegionId Id) const;
+  Region *getRegion(RegionId Id);
   const std::vector<Region> &regions() const { return Regions; }
 
 private:

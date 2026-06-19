@@ -20,4 +20,11 @@ const Region *RegionTree::getRegion(RegionId Id) const {
   return &Regions[Id];
 }
 
+Region *RegionTree::getRegion(RegionId Id) {
+  if (Id >= Regions.size()) {
+    return nullptr;
+  }
+  return &Regions[Id];
+}
+
 } // namespace notdec::backend::structuring
