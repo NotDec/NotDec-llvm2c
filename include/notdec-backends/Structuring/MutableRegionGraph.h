@@ -60,6 +60,9 @@ struct MutableRegionGraphAnalysis {
 class MutableRegionGraph {
 public:
   static MutableRegionGraph build(const StructuredCFG &Cfg, const Region &R);
+  static MutableRegionGraph
+  build(const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
+        const std::map<RegionId, NodeId> &StructuredChildren);
 
   const std::vector<MutableRegionNode> &nodes() const { return Nodes; }
   const MutableRegionNode *getNode(GraphNodeId Id) const;

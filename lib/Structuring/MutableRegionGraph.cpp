@@ -32,6 +32,10 @@ static void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
   }
 }
 
+static bool containsBlock(const std::vector<BlockId> &Values, BlockId Id) {
+  return std::find(Values.begin(), Values.end(), Id) != Values.end();
+}
+
 static GraphNodeId firstWithoutActivePred(const MutableRegionGraph &Graph,
                                           const std::vector<GraphNodeId> &Ids) {
   for (GraphNodeId Id : Ids) {
@@ -217,6 +221,63 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
         if (FromNode != nullptr) {
           appendUniqueBlock(FromNode->ExternalSuccs, Succ);
         }
+      }
+    }
+  }
+
+  return Graph;
+}
+
+MutableRegionGraph MutableRegionGraph::build(
+    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
+    const std::map<RegionId, NodeId> &StructuredChildren) {
+  MutableRegionGraph Graph;
+  std::map<BlockId, GraphNodeId> BlockToNode;
+
+  for (RegionId ChildId : R.Children) {
+    auto RootIt = StructuredChildren.find(ChildId);
+    const Region *Child = Regions.getRegion(ChildId);
+    if (RootIt == StructuredChildren.end() || Child == nullptr ||
+        RootIt->second == InvalidNodeId) {
+      continue;
+    }
+
+    GraphNodeId NodeId = Graph.addNode(Child->Head, RootIt->second);
+    MutableRegionNode *Node = Graph.getNode(NodeId);
+    if (Node != nullptr) {
+      Node->Blocks = Child->Blocks;
+    }
+    for (BlockId Block : Child->Blocks) {
+      if (containsBlock(R.Blocks, Block)) {
+        BlockToNode[Block] = NodeId;
+      }
+    }
+  }
+
+  for (BlockId Block : R.Blocks) {
+    if (BlockToNode.find(Block) == BlockToNode.end()) {
+      BlockToNode[Block] = Graph.addNode(Block);
+    }
+  }
+
+  for (BlockId Block : R.Blocks) {
+    const CFGBlock *CfgBlock = Cfg.getBlock(Block);
+    if (CfgBlock == nullptr) {
+      continue;
+    }
+
+    GraphNodeId From = BlockToNode.at(Block);
+    for (BlockId Succ : CfgBlock->Successors) {
+      auto It = BlockToNode.find(Succ);
+      if (It == BlockToNode.end()) {
+        MutableRegionNode *FromNode = Graph.getNode(From);
+        if (FromNode != nullptr) {
+          appendUniqueBlock(FromNode->ExternalSuccs, Succ);
+        }
+        continue;
+      }
+      if (From != It->second) {
+        Graph.addEdge(From, It->second);
       }
     }
   }
