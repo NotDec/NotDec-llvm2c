@@ -21,15 +21,17 @@ bool isSimpleReturnTarget(const StructuredCFG &Cfg,
   return Block != nullptr && Block->Terminator == TerminatorKind::Return;
 }
 
-unsigned postDominatorPairCountAfterRemoving(const MutableRegionGraph &Graph,
+unsigned postDominatorEdgeCountAfterRemoving(const MutableRegionGraph &Graph,
                                              const VirtualEdge &Edge) {
   MutableRegionGraph Copy = Graph;
   Copy.removeEdge(Edge.From, Edge.To);
 
   MutableRegionGraphAnalysis Analysis = Copy.analyze();
   unsigned Count = 0;
-  for (const auto &Entry : Analysis.PostDominators) {
-    Count += static_cast<unsigned>(Entry.second.size());
+  for (const auto &Entry : Analysis.ImmediatePostDominators) {
+    if (Entry.second != InvalidGraphNodeId) {
+      ++Count;
+    }
   }
   return Count;
 }
@@ -76,7 +78,7 @@ filterByMostPostDominators(const MutableRegionGraph &Graph,
   bool Found = false;
 
   for (const VirtualEdge &Edge : Edges) {
-    unsigned Count = postDominatorPairCountAfterRemoving(Graph, Edge);
+    unsigned Count = postDominatorEdgeCountAfterRemoving(Graph, Edge);
     if (!Found || Count > BestCount) {
       Best.clear();
       BestCount = Count;
