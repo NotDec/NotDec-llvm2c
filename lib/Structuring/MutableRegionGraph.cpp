@@ -26,6 +26,12 @@ static std::set<GraphNodeId> toSet(const std::vector<GraphNodeId> &Values) {
   return {Values.begin(), Values.end()};
 }
 
+static void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
+  if (std::find(Values.begin(), Values.end(), Id) == Values.end()) {
+    Values.push_back(Id);
+  }
+}
+
 static GraphNodeId firstWithoutActivePred(const MutableRegionGraph &Graph,
                                           const std::vector<GraphNodeId> &Ids) {
   for (GraphNodeId Id : Ids) {
@@ -201,6 +207,11 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
       auto It = BlockToNode.find(Succ);
       if (It != BlockToNode.end()) {
         Graph.addEdge(From, It->second);
+      } else {
+        MutableRegionNode *FromNode = Graph.getNode(From);
+        if (FromNode != nullptr) {
+          appendUniqueBlock(FromNode->ExternalSuccs, Succ);
+        }
       }
     }
   }
@@ -309,10 +320,14 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
 
   std::set<GraphNodeId> Preds;
   std::set<GraphNodeId> Succs;
+  std::vector<BlockId> ExternalSuccs;
   std::vector<BlockId> Blocks;
   for (GraphNodeId Id : MemberSet) {
     const MutableRegionNode *Node = getNode(Id);
     Blocks.insert(Blocks.end(), Node->Blocks.begin(), Node->Blocks.end());
+    for (BlockId ExternalSucc : Node->ExternalSuccs) {
+      appendUniqueBlock(ExternalSuccs, ExternalSucc);
+    }
     for (GraphNodeId Pred : Node->Preds) {
       if (!MemberSet.count(Pred) && isActive(Pred)) {
         Preds.insert(Pred);
@@ -330,11 +345,13 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
     Node->Active = false;
     Node->Preds.clear();
     Node->Succs.clear();
+    Node->ExternalSuccs.clear();
   }
 
   GraphNodeId Collapsed = addNode(RepresentativeBlock, StructuredRoot);
   MutableRegionNode *CollapsedNode = getNode(Collapsed);
   CollapsedNode->Blocks = std::move(Blocks);
+  CollapsedNode->ExternalSuccs = std::move(ExternalSuccs);
   for (GraphNodeId Pred : Preds) {
     MutableRegionNode *PredNode = getNode(Pred);
     PredNode->Succs.erase(

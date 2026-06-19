@@ -41,6 +41,7 @@ struct MutableRegionNode {
   bool Active = true;
   std::vector<GraphNodeId> Preds;
   std::vector<GraphNodeId> Succs;
+  std::vector<BlockId> ExternalSuccs;
 };
 
 struct MutableRegionGraphAnalysis {
