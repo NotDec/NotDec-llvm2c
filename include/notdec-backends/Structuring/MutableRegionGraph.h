@@ -55,6 +55,8 @@ struct MutableRegionGraphAnalysis {
 
   bool dominates(GraphNodeId Dominator, GraphNodeId Node) const;
   bool postDominates(GraphNodeId Dominator, GraphNodeId Node) const;
+  GraphNodeId immediateDominator(GraphNodeId Node) const;
+  GraphNodeId immediatePostDominator(GraphNodeId Node) const;
 };
 
 class MutableRegionGraph {

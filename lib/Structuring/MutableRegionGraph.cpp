@@ -179,6 +179,46 @@ bool MutableRegionGraphAnalysis::postDominates(GraphNodeId Dominator,
   return It != PostDominators.end() && contains(It->second, Dominator);
 }
 
+static GraphNodeId findImmediateDominatorInSet(
+    GraphNodeId Node, const std::map<GraphNodeId, std::set<GraphNodeId>> &Sets) {
+  auto It = Sets.find(Node);
+  if (It == Sets.end()) {
+    return InvalidGraphNodeId;
+  }
+
+  std::set<GraphNodeId> Candidates = It->second;
+  Candidates.erase(Node);
+  for (GraphNodeId Candidate : Candidates) {
+    bool DominatedByAllOtherCandidates = true;
+    for (GraphNodeId Other : Candidates) {
+      if (Other == Candidate) {
+        continue;
+      }
+      auto CandidateIt = Sets.find(Candidate);
+      if (CandidateIt == Sets.end() ||
+          !contains(CandidateIt->second, Other)) {
+        DominatedByAllOtherCandidates = false;
+        break;
+      }
+    }
+    if (DominatedByAllOtherCandidates) {
+      return Candidate;
+    }
+  }
+
+  return InvalidGraphNodeId;
+}
+
+GraphNodeId
+MutableRegionGraphAnalysis::immediateDominator(GraphNodeId Node) const {
+  return findImmediateDominatorInSet(Node, Dominators);
+}
+
+GraphNodeId
+MutableRegionGraphAnalysis::immediatePostDominator(GraphNodeId Node) const {
+  return findImmediateDominatorInSet(Node, PostDominators);
+}
+
 bool MutableRegionNode::hasExternalSuccessor(BlockId Target) const {
   return std::find(ExternalSuccs.begin(), ExternalSuccs.end(), Target) !=
          ExternalSuccs.end();
