@@ -74,6 +74,9 @@ private:
 
       for (auto It = Block->begin(); It != Block->end(); ++It) {
         if (clang::Stmt *Stmt = getStmt(*It)) {
+          if (Stmt == Block->getTerminatorStmt()) {
+            continue;
+          }
           NewBlock.Statements.push_back(addPayload(Stmt));
         }
       }
@@ -147,8 +150,13 @@ private:
       break;
     case st::StructuredNodeKind::Return:
     case st::StructuredNodeKind::Unreachable:
+      break;
     case st::StructuredNodeKind::Break:
+      Stmts.push_back(new (Ctx) clang::BreakStmt(clang::SourceLocation()));
+      break;
     case st::StructuredNodeKind::Continue:
+      Stmts.push_back(new (Ctx) clang::ContinueStmt(clang::SourceLocation()));
+      break;
     case st::StructuredNodeKind::While:
     case st::StructuredNodeKind::DoWhile:
     case st::StructuredNodeKind::InfiniteLoop:

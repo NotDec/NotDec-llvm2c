@@ -231,33 +231,41 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       }
       Targets.push_back(TargetId);
 
-      if (Target->Succs.empty()) {
-        Valid = false;
-        break;
-      }
       if (Target->Succs.size() > 1) {
         Valid = false;
         break;
       }
+      if (Target->Succs.empty()) {
+        continue;
+      }
+
       GraphNodeId TargetFollow = Target->Succs[0];
-      if (TargetFollow == HeaderId || TargetId == FollowId) {
+      if (TargetFollow == HeaderId) {
         Valid = false;
         break;
       }
       if (FollowId == InvalidGraphNodeId) {
         FollowId = TargetFollow;
-      } else if (FollowId != TargetFollow) {
+      } else if (TargetId != FollowId && FollowId != TargetFollow) {
         Valid = false;
         break;
       }
     }
     if (!Valid || FollowId == InvalidGraphNodeId) {
-      continue;
+      std::set<GraphNodeId> UniqueTargets(Targets.begin(), Targets.end());
+      if (Valid && UniqueTargets.size() == 1) {
+        FollowId = *UniqueTargets.begin();
+      } else {
+        continue;
+      }
     }
 
     std::set<GraphNodeId> Members;
     Members.insert(HeaderId);
     for (GraphNodeId TargetId : Targets) {
+      if (TargetId == FollowId) {
+        continue;
+      }
       const MutableRegionNode *Target = Graph.getNode(TargetId);
       if (Target == nullptr || Target->Preds.size() != 1 ||
           Target->Preds[0] != HeaderId || Target->Succs.size() != 1 ||
@@ -267,7 +275,7 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       }
       Members.insert(TargetId);
     }
-    if (!Valid || Members.size() == 1) {
+    if (!Valid) {
       continue;
     }
 
@@ -284,13 +292,15 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     SwitchNode.Condition = Tail->Condition;
 
     GraphNodeId DefaultId = Targets.front();
-    SwitchNode.Default = buildSwitchCaseBody(Cfg, Graph.getNode(DefaultId),
-                                             Tree);
+    SwitchNode.Default = buildSwitchCaseBody(
+        Cfg, DefaultId == FollowId ? nullptr : Graph.getNode(DefaultId), Tree);
     for (const SwitchCase &Case : Tail->Cases) {
       GraphNodeId CaseId = Graph.getNodeForBlock(Case.Target);
       SwitchNode.StructuredCases.push_back(
           {Case.Value, Case.Target,
-           buildSwitchCaseBody(Cfg, Graph.getNode(CaseId), Tree)});
+           buildSwitchCaseBody(
+               Cfg, CaseId == FollowId ? nullptr : Graph.getNode(CaseId),
+               Tree)});
     }
     Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
 
@@ -361,11 +371,52 @@ bool hasSuccessorTarget(const CFGBlock &Block, BlockId Target) {
          Block.Successors.end();
 }
 
+bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
+                          StructuredNodeKind Kind) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if (Node->Kind == Kind) {
+    return true;
+  }
+  for (NodeId Child : Node->Children) {
+    if (nodeTreeContainsKind(Tree, Child, Kind)) {
+      return true;
+    }
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    if (nodeTreeContainsKind(Tree, Case.Body, Kind)) {
+      return true;
+    }
+  }
+  return nodeTreeContainsKind(Tree, Node->Then, Kind) ||
+         nodeTreeContainsKind(Tree, Node->Else, Kind) ||
+         nodeTreeContainsKind(Tree, Node->Body, Kind) ||
+         nodeTreeContainsKind(Tree, Node->Default, Kind);
+}
+
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
                         const std::vector<VirtualEdge> &VirtualEdges,
                         StructuredNode &Root, StructuredTree &Tree) {
   if (Node.StructuredRoot != InvalidNodeId) {
     Root.Children.push_back(Node.StructuredRoot);
+    if (Node.Blocks.empty()) {
+      return;
+    }
+    const CFGBlock *Tail = Cfg.getBlock(Node.Blocks.back());
+    if (Tail == nullptr) {
+      return;
+    }
+    if (nodeTreeContainsKind(Tree, Node.StructuredRoot,
+                             StructuredNodeKind::Switch)) {
+      for (const VirtualEdge &Edge : VirtualEdges) {
+        if (!hasSuccessorTarget(*Tail, Edge.ToBlock)) {
+          appendControlTransfer(Root, Tree, Edge.ToBlock, Edge.Kind);
+        }
+      }
+      return;
+    }
   } else {
     for (BlockId Block : Node.Blocks) {
       appendBlockLabel(Block, Root, Tree);
