@@ -10,6 +10,7 @@
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/StructuredGoto.h"
+#include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
 
@@ -163,9 +164,43 @@ private:
                                        clang::SourceLocation());
   }
 
+  clang::Expr *invertCond(clang::Expr *Cond) {
+    if (auto *BO = llvm::dyn_cast<clang::BinaryOperator>(Cond)) {
+      switch (BO->getOpcode()) {
+      case clang::BO_EQ:
+        BO->setOpcode(clang::BO_NE);
+        return BO;
+      case clang::BO_NE:
+        BO->setOpcode(clang::BO_EQ);
+        return BO;
+      case clang::BO_LT:
+        BO->setOpcode(clang::BO_GE);
+        return BO;
+      case clang::BO_GT:
+        BO->setOpcode(clang::BO_LE);
+        return BO;
+      case clang::BO_LE:
+        BO->setOpcode(clang::BO_GT);
+        return BO;
+      case clang::BO_GE:
+        BO->setOpcode(clang::BO_LT);
+        return BO;
+      default:
+        break;
+      }
+    }
+    return createUnaryOperator(Ctx, Cond, clang::UO_LNot, Ctx.IntTy,
+                               clang::VK_PRValue);
+  }
+
+  clang::Expr *conditionExpr(const st::StructuredNode &Node) {
+    auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
+    return Node.ConditionNegated ? invertCond(Cond) : Cond;
+  }
+
   void renderIf(const st::StructuredTree &Tree, const st::StructuredNode &Node,
                 std::vector<clang::Stmt *> &Stmts) {
-    auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
+    auto *Cond = conditionExpr(Node);
     clang::Stmt *Then = Node.Then == st::InvalidNodeId
                             ? nullptr
                             : renderCompound(Tree, Node.Then);

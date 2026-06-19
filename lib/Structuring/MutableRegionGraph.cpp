@@ -198,7 +198,7 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
 
 GraphNodeId MutableRegionGraph::getNodeForBlock(BlockId Block) const {
   for (const MutableRegionNode &Node : Nodes) {
-    if (Node.Active && Node.Block == Block) {
+    if (Node.Active && contains(Node.Blocks, Block)) {
       return Node.Id;
     }
   }

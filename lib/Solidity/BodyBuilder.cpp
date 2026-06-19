@@ -40,6 +40,12 @@ std::string payloadText(const std::vector<std::string> &Payloads,
   return Payloads[Ref.Id];
 }
 
+std::string conditionText(const std::vector<std::string> &Payloads,
+                          const StructuredNode &Node) {
+  std::string Text = payloadText(Payloads, Node.Condition);
+  return Node.ConditionNegated ? "!(" + Text + ")" : Text;
+}
+
 void renderStructuredNode(const StructuredTree &Tree,
                           const std::vector<std::string> &Payloads,
                           structuring::NodeId Id,
@@ -64,7 +70,7 @@ void renderStructuredNode(const StructuredTree &Tree,
     }
     break;
   case StructuredNodeKind::If:
-    Out.push_back("// if " + payloadText(Payloads, Node->Condition));
+    Out.push_back("// if " + conditionText(Payloads, *Node));
     if (Node->Children.empty() &&
         (Node->Then != InvalidNodeId || Node->Else != InvalidNodeId)) {
       renderStructuredNode(Tree, Payloads, Node->Then, Out);
@@ -112,7 +118,7 @@ void renderStructuredNode(const StructuredTree &Tree,
     Out.push_back("// continue");
     break;
   case StructuredNodeKind::While:
-    Out.push_back("// while " + payloadText(Payloads, Node->Condition));
+    Out.push_back("// while " + conditionText(Payloads, *Node));
     if (Node->Body != InvalidNodeId) {
       renderStructuredNode(Tree, Payloads, Node->Body, Out);
     } else {
@@ -122,7 +128,7 @@ void renderStructuredNode(const StructuredTree &Tree,
     }
     break;
   case StructuredNodeKind::DoWhile:
-    Out.push_back("// do-while " + payloadText(Payloads, Node->Condition));
+    Out.push_back("// do-while " + conditionText(Payloads, *Node));
     if (Node->Body != InvalidNodeId) {
       renderStructuredNode(Tree, Payloads, Node->Body, Out);
     } else {

@@ -91,6 +91,7 @@ struct StructuredNode {
   BlockId BreakTarget = InvalidBlockId;
   BlockId ContinueTarget = InvalidBlockId;
   PayloadRef Condition;
+  bool ConditionNegated = false;
   std::vector<PayloadRef> Statements;
 
   // Angr-style semantic children. Sequence still uses Children. Older fallback

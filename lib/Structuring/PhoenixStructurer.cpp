@@ -104,12 +104,43 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       continue;
     }
 
-    GraphNodeId ThenId = Graph.getNodeForBlock(Tail->Successors[0]);
-    GraphNodeId FollowId = Graph.getNodeForBlock(Tail->Successors[1]);
+    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
+    const MutableRegionNode *TrueNode = Graph.getNode(TrueId);
+    const MutableRegionNode *FalseNode = Graph.getNode(FalseId);
+    if (TrueNode == nullptr || FalseNode == nullptr) {
+      continue;
+    }
+
+    GraphNodeId FollowId = InvalidGraphNodeId;
+    GraphNodeId ThenId = InvalidGraphNodeId;
+    GraphNodeId ElseId = InvalidGraphNodeId;
+    bool NegateCondition = false;
+
+    if (TrueNode->Preds.size() == 1 && TrueNode->Succs.size() == 1 &&
+        TrueNode->Succs[0] == FalseId) {
+      ThenId = TrueId;
+      FollowId = FalseId;
+    } else if (FalseNode->Preds.size() == 1 && FalseNode->Succs.size() == 1 &&
+               FalseNode->Succs[0] == TrueId) {
+      ThenId = FalseId;
+      FollowId = TrueId;
+      NegateCondition = true;
+    } else if (TrueNode->Preds.size() == 1 && FalseNode->Preds.size() == 1 &&
+               TrueNode->Succs.size() == 1 && FalseNode->Succs.size() == 1 &&
+               TrueNode->Succs[0] == FalseNode->Succs[0]) {
+      ThenId = TrueId;
+      ElseId = FalseId;
+      FollowId = TrueNode->Succs[0];
+    } else {
+      continue;
+    }
+
     const MutableRegionNode *Then = Graph.getNode(ThenId);
-    const MutableRegionNode *Follow = Graph.getNode(FollowId);
-    if (Then == nullptr || Follow == nullptr || Then->Preds.size() != 1 ||
-        Then->Succs.size() != 1 || Then->Succs[0] != FollowId) {
+    const MutableRegionNode *Else =
+        ElseId == InvalidGraphNodeId ? nullptr : Graph.getNode(ElseId);
+    if (Then == nullptr || Graph.getNode(FollowId) == nullptr ||
+        (ElseId != InvalidGraphNodeId && Else == nullptr)) {
       continue;
     }
 
@@ -124,13 +155,23 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     IfNode.Kind = StructuredNodeKind::If;
     IfNode.Block = Tail->Id;
     IfNode.Condition = Tail->Condition;
+    IfNode.ConditionNegated = NegateCondition;
     IfNode.Then = Then->StructuredRoot != InvalidNodeId
                       ? Then->StructuredRoot
                       : buildLinearNode(Cfg, Then->Blocks, Tree);
+    if (Else != nullptr) {
+      IfNode.Else = Else->StructuredRoot != InvalidNodeId
+                        ? Else->StructuredRoot
+                        : buildLinearNode(Cfg, Else->Blocks, Tree);
+    }
     Sequence.Children.push_back(Tree.addNode(std::move(IfNode)));
 
     NodeId Root = Tree.addNode(std::move(Sequence));
-    Graph.collapseNodes({HeaderId, ThenId}, Header->Block, Root);
+    if (ElseId != InvalidGraphNodeId) {
+      Graph.collapseNodes({HeaderId, ThenId, ElseId}, Header->Block, Root);
+    } else {
+      Graph.collapseNodes({HeaderId, ThenId}, Header->Block, Root);
+    }
     return true;
   }
   return false;
