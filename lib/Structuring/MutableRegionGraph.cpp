@@ -249,7 +249,7 @@ void MutableRegionGraph::addEdge(GraphNodeId From, GraphNodeId To) {
   MutableRegionNode *FromNode = getNode(From);
   MutableRegionNode *ToNode = getNode(To);
   if (FromNode == nullptr || ToNode == nullptr || !FromNode->Active ||
-      !ToNode->Active || From == To) {
+      !ToNode->Active) {
     return;
   }
 

@@ -5,6 +5,7 @@
 
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
+#include <llvm/ADT/APInt.h>
 #include <llvm/Support/Casting.h>
 
 #include "notdec-backends/Structuring/StructurerRegistry.h"
@@ -158,8 +159,13 @@ private:
       Stmts.push_back(new (Ctx) clang::ContinueStmt(clang::SourceLocation()));
       break;
     case st::StructuredNodeKind::While:
+      Stmts.push_back(renderWhile(Tree, *Node));
+      break;
     case st::StructuredNodeKind::DoWhile:
+      Stmts.push_back(renderDoWhile(Tree, *Node));
+      break;
     case st::StructuredNodeKind::InfiniteLoop:
+      Stmts.push_back(renderInfiniteLoop(Tree, *Node));
       break;
     }
   }
@@ -204,6 +210,11 @@ private:
   clang::Expr *conditionExpr(const st::StructuredNode &Node) {
     auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
     return Node.ConditionNegated ? invertCond(Cond) : Cond;
+  }
+
+  clang::Expr *trueExpr() {
+    return clang::IntegerLiteral::Create(Ctx, llvm::APInt(32, 1, false),
+                                         Ctx.IntTy, clang::SourceLocation());
   }
 
   void renderIf(const st::StructuredTree &Tree, const st::StructuredNode &Node,
@@ -324,6 +335,30 @@ private:
         clang::SourceLocation());
     Switch->setBody(Body);
     return Switch;
+  }
+
+  clang::Stmt *renderWhile(const st::StructuredTree &Tree,
+                           const st::StructuredNode &Node) {
+    return clang::WhileStmt::Create(
+        Ctx, nullptr, conditionExpr(Node), renderCompound(Tree, Node.Body),
+        clang::SourceLocation(), clang::SourceLocation(),
+        clang::SourceLocation());
+  }
+
+  clang::Stmt *renderDoWhile(const st::StructuredTree &Tree,
+                             const st::StructuredNode &Node) {
+    return new (Ctx)
+        clang::DoStmt(renderCompound(Tree, Node.Body), conditionExpr(Node),
+                      clang::SourceLocation(), clang::SourceLocation(),
+                      clang::SourceLocation());
+  }
+
+  clang::Stmt *renderInfiniteLoop(const st::StructuredTree &Tree,
+                                  const st::StructuredNode &Node) {
+    return clang::WhileStmt::Create(
+        Ctx, nullptr, trueExpr(), renderCompound(Tree, Node.Body),
+        clang::SourceLocation(), clang::SourceLocation(),
+        clang::SourceLocation());
   }
 
   void replaceCFG(std::vector<clang::Stmt *> Stmts) {
