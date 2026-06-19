@@ -345,6 +345,109 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
   return false;
 }
 
+bool collectLinearLoopBody(const StructuredCFG &Cfg,
+                           const MutableRegionGraph &Graph,
+                           GraphNodeId HeaderId, GraphNodeId BodyEntryId,
+                           std::vector<GraphNodeId> &BodyIds) {
+  const MutableRegionNode *BodyEntry = Graph.getNode(BodyEntryId);
+  if (BodyEntry == nullptr || BodyEntry->Preds.size() != 1 ||
+      BodyEntry->Preds[0] != HeaderId) {
+    return false;
+  }
+
+  std::set<GraphNodeId> Seen;
+  GraphNodeId CurrentId = BodyEntryId;
+  while (true) {
+    if (CurrentId == HeaderId || !Seen.insert(CurrentId).second) {
+      return false;
+    }
+
+    const MutableRegionNode *Current = Graph.getNode(CurrentId);
+    if (Current == nullptr || Current->Succs.size() != 1) {
+      return false;
+    }
+    BodyIds.push_back(CurrentId);
+
+    GraphNodeId NextId = Current->Succs[0];
+    if (NextId == HeaderId) {
+      return true;
+    }
+    const MutableRegionNode *Next = Graph.getNode(NextId);
+    if (Next == nullptr || Next->Preds.size() != 1 ||
+        Next->Preds[0] != CurrentId ||
+        !isFallthroughTo(Cfg, CurrentId, NextId, Graph)) {
+      return false;
+    }
+    CurrentId = NextId;
+  }
+}
+
+bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
+                           StructuredTree &Tree) {
+  for (GraphNodeId HeaderId : Graph.activeNodes()) {
+    const MutableRegionNode *Header = Graph.getNode(HeaderId);
+    if (Header == nullptr || Header->Blocks.size() != 1 ||
+        Header->Succs.size() != 2) {
+      continue;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Header->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
+        !Tail->Statements.empty() || Tail->Successors.size() != 2) {
+      continue;
+    }
+
+    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
+    const MutableRegionNode *TrueNode = Graph.getNode(TrueId);
+    const MutableRegionNode *FalseNode = Graph.getNode(FalseId);
+    if (TrueNode == nullptr || FalseNode == nullptr) {
+      continue;
+    }
+
+    GraphNodeId BodyEntryId = InvalidGraphNodeId;
+    GraphNodeId FollowId = InvalidGraphNodeId;
+    bool NegateCondition = false;
+    std::vector<GraphNodeId> BodyIds;
+    if (collectLinearLoopBody(Cfg, Graph, HeaderId, TrueId, BodyIds)) {
+      BodyEntryId = TrueId;
+      FollowId = FalseId;
+    } else {
+      BodyIds.clear();
+      if (collectLinearLoopBody(Cfg, Graph, HeaderId, FalseId, BodyIds)) {
+        BodyEntryId = FalseId;
+        FollowId = TrueId;
+        NegateCondition = true;
+      }
+    }
+
+    if (BodyEntryId == InvalidGraphNodeId || Graph.getNode(FollowId) == nullptr) {
+      continue;
+    }
+
+    std::vector<const MutableRegionNode *> BodyNodes;
+    BodyNodes.reserve(BodyIds.size());
+    for (GraphNodeId BodyId : BodyIds) {
+      BodyNodes.push_back(Graph.getNode(BodyId));
+    }
+
+    StructuredNode WhileNode;
+    WhileNode.Kind = StructuredNodeKind::While;
+    WhileNode.Block = Tail->Id;
+    WhileNode.Condition = Tail->Condition;
+    WhileNode.ConditionNegated = NegateCondition;
+    WhileNode.Body = buildSequenceNode(Cfg, BodyNodes, Tree);
+
+    std::vector<GraphNodeId> Members;
+    Members.push_back(HeaderId);
+    Members.insert(Members.end(), BodyIds.begin(), BodyIds.end());
+    Graph.collapseNodes(Members, Header->Block,
+                        Tree.addNode(std::move(WhileNode)));
+    return true;
+  }
+  return false;
+}
+
 bool reduceTwoBlockWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                              StructuredTree &Tree) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
@@ -712,7 +815,10 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   bool Changed = false;
   do {
     Changed = false;
-    Changed = reduceTwoBlockWhileOnce(Cfg, Graph, Tree);
+    Changed = reduceLinearWhileOnce(Cfg, Graph, Tree);
+    if (!Changed) {
+      Changed = reduceTwoBlockWhileOnce(Cfg, Graph, Tree);
+    }
     if (!Changed) {
       Changed = reduceSelfLoopOnce(Cfg, Graph, Tree);
     }
