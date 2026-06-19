@@ -7,9 +7,10 @@ static cl::opt<bool>
                 cl::init(false), cl::cat(NotdecLLVM2CCat));
 static cl::opt<::notdec::llvm2c::StructuralAlgorithms>
     Algo("algo", cl::desc("Structural algorithm:"),
-         cl::values(clEnumValN(::notdec::llvm2c::SA_Goto, "goto", "emergent"),
+         cl::values(clEnumValN(::notdec::llvm2c::SA_Goto, "goto",
+                               "legacy emergent goto algorithm"),
                     clEnumValN(::notdec::llvm2c::SA_Phoenix, "phoenix",
-                               "phoenix algorithm"),
+                               "legacy phoenix algorithm"),
                     clEnumValN(::notdec::llvm2c::SA_StructuredGoto,
                                "structured-goto",
                                "shared structuring goto adapter"),
@@ -19,7 +20,8 @@ static cl::opt<::notdec::llvm2c::StructuralAlgorithms>
                     clEnumValN(::notdec::llvm2c::SA_StructuredSAILR,
                                "structured-sailr",
                                "shared structuring SAILR adapter")),
-         cl::init(::notdec::llvm2c::SA_Phoenix), cl::cat(NotdecLLVM2CCat));
+         cl::init(::notdec::llvm2c::SA_StructuredSAILR),
+         cl::cat(NotdecLLVM2CCat));
 static cl::opt<bool>
     noDemoteSSA("no-demote-ssa",
                 cl::desc("Disable SSA demotion passes. Eliminate all phi nodes "
