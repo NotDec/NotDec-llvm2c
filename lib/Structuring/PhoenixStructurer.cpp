@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 
 namespace notdec::backend::structuring {
 
@@ -15,6 +16,12 @@ StructuredNode makeGoto(BlockId Target) {
   StructuredNode Node;
   Node.Kind = StructuredNodeKind::Goto;
   Node.Target = Target;
+  return Node;
+}
+
+StructuredNode makeBreak() {
+  StructuredNode Node;
+  Node.Kind = StructuredNodeKind::Break;
   return Node;
 }
 
@@ -173,6 +180,123 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     } else {
       Graph.collapseNodes({HeaderId, ThenId}, Header->Block, Root);
     }
+    return true;
+  }
+  return false;
+}
+
+NodeId buildSwitchCaseBody(const StructuredCFG &Cfg,
+                           const MutableRegionNode *CaseNode,
+                           StructuredTree &Tree) {
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  if (CaseNode != nullptr) {
+    if (CaseNode->StructuredRoot != InvalidNodeId) {
+      Body.Children.push_back(CaseNode->StructuredRoot);
+    } else {
+      for (BlockId Block : CaseNode->Blocks) {
+        appendBlockLabel(Block, Body, Tree);
+        appendBlockBody(Cfg, Block, Body, Tree);
+      }
+    }
+  }
+  Body.Children.push_back(Tree.addNode(makeBreak()));
+  return Tree.addNode(std::move(Body));
+}
+
+bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
+                      StructuredTree &Tree) {
+  for (GraphNodeId HeaderId : Graph.activeNodes()) {
+    const MutableRegionNode *Header = Graph.getNode(HeaderId);
+    if (Header == nullptr || Header->Blocks.empty()) {
+      continue;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Header->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Switch ||
+        Tail->Successors.empty()) {
+      continue;
+    }
+
+    GraphNodeId FollowId = InvalidGraphNodeId;
+    bool Valid = true;
+    std::vector<GraphNodeId> Targets;
+    Targets.reserve(Tail->Successors.size());
+    for (BlockId SuccBlock : Tail->Successors) {
+      GraphNodeId TargetId = Graph.getNodeForBlock(SuccBlock);
+      const MutableRegionNode *Target = Graph.getNode(TargetId);
+      if (Target == nullptr) {
+        Valid = false;
+        break;
+      }
+      Targets.push_back(TargetId);
+
+      if (Target->Succs.empty()) {
+        Valid = false;
+        break;
+      }
+      if (Target->Succs.size() > 1) {
+        Valid = false;
+        break;
+      }
+      GraphNodeId TargetFollow = Target->Succs[0];
+      if (TargetFollow == HeaderId || TargetId == FollowId) {
+        Valid = false;
+        break;
+      }
+      if (FollowId == InvalidGraphNodeId) {
+        FollowId = TargetFollow;
+      } else if (FollowId != TargetFollow) {
+        Valid = false;
+        break;
+      }
+    }
+    if (!Valid || FollowId == InvalidGraphNodeId) {
+      continue;
+    }
+
+    std::set<GraphNodeId> Members;
+    Members.insert(HeaderId);
+    for (GraphNodeId TargetId : Targets) {
+      const MutableRegionNode *Target = Graph.getNode(TargetId);
+      if (Target == nullptr || Target->Preds.size() != 1 ||
+          Target->Preds[0] != HeaderId || Target->Succs.size() != 1 ||
+          Target->Succs[0] != FollowId) {
+        Valid = false;
+        break;
+      }
+      Members.insert(TargetId);
+    }
+    if (!Valid || Members.size() == 1) {
+      continue;
+    }
+
+    StructuredNode Sequence;
+    Sequence.Kind = StructuredNodeKind::Sequence;
+    for (BlockId Block : Header->Blocks) {
+      appendBlockLabel(Block, Sequence, Tree);
+      appendBlockBody(Cfg, Block, Sequence, Tree);
+    }
+
+    StructuredNode SwitchNode;
+    SwitchNode.Kind = StructuredNodeKind::Switch;
+    SwitchNode.Block = Tail->Id;
+    SwitchNode.Condition = Tail->Condition;
+
+    GraphNodeId DefaultId = Targets.front();
+    SwitchNode.Default = buildSwitchCaseBody(Cfg, Graph.getNode(DefaultId),
+                                             Tree);
+    for (const SwitchCase &Case : Tail->Cases) {
+      GraphNodeId CaseId = Graph.getNodeForBlock(Case.Target);
+      SwitchNode.StructuredCases.push_back(
+          {Case.Value, Case.Target,
+           buildSwitchCaseBody(Cfg, Graph.getNode(CaseId), Tree)});
+    }
+    Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
+
+    std::vector<GraphNodeId> MemberList(Members.begin(), Members.end());
+    Graph.collapseNodes(MemberList, Header->Block,
+                        Tree.addNode(std::move(Sequence)));
     return true;
   }
   return false;
@@ -383,6 +507,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
     Changed = false;
     Changed |= reduceSequenceOnce(Cfg, Graph, Tree);
     Changed |= reduceIfOnce(Cfg, Graph, Tree);
+    Changed |= reduceSwitchOnce(Cfg, Graph, Tree);
     if (!Changed && Graph.activeNodes().size() > 1) {
       Changed = virtualizeOneEdge(Cfg, Graph);
     }
