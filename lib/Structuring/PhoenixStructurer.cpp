@@ -345,6 +345,68 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
   return false;
 }
 
+bool reduceTwoBlockWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
+                             StructuredTree &Tree) {
+  for (GraphNodeId HeaderId : Graph.activeNodes()) {
+    const MutableRegionNode *Header = Graph.getNode(HeaderId);
+    if (Header == nullptr || Header->Blocks.size() != 1 ||
+        Header->Succs.size() != 2) {
+      continue;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Header->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
+        !Tail->Statements.empty() || Tail->Successors.size() != 2) {
+      continue;
+    }
+
+    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
+    const MutableRegionNode *TrueNode = Graph.getNode(TrueId);
+    const MutableRegionNode *FalseNode = Graph.getNode(FalseId);
+    if (TrueNode == nullptr || FalseNode == nullptr) {
+      continue;
+    }
+
+    GraphNodeId BodyId = InvalidGraphNodeId;
+    GraphNodeId FollowId = InvalidGraphNodeId;
+    bool NegateCondition = false;
+    auto IsLoopBody = [&](const MutableRegionNode *Node) {
+      return Node != nullptr && Node->Preds.size() == 1 &&
+             Node->Preds[0] == HeaderId && Node->Succs.size() == 1 &&
+             Node->Succs[0] == HeaderId;
+    };
+
+    if (IsLoopBody(TrueNode)) {
+      BodyId = TrueId;
+      FollowId = FalseId;
+    } else if (IsLoopBody(FalseNode)) {
+      BodyId = FalseId;
+      FollowId = TrueId;
+      NegateCondition = true;
+    } else {
+      continue;
+    }
+
+    const MutableRegionNode *Body = Graph.getNode(BodyId);
+    if (Body == nullptr || Graph.getNode(FollowId) == nullptr) {
+      continue;
+    }
+
+    StructuredNode WhileNode;
+    WhileNode.Kind = StructuredNodeKind::While;
+    WhileNode.Block = Tail->Id;
+    WhileNode.Condition = Tail->Condition;
+    WhileNode.ConditionNegated = NegateCondition;
+    WhileNode.Body = buildLoopBody(Cfg, *Body, Tree);
+
+    Graph.collapseNodes({HeaderId, BodyId}, Header->Block,
+                        Tree.addNode(std::move(WhileNode)));
+    return true;
+  }
+  return false;
+}
+
 bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                         StructuredTree &Tree) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
@@ -639,10 +701,19 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   bool Changed = false;
   do {
     Changed = false;
-    Changed |= reduceSequenceOnce(Cfg, Graph, Tree);
-    Changed |= reduceIfOnce(Cfg, Graph, Tree);
-    Changed |= reduceSwitchOnce(Cfg, Graph, Tree);
-    Changed |= reduceSelfLoopOnce(Cfg, Graph, Tree);
+    Changed = reduceTwoBlockWhileOnce(Cfg, Graph, Tree);
+    if (!Changed) {
+      Changed = reduceSelfLoopOnce(Cfg, Graph, Tree);
+    }
+    if (!Changed) {
+      Changed = reduceSequenceOnce(Cfg, Graph, Tree);
+    }
+    if (!Changed) {
+      Changed = reduceIfOnce(Cfg, Graph, Tree);
+    }
+    if (!Changed) {
+      Changed = reduceSwitchOnce(Cfg, Graph, Tree);
+    }
     if (!Changed && Graph.activeNodes().size() > 1) {
       Changed = virtualizeOneEdge(Cfg, Graph);
     }

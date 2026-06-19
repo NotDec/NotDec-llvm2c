@@ -2124,12 +2124,11 @@ void SAFuncContext::run() {
   CCB.execute();
 
   // ============== structural analysis ==============
-  // TODO: create structural analysis according to cmdline
   if (getOpts().algo == SA_Goto) {
-    Goto SA(*this);
+    StructuredGoto SA(*this);
     SA.execute();
   } else if (getOpts().algo == SA_Phoenix) {
-    Phoenix SA(*this);
+    StructuredGoto SA(*this, "phoenix");
     SA.execute();
   } else if (getOpts().algo == SA_StructuredGoto) {
     StructuredGoto SA(*this);

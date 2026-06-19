@@ -8,9 +8,9 @@ static cl::opt<bool>
 static cl::opt<::notdec::llvm2c::StructuralAlgorithms>
     Algo("algo", cl::desc("Structural algorithm:"),
          cl::values(clEnumValN(::notdec::llvm2c::SA_Goto, "goto",
-                               "legacy emergent goto algorithm"),
+                               "alias of structured-goto"),
                     clEnumValN(::notdec::llvm2c::SA_Phoenix, "phoenix",
-                               "legacy phoenix algorithm"),
+                               "alias of structured-phoenix"),
                     clEnumValN(::notdec::llvm2c::SA_StructuredGoto,
                                "structured-goto",
                                "shared structuring goto adapter"),
