@@ -1,6 +1,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include <clang/AST/Expr.h>
@@ -27,6 +28,7 @@ class StructuredGotoAdapter {
 
   std::vector<clang::Stmt *> Payloads;
   std::map<st::BlockId, CFGBlock *> Blocks;
+  std::set<st::BlockId> TargetedLabels;
 
 public:
   StructuredGotoAdapter(SAFuncContext &FCtx, StructuredGoto &SA)
@@ -37,6 +39,7 @@ public:
         st::createStructurer(SA.getStructurerName());
     assert(Structurer != nullptr);
     st::StructuredTree Tree = Structurer->structure(buildCFG());
+    collectGotoTargets(Tree, Tree.root());
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Tree.root(), Stmts);
     replaceCFG(std::move(Stmts));
@@ -63,6 +66,27 @@ private:
     auto It = Blocks.find(Id);
     assert(It != Blocks.end());
     return It->second;
+  }
+
+  void collectGotoTargets(const st::StructuredTree &Tree, st::NodeId Id) {
+    const st::StructuredNode *Node = Tree.getNode(Id);
+    if (Node == nullptr) {
+      return;
+    }
+    if (Node->Kind == st::StructuredNodeKind::Goto &&
+        Node->Target != st::InvalidBlockId) {
+      TargetedLabels.insert(Node->Target);
+    }
+    for (st::NodeId Child : Node->Children) {
+      collectGotoTargets(Tree, Child);
+    }
+    for (const st::StructuredSwitchCase &Case : Node->StructuredCases) {
+      collectGotoTargets(Tree, Case.Body);
+    }
+    collectGotoTargets(Tree, Node->Then);
+    collectGotoTargets(Tree, Node->Else);
+    collectGotoTargets(Tree, Node->Body);
+    collectGotoTargets(Tree, Node->Default);
   }
 
   st::StructuredCFG buildCFG() {
@@ -131,7 +155,9 @@ private:
       }
       break;
     case st::StructuredNodeKind::Label:
-      Stmts.push_back(SA.getOrCreateBlockLabelStmt(getBlock(Node->Block)));
+      if (TargetedLabels.count(Node->Block) != 0) {
+        Stmts.push_back(SA.getOrCreateBlockLabelStmt(getBlock(Node->Block)));
+      }
       break;
     case st::StructuredNodeKind::BasicBlock:
       for (st::PayloadRef Ref : Node->Statements) {
