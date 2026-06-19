@@ -3,16 +3,22 @@
 
 #include "notdec-llvm2c/StructuralAnalysis.h"
 
+#include <string_view>
+
 namespace notdec::llvm2c {
 
 // Trial adapter for the shared structuring layer. It keeps C-specific Clang AST
 // lowering in the old CFGBuilder path, converts that CFG to StructuredCFG, runs
 // GotoStructurer, then renders the tree back to the old C CFG.
 class StructuredGoto : IStructuralAnalysis {
+  std::string_view StructurerName;
+
 public:
-  StructuredGoto(SAFuncContext &ctx) : IStructuralAnalysis(ctx) {}
+  StructuredGoto(SAFuncContext &ctx, std::string_view StructurerName = "goto")
+      : IStructuralAnalysis(ctx), StructurerName(StructurerName) {}
 
   void execute() override;
+  std::string_view getStructurerName() const { return StructurerName; }
 
   clang::LabelDecl *getOrCreateBlockLabel(CFGBlock *Block) {
     return getBlockLabel(Block);

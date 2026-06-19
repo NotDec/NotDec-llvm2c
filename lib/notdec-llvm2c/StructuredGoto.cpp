@@ -32,7 +32,8 @@ public:
 
   void execute() {
     std::unique_ptr<st::Structurer> Structurer =
-        st::createStructurer(st::DefaultStructurerName);
+        st::createStructurer(SA.getStructurerName());
+    assert(Structurer != nullptr);
     st::StructuredTree Tree = Structurer->structure(buildCFG());
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Tree.root(), Stmts);

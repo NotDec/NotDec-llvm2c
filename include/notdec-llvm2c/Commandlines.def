@@ -12,7 +12,10 @@ static cl::opt<::notdec::llvm2c::StructuralAlgorithms>
                                "phoenix algorithm"),
                     clEnumValN(::notdec::llvm2c::SA_StructuredGoto,
                                "structured-goto",
-                               "shared structuring goto adapter")),
+                               "shared structuring goto adapter"),
+                    clEnumValN(::notdec::llvm2c::SA_StructuredPhoenix,
+                               "structured-phoenix",
+                               "shared structuring phoenix adapter")),
          cl::init(::notdec::llvm2c::SA_Phoenix), cl::cat(NotdecLLVM2CCat));
 static cl::opt<bool>
     noDemoteSSA("no-demote-ssa",

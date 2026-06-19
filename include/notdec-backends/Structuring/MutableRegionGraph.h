@@ -32,6 +32,7 @@ struct VirtualEdge {
 struct MutableRegionNode {
   GraphNodeId Id = InvalidGraphNodeId;
   BlockId Block = InvalidBlockId;
+  std::vector<BlockId> Blocks;
   NodeId StructuredRoot = InvalidNodeId;
   bool Active = true;
   std::vector<GraphNodeId> Preds;

@@ -6,6 +6,7 @@ add_library(notdec-backend-structuring STATIC
     RecursiveStructurer.cpp
     StructurerRegistry.cpp
     GotoStructurer.cpp
+    PhoenixStructurer.cpp
     LLVMFunctionCFGBuilder.cpp
 )
 

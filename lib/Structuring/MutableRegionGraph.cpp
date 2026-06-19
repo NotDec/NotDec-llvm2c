@@ -14,6 +14,9 @@ GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot) {
   MutableRegionNode Node;
   Node.Id = static_cast<GraphNodeId>(Nodes.size());
   Node.Block = Block;
+  if (Block != InvalidBlockId) {
+    Node.Blocks.push_back(Block);
+  }
   Node.StructuredRoot = StructuredRoot;
   Nodes.push_back(std::move(Node));
   return Nodes.back().Id;
@@ -139,8 +142,10 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
 
   std::set<GraphNodeId> Preds;
   std::set<GraphNodeId> Succs;
+  std::vector<BlockId> Blocks;
   for (GraphNodeId Id : MemberSet) {
     const MutableRegionNode *Node = getNode(Id);
+    Blocks.insert(Blocks.end(), Node->Blocks.begin(), Node->Blocks.end());
     for (GraphNodeId Pred : Node->Preds) {
       if (!MemberSet.count(Pred) && isActive(Pred)) {
         Preds.insert(Pred);
@@ -161,6 +166,8 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
   }
 
   GraphNodeId Collapsed = addNode(RepresentativeBlock, StructuredRoot);
+  MutableRegionNode *CollapsedNode = getNode(Collapsed);
+  CollapsedNode->Blocks = std::move(Blocks);
   for (GraphNodeId Pred : Preds) {
     MutableRegionNode *PredNode = getNode(Pred);
     PredNode->Succs.erase(
