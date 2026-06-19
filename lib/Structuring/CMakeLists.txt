@@ -1,5 +1,9 @@
 add_library(notdec-backend-structuring STATIC
     StructuredCFG.cpp
+    Region.cpp
+    RegionIdentifier.cpp
+    RecursiveStructurer.cpp
+    StructurerRegistry.cpp
     GotoStructurer.cpp
     LLVMFunctionCFGBuilder.cpp
 )

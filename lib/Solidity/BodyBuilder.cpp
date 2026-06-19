@@ -1,8 +1,9 @@
 #include "notdec-backends/Solidity/BodyBuilder.h"
-#include "notdec-backends/Structuring/GotoStructurer.h"
 #include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
+#include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cctype>
+#include <memory>
 #include <utility>
 
 #include <llvm/ADT/SmallString.h>
@@ -16,7 +17,6 @@ namespace notdec::backend::solidity {
 namespace {
 
 using structuring::BlockId;
-using structuring::GotoStructurer;
 using structuring::InvalidNodeId;
 using structuring::LLVMFunctionCFGBuilder;
 using structuring::PayloadRef;
@@ -162,7 +162,9 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
   SolidityPayloadProvider Provider(Payloads);
   StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(F, Provider);
 
-  StructuredTree Tree = GotoStructurer().structure(Cfg);
+  std::unique_ptr<structuring::Structurer> Structurer =
+      structuring::createStructurer(structuring::DefaultStructurerName);
+  StructuredTree Tree = Structurer->structure(Cfg);
   std::vector<std::string> Result;
   if (Tree.root() != InvalidNodeId) {
     renderStructuredNode(Tree, Payloads, Tree.root(), Result);

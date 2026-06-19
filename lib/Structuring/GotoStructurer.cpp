@@ -1,5 +1,8 @@
 #include "notdec-backends/Structuring/GotoStructurer.h"
 
+#include "notdec-backends/Structuring/RecursiveStructurer.h"
+#include "notdec-backends/Structuring/RegionIdentifier.h"
+
 namespace notdec::backend::structuring {
 
 static StructuredNode makeGoto(BlockId Target) {
@@ -10,12 +13,24 @@ static StructuredNode makeGoto(BlockId Target) {
 }
 
 StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
-  StructuredTree Tree;
+  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
+  return RecursiveStructurer().structure(Cfg, Regions, *this);
+}
+
+NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
+                                       const Region &R,
+                                       StructuredTree &Tree) {
 
   StructuredNode Root;
   Root.Kind = StructuredNodeKind::Sequence;
 
-  for (const auto &Block : Cfg.blocks()) {
+  for (BlockId Id : R.Blocks) {
+    const CFGBlock *BlockPtr = Cfg.getBlock(Id);
+    if (BlockPtr == nullptr) {
+      continue;
+    }
+    const CFGBlock &Block = *BlockPtr;
+
     StructuredNode Label;
     Label.Kind = StructuredNodeKind::Label;
     Label.Block = Block.Id;
@@ -74,8 +89,7 @@ StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
     }
   }
 
-  Tree.setRoot(Tree.addNode(std::move(Root)));
-  return Tree;
+  return Tree.addNode(std::move(Root));
 }
 
 } // namespace notdec::backend::structuring

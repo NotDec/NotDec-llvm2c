@@ -1,12 +1,13 @@
 #include <cassert>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <llvm/Support/Casting.h>
 
-#include "notdec-backends/Structuring/GotoStructurer.h"
+#include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/StructuredGoto.h"
 
@@ -30,8 +31,9 @@ public:
       : FCtx(FCtx), Cfg(FCtx.getCFG()), Ctx(FCtx.getASTContext()), SA(SA) {}
 
   void execute() {
-    st::GotoStructurer Structurer;
-    st::StructuredTree Tree = Structurer.structure(buildCFG());
+    std::unique_ptr<st::Structurer> Structurer =
+        st::createStructurer(st::DefaultStructurerName);
+    st::StructuredTree Tree = Structurer->structure(buildCFG());
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Tree.root(), Stmts);
     replaceCFG(std::move(Stmts));
