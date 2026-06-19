@@ -72,21 +72,30 @@ private:
       st::CFGBlock NewBlock;
       NewBlock.Id = Block->getBlockID();
       Blocks[NewBlock.Id] = Block;
+      bool HasReturnStmt = false;
 
       for (auto It = Block->begin(); It != Block->end(); ++It) {
         if (clang::Stmt *Stmt = getStmt(*It)) {
           if (Stmt == Block->getTerminatorStmt()) {
             continue;
           }
+          HasReturnStmt |= llvm::isa<clang::ReturnStmt>(Stmt);
           NewBlock.Statements.push_back(addPayload(Stmt));
         }
       }
 
-      for (CFGBlock *Succ : Block->succs()) {
-        NewBlock.Successors.push_back(Succ->getBlockID());
+      if (HasReturnStmt ||
+          llvm::isa_and_nonnull<clang::ReturnStmt>(Block->getTerminatorStmt())) {
+        NewBlock.Terminator = st::TerminatorKind::Return;
+      } else {
+        for (CFGBlock *Succ : Block->succs()) {
+          NewBlock.Successors.push_back(Succ->getBlockID());
+        }
       }
 
-      if (Block->succ_size() == 2) {
+      if (NewBlock.Terminator == st::TerminatorKind::Return) {
+        // keep terminal blocks closed so structuring can treat them as exits
+      } else if (Block->succ_size() == 2) {
         NewBlock.Terminator = st::TerminatorKind::Branch;
         NewBlock.Condition = addPayload(Block->getTerminatorStmt());
       } else if (Block->succ_size() > 2) {

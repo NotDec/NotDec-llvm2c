@@ -157,6 +157,17 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     GraphNodeId ThenId = InvalidGraphNodeId;
     GraphNodeId ElseId = InvalidGraphNodeId;
     bool NegateCondition = false;
+    bool HasTerminalElse = false;
+
+    auto IsTerminalNode = [&](const MutableRegionNode *Node) {
+      if (Node == nullptr || !Node->Succs.empty() || Node->Blocks.empty()) {
+        return false;
+      }
+      const CFGBlock *Block = Cfg.getBlock(Node->Blocks.back());
+      return Block != nullptr &&
+             (Block->Terminator == TerminatorKind::Return ||
+              Block->Terminator == TerminatorKind::Unreachable);
+    };
 
     if (TrueNode->Preds.size() == 1 && TrueNode->Succs.size() == 1 &&
         TrueNode->Succs[0] == FalseId) {
@@ -173,6 +184,11 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       ThenId = TrueId;
       ElseId = FalseId;
       FollowId = TrueNode->Succs[0];
+    } else if (TrueNode->Preds.size() == 1 && FalseNode->Preds.size() == 1 &&
+               IsTerminalNode(TrueNode) && IsTerminalNode(FalseNode)) {
+      ThenId = TrueId;
+      ElseId = FalseId;
+      HasTerminalElse = true;
     } else {
       continue;
     }
@@ -180,7 +196,8 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     const MutableRegionNode *Then = Graph.getNode(ThenId);
     const MutableRegionNode *Else =
         ElseId == InvalidGraphNodeId ? nullptr : Graph.getNode(ElseId);
-    if (Then == nullptr || Graph.getNode(FollowId) == nullptr ||
+    if (Then == nullptr ||
+        (!HasTerminalElse && Graph.getNode(FollowId) == nullptr) ||
         (ElseId != InvalidGraphNodeId && Else == nullptr)) {
       continue;
     }
@@ -442,68 +459,6 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     Members.push_back(HeaderId);
     Members.insert(Members.end(), BodyIds.begin(), BodyIds.end());
     Graph.collapseNodes(Members, Header->Block,
-                        Tree.addNode(std::move(WhileNode)));
-    return true;
-  }
-  return false;
-}
-
-bool reduceTwoBlockWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
-                             StructuredTree &Tree) {
-  for (GraphNodeId HeaderId : Graph.activeNodes()) {
-    const MutableRegionNode *Header = Graph.getNode(HeaderId);
-    if (Header == nullptr || Header->Blocks.size() != 1 ||
-        Header->Succs.size() != 2) {
-      continue;
-    }
-
-    const CFGBlock *Tail = Cfg.getBlock(Header->Blocks.back());
-    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
-        !Tail->Statements.empty() || Tail->Successors.size() != 2) {
-      continue;
-    }
-
-    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
-    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
-    const MutableRegionNode *TrueNode = Graph.getNode(TrueId);
-    const MutableRegionNode *FalseNode = Graph.getNode(FalseId);
-    if (TrueNode == nullptr || FalseNode == nullptr) {
-      continue;
-    }
-
-    GraphNodeId BodyId = InvalidGraphNodeId;
-    GraphNodeId FollowId = InvalidGraphNodeId;
-    bool NegateCondition = false;
-    auto IsLoopBody = [&](const MutableRegionNode *Node) {
-      return Node != nullptr && Node->Preds.size() == 1 &&
-             Node->Preds[0] == HeaderId && Node->Succs.size() == 1 &&
-             Node->Succs[0] == HeaderId;
-    };
-
-    if (IsLoopBody(TrueNode)) {
-      BodyId = TrueId;
-      FollowId = FalseId;
-    } else if (IsLoopBody(FalseNode)) {
-      BodyId = FalseId;
-      FollowId = TrueId;
-      NegateCondition = true;
-    } else {
-      continue;
-    }
-
-    const MutableRegionNode *Body = Graph.getNode(BodyId);
-    if (Body == nullptr || Graph.getNode(FollowId) == nullptr) {
-      continue;
-    }
-
-    StructuredNode WhileNode;
-    WhileNode.Kind = StructuredNodeKind::While;
-    WhileNode.Block = Tail->Id;
-    WhileNode.Condition = Tail->Condition;
-    WhileNode.ConditionNegated = NegateCondition;
-    WhileNode.Body = buildLoopBody(Cfg, *Body, Tree);
-
-    Graph.collapseNodes({HeaderId, BodyId}, Header->Block,
                         Tree.addNode(std::move(WhileNode)));
     return true;
   }
@@ -816,9 +771,6 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   do {
     Changed = false;
     Changed = reduceLinearWhileOnce(Cfg, Graph, Tree);
-    if (!Changed) {
-      Changed = reduceTwoBlockWhileOnce(Cfg, Graph, Tree);
-    }
     if (!Changed) {
       Changed = reduceSelfLoopOnce(Cfg, Graph, Tree);
     }
