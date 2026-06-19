@@ -1,8 +1,123 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
 
+#include <llvm/ADT/GraphTraits.h>
+#include <llvm/Support/GenericDomTree.h>
+#include <llvm/Support/GenericDomTreeConstruction.h>
+#include <llvm/Support/raw_ostream.h>
+
 #include <algorithm>
 #include <map>
 #include <set>
+
+namespace notdec::backend::structuring {
+namespace detail {
+
+struct DomOverlayGraph;
+
+// LLVM's generic dominator tree works on pointer nodes with a parent graph.
+// Keep this adapter local so MutableRegionGraph can stay ID-based.
+struct DomOverlayNode {
+  GraphNodeId Id = InvalidGraphNodeId;
+  DomOverlayGraph *Parent = nullptr;
+  std::vector<DomOverlayNode *> Preds;
+  std::vector<DomOverlayNode *> Succs;
+
+  DomOverlayGraph *getParent() const { return Parent; }
+  bool isSyntheticRoot() const { return Id == InvalidGraphNodeId; }
+  void printAsOperand(llvm::raw_ostream &OS, bool) const {
+    if (isSyntheticRoot()) {
+      OS << "synthetic-root";
+      return;
+    }
+    OS << "node-" << Id;
+  }
+};
+
+struct DomOverlayGraph {
+  std::vector<DomOverlayNode> Nodes;
+  std::vector<DomOverlayNode *> NodePtrs;
+  std::map<GraphNodeId, DomOverlayNode *> ById;
+  DomOverlayNode *Entry = nullptr;
+  DomOverlayNode *Exit = nullptr;
+  DomOverlayNode *SyntheticRoot = nullptr;
+
+  size_t size() const { return NodePtrs.size(); }
+};
+
+} // namespace detail
+} // namespace notdec::backend::structuring
+
+namespace llvm {
+
+template <>
+struct GraphTraits<notdec::backend::structuring::detail::DomOverlayNode *> {
+  using NodeRef = notdec::backend::structuring::detail::DomOverlayNode *;
+  using ChildIteratorType = std::vector<NodeRef>::const_iterator;
+
+  static NodeRef getEntryNode(NodeRef N) { return N; }
+  static ChildIteratorType child_begin(NodeRef N) { return N->Succs.begin(); }
+  static ChildIteratorType child_end(NodeRef N) { return N->Succs.end(); }
+};
+
+template <>
+struct GraphTraits<
+    Inverse<notdec::backend::structuring::detail::DomOverlayNode *>> {
+  using NodeRef = notdec::backend::structuring::detail::DomOverlayNode *;
+  using ChildIteratorType = std::vector<NodeRef>::const_iterator;
+
+  static NodeRef getEntryNode(Inverse<NodeRef> G) { return G.Graph; }
+  static ChildIteratorType child_begin(NodeRef N) { return N->Preds.begin(); }
+  static ChildIteratorType child_end(NodeRef N) { return N->Preds.end(); }
+};
+
+template <>
+struct GraphTraits<notdec::backend::structuring::detail::DomOverlayGraph *>
+    : public GraphTraits<
+          notdec::backend::structuring::detail::DomOverlayNode *> {
+  using NodeRef = notdec::backend::structuring::detail::DomOverlayNode *;
+  using nodes_iterator = std::vector<NodeRef>::const_iterator;
+
+  static NodeRef getEntryNode(
+      notdec::backend::structuring::detail::DomOverlayGraph *G) {
+    return G->Entry;
+  }
+  static nodes_iterator nodes_begin(
+      notdec::backend::structuring::detail::DomOverlayGraph *G) {
+    return G->NodePtrs.begin();
+  }
+  static nodes_iterator nodes_end(
+      notdec::backend::structuring::detail::DomOverlayGraph *G) {
+    return G->NodePtrs.end();
+  }
+  static unsigned
+  size(notdec::backend::structuring::detail::DomOverlayGraph *G) {
+    return static_cast<unsigned>(G->size());
+  }
+};
+
+template <>
+struct GraphTraits<
+    Inverse<notdec::backend::structuring::detail::DomOverlayGraph *>>
+    : public GraphTraits<
+          Inverse<notdec::backend::structuring::detail::DomOverlayNode *>> {
+  using NodeRef = notdec::backend::structuring::detail::DomOverlayNode *;
+  using nodes_iterator = std::vector<NodeRef>::const_iterator;
+
+  static NodeRef getEntryNode(
+      Inverse<notdec::backend::structuring::detail::DomOverlayGraph *> G) {
+    return G.Graph->Exit;
+  }
+  static nodes_iterator nodes_begin(
+      Inverse<notdec::backend::structuring::detail::DomOverlayGraph *> G) {
+    return G.Graph->NodePtrs.begin();
+  }
+  static nodes_iterator nodes_end(
+      Inverse<notdec::backend::structuring::detail::DomOverlayGraph *> G) {
+    return G.Graph->NodePtrs.end();
+  }
+};
+
+} // namespace llvm
 
 namespace notdec::backend::structuring {
 
@@ -12,14 +127,6 @@ static bool contains(const std::vector<GraphNodeId> &Values, GraphNodeId Id) {
 
 static bool contains(const std::set<GraphNodeId> &Values, GraphNodeId Id) {
   return Values.find(Id) != Values.end();
-}
-
-static std::set<GraphNodeId> intersectSets(const std::set<GraphNodeId> &A,
-                                           const std::set<GraphNodeId> &B) {
-  std::set<GraphNodeId> Result;
-  std::set_intersection(A.begin(), A.end(), B.begin(), B.end(),
-                        std::inserter(Result, Result.begin()));
-  return Result;
 }
 
 static std::set<GraphNodeId> toSet(const std::vector<GraphNodeId> &Values) {
@@ -34,6 +141,14 @@ static void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
 
 static bool containsBlock(const std::vector<BlockId> &Values, BlockId Id) {
   return std::find(Values.begin(), Values.end(), Id) != Values.end();
+}
+
+static void appendUniqueNode(
+    std::vector<detail::DomOverlayNode *> &Values,
+    detail::DomOverlayNode *Node) {
+  if (std::find(Values.begin(), Values.end(), Node) == Values.end()) {
+    Values.push_back(Node);
+  }
 }
 
 static GraphNodeId firstWithoutActivePred(const MutableRegionGraph &Graph,
@@ -88,83 +203,122 @@ static void dfsOrder(const MutableRegionGraph &Graph,
   Order.push_back(Id);
 }
 
-static std::map<GraphNodeId, std::set<GraphNodeId>>
-computeDominators(const MutableRegionGraph &Graph,
-                  const std::vector<GraphNodeId> &Ids, GraphNodeId Entry) {
-  std::set<GraphNodeId> All = toSet(Ids);
-  std::map<GraphNodeId, std::set<GraphNodeId>> Dom;
-  for (GraphNodeId Id : Ids) {
-    Dom[Id] = Id == Entry ? std::set<GraphNodeId>{Id} : All;
+static detail::DomOverlayGraph
+buildDomOverlay(const MutableRegionGraph &Graph,
+                const std::vector<GraphNodeId> &Ids, GraphNodeId Entry,
+                GraphNodeId Exit) {
+  detail::DomOverlayGraph Overlay;
+  Overlay.Nodes.resize(Ids.size() + 1);
+  Overlay.SyntheticRoot = &Overlay.Nodes.front();
+  Overlay.SyntheticRoot->Parent = &Overlay;
+  Overlay.NodePtrs.push_back(Overlay.SyntheticRoot);
+
+  for (unsigned Index = 0; Index < Ids.size(); ++Index) {
+    detail::DomOverlayNode *Node = &Overlay.Nodes[Index + 1];
+    Node->Id = Ids[Index];
+    Node->Parent = &Overlay;
+    Overlay.ById[Node->Id] = Node;
+    Overlay.NodePtrs.push_back(Node);
   }
 
-  bool Changed = false;
-  do {
-    Changed = false;
-    for (GraphNodeId Id : Ids) {
-      if (Id == Entry) {
+  Overlay.Entry = Overlay.ById[Entry];
+  Overlay.Exit = Overlay.ById[Exit];
+  if (Overlay.Entry == nullptr) {
+    Overlay.Entry = Overlay.SyntheticRoot;
+  }
+  if (Overlay.Exit == nullptr) {
+    Overlay.Exit = Overlay.Entry;
+  }
+
+  std::set<GraphNodeId> Active = toSet(Ids);
+  for (GraphNodeId Id : Ids) {
+    const MutableRegionNode *GraphNode = Graph.getNode(Id);
+    detail::DomOverlayNode *From = Overlay.ById[Id];
+    if (GraphNode == nullptr || From == nullptr) {
+      continue;
+    }
+    for (GraphNodeId SuccId : GraphNode->Succs) {
+      if (!contains(Active, SuccId)) {
         continue;
       }
-      const MutableRegionNode *Node = Graph.getNode(Id);
-      std::set<GraphNodeId> NewDom = All;
-      bool HasPred = false;
-      for (GraphNodeId Pred : Node->Preds) {
-        if (!contains(All, Pred)) {
-          continue;
-        }
-        NewDom = HasPred ? intersectSets(NewDom, Dom[Pred]) : Dom[Pred];
-        HasPred = true;
-      }
-      if (!HasPred) {
-        NewDom.clear();
-      }
-      NewDom.insert(Id);
-      if (NewDom != Dom[Id]) {
-        Dom[Id] = std::move(NewDom);
-        Changed = true;
-      }
+      detail::DomOverlayNode *To = Overlay.ById[SuccId];
+      appendUniqueNode(From->Succs, To);
+      appendUniqueNode(To->Preds, From);
     }
-  } while (Changed);
-  return Dom;
+  }
+
+  bool HasRoot = false;
+  for (GraphNodeId Id : Ids) {
+    detail::DomOverlayNode *Node = Overlay.ById[Id];
+    if (Node != nullptr && Node->Preds.empty()) {
+      appendUniqueNode(Overlay.SyntheticRoot->Succs, Node);
+      appendUniqueNode(Node->Preds, Overlay.SyntheticRoot);
+      HasRoot = true;
+    }
+  }
+  if (!HasRoot && Overlay.Entry != Overlay.SyntheticRoot) {
+    appendUniqueNode(Overlay.SyntheticRoot->Succs, Overlay.Entry);
+    appendUniqueNode(Overlay.Entry->Preds, Overlay.SyntheticRoot);
+  }
+  Overlay.Entry = Overlay.SyntheticRoot;
+  return Overlay;
 }
 
-static std::map<GraphNodeId, std::set<GraphNodeId>>
-computePostDominators(const MutableRegionGraph &Graph,
-                      const std::vector<GraphNodeId> &Ids, GraphNodeId Exit) {
-  std::set<GraphNodeId> All = toSet(Ids);
-  std::map<GraphNodeId, std::set<GraphNodeId>> PostDom;
-  for (GraphNodeId Id : Ids) {
-    PostDom[Id] = Id == Exit ? std::set<GraphNodeId>{Id} : All;
+using DomOverlayTree =
+    llvm::DominatorTreeBase<detail::DomOverlayNode, /*IsPostDom=*/false>;
+using PostDomOverlayTree =
+    llvm::DominatorTreeBase<detail::DomOverlayNode, /*IsPostDom=*/true>;
+
+template <bool IsPostDom>
+static GraphNodeId immediateNodeId(
+    const llvm::DominatorTreeBase<detail::DomOverlayNode, IsPostDom> &Tree,
+    detail::DomOverlayNode *Node) {
+  auto *TreeNode = Tree.getNode(Node);
+  if (TreeNode == nullptr || TreeNode->getIDom() == nullptr) {
+    return InvalidGraphNodeId;
   }
 
-  bool Changed = false;
-  do {
-    Changed = false;
-    for (GraphNodeId Id : Ids) {
-      if (Id == Exit) {
+  detail::DomOverlayNode *IDom = TreeNode->getIDom()->getBlock();
+  if (IDom == nullptr || IDom->isSyntheticRoot()) {
+    return InvalidGraphNodeId;
+  }
+  return IDom->Id;
+}
+
+static void fillDomAnalysis(MutableRegionGraphAnalysis &Result,
+                            detail::DomOverlayGraph &Overlay) {
+  DomOverlayTree DomTree;
+  PostDomOverlayTree PostDomTree;
+  DomTree.recalculate(Overlay);
+  PostDomTree.recalculate(Overlay);
+
+  for (detail::DomOverlayNode *Node : Overlay.NodePtrs) {
+    if (Node->isSyntheticRoot()) {
+      continue;
+    }
+    Result.Dominators[Node->Id];
+    Result.PostDominators[Node->Id];
+    Result.ImmediateDominators[Node->Id] = immediateNodeId(DomTree, Node);
+    Result.ImmediatePostDominators[Node->Id] =
+        immediateNodeId(PostDomTree, Node);
+  }
+
+  for (detail::DomOverlayNode *Node : Overlay.NodePtrs) {
+    if (Node->isSyntheticRoot()) {
+      continue;
+    }
+    for (detail::DomOverlayNode *Candidate : Overlay.NodePtrs) {
+      if (Candidate->isSyntheticRoot()) {
         continue;
       }
-      const MutableRegionNode *Node = Graph.getNode(Id);
-      std::set<GraphNodeId> NewPostDom = All;
-      bool HasSucc = false;
-      for (GraphNodeId Succ : Node->Succs) {
-        if (!contains(All, Succ)) {
-          continue;
-        }
-        NewPostDom =
-            HasSucc ? intersectSets(NewPostDom, PostDom[Succ]) : PostDom[Succ];
-        HasSucc = true;
+      if (DomTree.dominates(Candidate, Node)) {
+        Result.Dominators[Node->Id].insert(Candidate->Id);
       }
-      if (!HasSucc) {
-        NewPostDom.clear();
-      }
-      NewPostDom.insert(Id);
-      if (NewPostDom != PostDom[Id]) {
-        PostDom[Id] = std::move(NewPostDom);
-        Changed = true;
+      if (PostDomTree.dominates(Candidate, Node)) {
+        Result.PostDominators[Node->Id].insert(Candidate->Id);
       }
     }
-  } while (Changed);
-  return PostDom;
+  }
 }
 
 bool MutableRegionGraphAnalysis::dominates(GraphNodeId Dominator,
@@ -179,44 +333,16 @@ bool MutableRegionGraphAnalysis::postDominates(GraphNodeId Dominator,
   return It != PostDominators.end() && contains(It->second, Dominator);
 }
 
-static GraphNodeId findImmediateDominatorInSet(
-    GraphNodeId Node, const std::map<GraphNodeId, std::set<GraphNodeId>> &Sets) {
-  auto It = Sets.find(Node);
-  if (It == Sets.end()) {
-    return InvalidGraphNodeId;
-  }
-
-  std::set<GraphNodeId> Candidates = It->second;
-  Candidates.erase(Node);
-  for (GraphNodeId Candidate : Candidates) {
-    bool DominatedByAllOtherCandidates = true;
-    for (GraphNodeId Other : Candidates) {
-      if (Other == Candidate) {
-        continue;
-      }
-      auto CandidateIt = Sets.find(Candidate);
-      if (CandidateIt == Sets.end() ||
-          !contains(CandidateIt->second, Other)) {
-        DominatedByAllOtherCandidates = false;
-        break;
-      }
-    }
-    if (DominatedByAllOtherCandidates) {
-      return Candidate;
-    }
-  }
-
-  return InvalidGraphNodeId;
-}
-
 GraphNodeId
 MutableRegionGraphAnalysis::immediateDominator(GraphNodeId Node) const {
-  return findImmediateDominatorInSet(Node, Dominators);
+  auto It = ImmediateDominators.find(Node);
+  return It == ImmediateDominators.end() ? InvalidGraphNodeId : It->second;
 }
 
 GraphNodeId
 MutableRegionGraphAnalysis::immediatePostDominator(GraphNodeId Node) const {
-  return findImmediateDominatorInSet(Node, PostDominators);
+  auto It = ImmediatePostDominators.find(Node);
+  return It == ImmediatePostDominators.end() ? InvalidGraphNodeId : It->second;
 }
 
 bool MutableRegionNode::hasExternalSuccessor(BlockId Target) const {
@@ -497,8 +623,9 @@ MutableRegionGraphAnalysis MutableRegionGraph::analyze() const {
 
   Result.Entry = firstWithoutActivePred(*this, Ids);
   Result.Exit = firstWithoutActiveSucc(*this, Ids);
-  Result.Dominators = computeDominators(*this, Ids, Result.Entry);
-  Result.PostDominators = computePostDominators(*this, Ids, Result.Exit);
+  detail::DomOverlayGraph DomOverlay =
+      buildDomOverlay(*this, Ids, Result.Entry, Result.Exit);
+  fillDomAnalysis(Result, DomOverlay);
 
   std::set<GraphNodeId> Active = toSet(Ids);
   std::set<GraphNodeId> Visited;

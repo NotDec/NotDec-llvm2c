@@ -51,6 +51,8 @@ struct MutableRegionGraphAnalysis {
   GraphNodeId Exit = InvalidGraphNodeId;
   std::map<GraphNodeId, std::set<GraphNodeId>> Dominators;
   std::map<GraphNodeId, std::set<GraphNodeId>> PostDominators;
+  std::map<GraphNodeId, GraphNodeId> ImmediateDominators;
+  std::map<GraphNodeId, GraphNodeId> ImmediatePostDominators;
   std::map<GraphNodeId, unsigned> NodeOrder;
 
   bool dominates(GraphNodeId Dominator, GraphNodeId Node) const;
