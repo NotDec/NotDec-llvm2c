@@ -7,6 +7,7 @@ add_library(notdec-backend-structuring STATIC
     StructurerRegistry.cpp
     GotoStructurer.cpp
     PhoenixStructurer.cpp
+    SAILRStructurer.cpp
     LLVMFunctionCFGBuilder.cpp
 )
 

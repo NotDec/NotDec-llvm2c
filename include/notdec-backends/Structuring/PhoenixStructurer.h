@@ -21,10 +21,12 @@ public:
 
 protected:
   virtual std::vector<VirtualEdge>
-  orderVirtualizableEdges(const MutableRegionGraph &Graph,
+  orderVirtualizableEdges(const StructuredCFG &Cfg,
+                          const MutableRegionGraph &Graph,
                           const MutableRegionGraphAnalysis &Analysis,
                           std::vector<VirtualEdge> Edges) const;
-  bool virtualizeOneEdge(MutableRegionGraph &Graph) const;
+  bool virtualizeOneEdge(const StructuredCFG &Cfg,
+                         MutableRegionGraph &Graph) const;
 };
 
 } // namespace notdec::backend::structuring

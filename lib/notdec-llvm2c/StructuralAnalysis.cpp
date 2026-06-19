@@ -2137,6 +2137,9 @@ void SAFuncContext::run() {
   } else if (getOpts().algo == SA_StructuredPhoenix) {
     StructuredGoto SA(*this, "phoenix");
     SA.execute();
+  } else if (getOpts().algo == SA_StructuredSAILR) {
+    StructuredGoto SA(*this, "sailr");
+    SA.execute();
   } else {
     llvm::errs() << "SAFuncContext::run: unknown algorithm: " << getOpts().algo
                  << "\n";

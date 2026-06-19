@@ -18,7 +18,8 @@ enum StructuralAlgorithms {
   SA_Goto,
   SA_Phoenix,
   SA_StructuredGoto,
-  SA_StructuredPhoenix
+  SA_StructuredPhoenix,
+  SA_StructuredSAILR
 };
 
 struct Options {

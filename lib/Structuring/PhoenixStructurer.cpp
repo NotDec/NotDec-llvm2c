@@ -323,8 +323,10 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
 } // namespace
 
 std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
-    const MutableRegionGraph &Graph, const MutableRegionGraphAnalysis &Analysis,
+    const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+    const MutableRegionGraphAnalysis &Analysis,
     std::vector<VirtualEdge> Edges) const {
+  (void)Cfg;
   std::sort(
       Edges.begin(), Edges.end(),
       [&](const VirtualEdge &A, const VirtualEdge &B) {
@@ -351,10 +353,11 @@ std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
   return Edges;
 }
 
-bool PhoenixStructurer::virtualizeOneEdge(MutableRegionGraph &Graph) const {
+bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
+                                          MutableRegionGraph &Graph) const {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
-  std::vector<VirtualEdge> Edges =
-      orderVirtualizableEdges(Graph, Analysis, collectVirtualizableEdges(Graph));
+  std::vector<VirtualEdge> Edges = orderVirtualizableEdges(
+      Cfg, Graph, Analysis, collectVirtualizableEdges(Graph));
   if (Edges.empty()) {
     return false;
   }
@@ -381,7 +384,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
     Changed |= reduceSequenceOnce(Cfg, Graph, Tree);
     Changed |= reduceIfOnce(Cfg, Graph, Tree);
     if (!Changed && Graph.activeNodes().size() > 1) {
-      Changed = virtualizeOneEdge(Graph);
+      Changed = virtualizeOneEdge(Cfg, Graph);
     }
     ++Iterations;
   } while (Changed && Iterations < 1000);
