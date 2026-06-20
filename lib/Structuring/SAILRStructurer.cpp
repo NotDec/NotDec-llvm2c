@@ -68,8 +68,9 @@ filterByLeastSiblingEdges(const MutableRegionGraph &Graph,
 
 std::vector<VirtualEdge>
 filterByMostPostDominators(const MutableRegionGraph &Graph,
-                           const std::vector<VirtualEdge> &Edges) {
-  if (Edges.size() > 10 || Graph.activeNodes().size() > 50) {
+                           const std::vector<VirtualEdge> &Edges,
+                           unsigned MaxEdges, unsigned MaxGraphSize) {
+  if (Edges.size() > MaxEdges || Graph.activeNodes().size() > MaxGraphSize) {
     return Edges;
   }
 
@@ -128,7 +129,8 @@ std::vector<VirtualEdge> SAILRStructurer::orderVirtualizableEdges(
 
   std::vector<VirtualEdge> Best = filterByLeastSiblingEdges(Graph, Edges);
   if (Best.size() > 1) {
-    Best = filterByMostPostDominators(Graph, Best);
+    Best = filterByMostPostDominators(Graph, Best, PostDomMaxEdges,
+                                      PostDomMaxGraphSize);
   }
   if (Best.size() > 1) {
     Best = filterByReturnTarget(Cfg, Graph, Best);

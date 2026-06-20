@@ -9,6 +9,12 @@ namespace notdec::backend::structuring {
 // keeps the algorithm boundary the same as Angr: SAILR is a Phoenix variant
 // whose first reusable part is virtual edge ordering.
 class SAILRStructurer : public PhoenixStructurer {
+public:
+  SAILRStructurer(unsigned PostDomMaxEdges = 10,
+                  unsigned PostDomMaxGraphSize = 50)
+      : PostDomMaxEdges(PostDomMaxEdges),
+        PostDomMaxGraphSize(PostDomMaxGraphSize) {}
+
 protected:
   bool useImprovedCyclicSchemas() const override { return true; }
   std::vector<VirtualEdge>
@@ -16,6 +22,12 @@ protected:
                           const MutableRegionGraph &Graph,
                           const MutableRegionGraphAnalysis &Analysis,
                           std::vector<VirtualEdge> Edges) const override;
+
+private:
+  // Match Angr's default SAILR postdominator heuristic limits. Keep them on the
+  // algorithm object so future backend options do not need to touch the helper.
+  unsigned PostDomMaxEdges;
+  unsigned PostDomMaxGraphSize;
 };
 
 } // namespace notdec::backend::structuring
