@@ -8,7 +8,7 @@
 
 namespace notdec::backend::structuring {
 
-constexpr std::string_view DefaultStructurerName = "goto";
+constexpr std::string_view DefaultStructurerName = "sailr";
 
 std::unique_ptr<Structurer> createStructurer(std::string_view Name);
 
