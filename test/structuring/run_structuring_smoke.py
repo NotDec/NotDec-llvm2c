@@ -268,7 +268,7 @@ exit:
 }
 """,
         "contains": ["while (1)", "c();", "return 0;"],
-        "absent": ["goto c;"],
+        "absent": ["goto head", "goto c;"],
     },
 ]
 

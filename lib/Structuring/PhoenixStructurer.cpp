@@ -1433,6 +1433,31 @@ NodeId wrapNaturalLoopFallback(const Region &R, NodeId Body,
   return Tree.addNode(std::move(LoopNode));
 }
 
+void dropGotoIntoFollowingInfiniteLoop(StructuredNode &Node,
+                                       const StructuredTree &Tree) {
+  if (Node.Kind != StructuredNodeKind::Sequence || Node.Children.size() < 2) {
+    return;
+  }
+
+  std::vector<NodeId> Filtered;
+  Filtered.reserve(Node.Children.size());
+  for (unsigned Index = 0; Index < Node.Children.size(); ++Index) {
+    const StructuredNode *Current = Tree.getNode(Node.Children[Index]);
+    const StructuredNode *Next = nullptr;
+    if (Index + 1 < Node.Children.size()) {
+      Next = Tree.getNode(Node.Children[Index + 1]);
+    }
+    if (Current != nullptr && Next != nullptr &&
+        Current->Kind == StructuredNodeKind::Goto &&
+        Next->Kind == StructuredNodeKind::InfiniteLoop &&
+        Current->Target == Next->Block) {
+      continue;
+    }
+    Filtered.push_back(Node.Children[Index]);
+  }
+  Node.Children = std::move(Filtered);
+}
+
 bool nodeIntersectsRegion(const MutableRegionNode &Node, const Region &R) {
   for (BlockId Block : Node.Blocks) {
     if (std::find(R.Blocks.begin(), R.Blocks.end(), Block) != R.Blocks.end()) {
@@ -1734,6 +1759,7 @@ NodeId PhoenixStructurer::structureRegion(
     }
   }
 
+  dropGotoIntoFollowingInfiniteLoop(Root, Tree);
   NodeId RootId = Tree.addNode(std::move(Root));
   return wrapNaturalLoopFallback(R, RootId, Tree);
 }
