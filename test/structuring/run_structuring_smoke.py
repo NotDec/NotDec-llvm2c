@@ -159,6 +159,32 @@ cont:
         "contains": ["if (x == 0)", "return 1;", "return 0;"],
         "absent": ["goto ret", "goto cont"],
     },
+    {
+        "name": "linear_do_while",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define i32 @main(i32 %x) {
+entry:
+  br label %body1
+
+body1:
+  call void @a()
+  br label %body2
+
+body2:
+  call void @b()
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %body1, label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["do {", "while (x == 0);", "return 0;"],
+        "absent": ["goto body1", "while (1)"],
+    },
 ]
 
 

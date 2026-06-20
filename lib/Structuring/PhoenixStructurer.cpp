@@ -711,6 +711,111 @@ bool reduceLinearWhileWithBreakOnce(const StructuredCFG &Cfg,
   return false;
 }
 
+bool collectLinearDoWhileBody(const StructuredCFG &Cfg,
+                              const MutableRegionGraph &Graph,
+                              GraphNodeId EntryId, GraphNodeId LatchId,
+                              std::vector<GraphNodeId> &BodyIds) {
+  std::set<GraphNodeId> Seen;
+  GraphNodeId CurrentId = EntryId;
+  while (true) {
+    if (!Seen.insert(CurrentId).second) {
+      return false;
+    }
+
+    const MutableRegionNode *Current = Graph.getNode(CurrentId);
+    if (Current == nullptr) {
+      return false;
+    }
+    BodyIds.push_back(CurrentId);
+    if (CurrentId == LatchId) {
+      return true;
+    }
+    if (Current->Succs.size() != 1) {
+      return false;
+    }
+
+    GraphNodeId NextId = Current->Succs[0];
+    const MutableRegionNode *Next = Graph.getNode(NextId);
+    if (Next == nullptr || Next->Preds.size() != 1 ||
+        Next->Preds[0] != CurrentId ||
+        !isFallthroughTo(Cfg, CurrentId, NextId, Graph)) {
+      return false;
+    }
+    CurrentId = NextId;
+  }
+}
+
+bool reduceLinearDoWhileOnce(const StructuredCFG &Cfg,
+                             MutableRegionGraph &Graph,
+                             StructuredTree &Tree) {
+  for (GraphNodeId LatchId : Graph.activeNodes()) {
+    const MutableRegionNode *Latch = Graph.getNode(LatchId);
+    if (Latch == nullptr || Latch->Blocks.empty() || Latch->Succs.size() != 2) {
+      continue;
+    }
+
+    const CFGBlock *Tail = Cfg.getBlock(Latch->Blocks.back());
+    if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
+        Tail->Successors.size() != 2) {
+      continue;
+    }
+
+    GraphNodeId TrueId = Graph.getNodeForBlock(Tail->Successors[0]);
+    GraphNodeId FalseId = Graph.getNodeForBlock(Tail->Successors[1]);
+    if (Graph.getNode(TrueId) == nullptr || Graph.getNode(FalseId) == nullptr) {
+      continue;
+    }
+
+    GraphNodeId EntryId = InvalidGraphNodeId;
+    GraphNodeId FollowId = InvalidGraphNodeId;
+    bool NegateCondition = false;
+    std::vector<GraphNodeId> BodyIds;
+    if (collectLinearDoWhileBody(Cfg, Graph, TrueId, LatchId, BodyIds)) {
+      EntryId = TrueId;
+      FollowId = FalseId;
+    } else {
+      BodyIds.clear();
+      if (collectLinearDoWhileBody(Cfg, Graph, FalseId, LatchId, BodyIds)) {
+        EntryId = FalseId;
+        FollowId = TrueId;
+        NegateCondition = true;
+      }
+    }
+
+    const MutableRegionNode *Entry = Graph.getNode(EntryId);
+    if (Entry == nullptr || EntryId == FollowId || Entry->Preds.size() < 2 ||
+        Graph.getNode(FollowId) == nullptr) {
+      continue;
+    }
+
+    std::vector<const MutableRegionNode *> BodyNodes;
+    BodyNodes.reserve(BodyIds.size());
+    bool Valid = true;
+    for (GraphNodeId BodyId : BodyIds) {
+      const MutableRegionNode *BodyNode = Graph.getNode(BodyId);
+      if (BodyNode == nullptr) {
+        Valid = false;
+        break;
+      }
+      BodyNodes.push_back(BodyNode);
+    }
+    if (!Valid) {
+      continue;
+    }
+
+    StructuredNode DoWhileNode;
+    DoWhileNode.Kind = StructuredNodeKind::DoWhile;
+    DoWhileNode.Block = Tail->Id;
+    DoWhileNode.Condition = Tail->Condition;
+    DoWhileNode.ConditionNegated = NegateCondition;
+    DoWhileNode.Body = buildSequenceNode(Cfg, BodyNodes, Tree);
+    Graph.collapseNodes(BodyIds, Entry->Block,
+                        Tree.addNode(std::move(DoWhileNode)));
+    return true;
+  }
+  return false;
+}
+
 bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                         StructuredTree &Tree) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
@@ -1156,6 +1261,9 @@ bool PhoenixStructurer::analyzeCyclic(const StructuredCFG &Cfg,
   }
   if (useImprovedCyclicSchemas() &&
       reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
+  if (reduceLinearDoWhileOnce(Cfg, Graph, Tree)) {
     return true;
   }
   return reduceSelfLoopOnce(Cfg, Graph, Tree);
