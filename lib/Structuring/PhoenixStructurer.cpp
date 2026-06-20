@@ -1562,7 +1562,7 @@ bool makeGraphWhileLoop(const StructuredCFG &Cfg,
                         const Region &LoopRegion, GraphNodeId HeadId,
                         StructuredTree &Tree, StructuredNode &LoopNode) {
   const MutableRegionNode *Head = Graph.getNode(HeadId);
-  if (Head == nullptr || Head->Blocks.size() != 1 ||
+  if (Head == nullptr || Head->Blocks.empty() ||
       LoopRegion.Successors.size() != 1) {
     return false;
   }
@@ -1571,6 +1571,13 @@ bool makeGraphWhileLoop(const StructuredCFG &Cfg,
   if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Branch ||
       !HeadBlock->Statements.empty() || HeadBlock->Successors.size() != 2) {
     return false;
+  }
+  for (BlockId PrefixBlock : std::vector<BlockId>(Head->Blocks.begin(),
+                                                  Head->Blocks.end() - 1)) {
+    const CFGBlock *Block = Cfg.getBlock(PrefixBlock);
+    if (Block == nullptr || !Block->Statements.empty()) {
+      return false;
+    }
   }
 
   GraphNodeId TrueId = Graph.getNodeForBlock(HeadBlock->Successors[0]);
@@ -1635,66 +1642,76 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
                                 MutableRegionGraph &Graph,
                                 StructuredTree &Tree) {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
-  for (GraphNodeId LatchId : Graph.activeNodes()) {
-    const MutableRegionNode *Latch = Graph.getNode(LatchId);
-    if (Latch == nullptr) {
+  for (GraphNodeId HeadId : Graph.activeNodes()) {
+    const MutableRegionNode *Head = Graph.getNode(HeadId);
+    if (Head == nullptr || Head->Blocks.empty()) {
       continue;
     }
-    for (GraphNodeId HeadId : Latch->Succs) {
-      const MutableRegionNode *Head = Graph.getNode(HeadId);
-      if (Head == nullptr || Head->Blocks.empty()) {
+
+    std::set<GraphNodeId> MemberSet;
+    BlockId LatchBlock = InvalidBlockId;
+    for (GraphNodeId LatchId : Head->Preds) {
+      if (!Graph.hasEdge(LatchId, HeadId)) {
         continue;
       }
 
-      std::set<GraphNodeId> MemberSet;
+      std::set<GraphNodeId> BackEdgeMembers;
       if (!collectNaturalLoopMembers(Graph, Analysis, HeadId, LatchId,
-                                     MemberSet)) {
+                                     BackEdgeMembers)) {
         continue;
       }
+      MemberSet.insert(BackEdgeMembers.begin(), BackEdgeMembers.end());
 
-      std::vector<BlockId> Successors =
-          collectNaturalLoopSuccessors(Graph, MemberSet);
-      if (Successors.size() > 1) {
-        continue;
+      const MutableRegionNode *Latch = Graph.getNode(LatchId);
+      if (Latch != nullptr && !Latch->Blocks.empty()) {
+        LatchBlock = Latch->Blocks.back();
       }
-
-      Region LoopRegion;
-      LoopRegion.Kind = RegionKind::NaturalLoop;
-      LoopRegion.Head = Head->Blocks.front();
-      LoopRegion.Latch = Latch->Blocks.empty() ? InvalidBlockId
-                                               : Latch->Blocks.back();
-      LoopRegion.Successors = Successors;
-
-      std::vector<GraphNodeId> Members(MemberSet.begin(), MemberSet.end());
-      std::sort(Members.begin(), Members.end(),
-                [&](GraphNodeId A, GraphNodeId B) {
-                  const MutableRegionNode *ANode = Graph.getNode(A);
-                  const MutableRegionNode *BNode = Graph.getNode(B);
-                  BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
-                                       ? InvalidBlockId
-                                       : ANode->Blocks.front();
-                  BlockId BBlock = (BNode == nullptr || BNode->Blocks.empty())
-                                       ? InvalidBlockId
-                                       : BNode->Blocks.front();
-                  return ABlock < BBlock;
-                });
-      for (GraphNodeId Id : Members) {
-        const MutableRegionNode *Node = Graph.getNode(Id);
-        if (Node != nullptr) {
-          LoopRegion.Blocks.insert(LoopRegion.Blocks.end(),
-                                   Node->Blocks.begin(), Node->Blocks.end());
-        }
-      }
-
-      StructuredNode LoopNode;
-      if (!makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion,
-                              HeadId, Tree, LoopNode)) {
-        LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
-      }
-      Graph.collapseNodes(Members, LoopRegion.Head,
-                          Tree.addNode(std::move(LoopNode)));
-      return true;
     }
+    if (MemberSet.size() <= 1) {
+      continue;
+    }
+
+    std::vector<BlockId> Successors =
+        collectNaturalLoopSuccessors(Graph, MemberSet);
+    if (Successors.size() > 1) {
+      continue;
+    }
+
+    Region LoopRegion;
+    LoopRegion.Kind = RegionKind::NaturalLoop;
+    LoopRegion.Head = Head->Blocks.front();
+    LoopRegion.Latch = LatchBlock;
+    LoopRegion.Successors = Successors;
+
+    std::vector<GraphNodeId> Members(MemberSet.begin(), MemberSet.end());
+    std::sort(Members.begin(), Members.end(), [&](GraphNodeId A,
+                                                  GraphNodeId B) {
+      const MutableRegionNode *ANode = Graph.getNode(A);
+      const MutableRegionNode *BNode = Graph.getNode(B);
+      BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
+                           ? InvalidBlockId
+                           : ANode->Blocks.front();
+      BlockId BBlock = (BNode == nullptr || BNode->Blocks.empty())
+                           ? InvalidBlockId
+                           : BNode->Blocks.front();
+      return ABlock < BBlock;
+    });
+    for (GraphNodeId Id : Members) {
+      const MutableRegionNode *Node = Graph.getNode(Id);
+      if (Node != nullptr) {
+        LoopRegion.Blocks.insert(LoopRegion.Blocks.end(),
+                                 Node->Blocks.begin(), Node->Blocks.end());
+      }
+    }
+
+    StructuredNode LoopNode;
+    if (!makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion, HeadId,
+                            Tree, LoopNode)) {
+      LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
+    }
+    Graph.collapseNodes(Members, LoopRegion.Head,
+                        Tree.addNode(std::move(LoopNode)));
+    return true;
   }
   return false;
 }

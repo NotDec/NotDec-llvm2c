@@ -250,6 +250,47 @@ void testRefineCyclicReducesGraphNaturalLoop() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicMergesMultipleLatches() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 5}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {1}));
+  Cfg.addBlock(block(5, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4, 5};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
+
+  bool FoundLoop = false;
+  for (GraphNodeId Id : Graph.activeNodes()) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    assert(Node != nullptr);
+    if (Node->StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+    const StructuredNode *RootNode = Tree.getNode(Node->StructuredRoot);
+    assert(RootNode != nullptr);
+    if (RootNode->Kind == StructuredNodeKind::While) {
+      FoundLoop = true;
+      assert(std::find(Node->Blocks.begin(), Node->Blocks.end(), 3) !=
+             Node->Blocks.end());
+      assert(std::find(Node->Blocks.begin(), Node->Blocks.end(), 4) !=
+             Node->Blocks.end());
+    }
+  }
+  assert(FoundLoop);
+}
+
 void testSAILROrderPrefersLeastSiblingEdges() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -348,6 +389,7 @@ int main() {
   testStructurerRegistryNames();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
+  testRefineCyclicMergesMultipleLatches();
   testSAILROrderPrefersLeastSiblingEdges();
   testSAILROrderPrefersMostPostDominators();
   testSAILROrderPrefersReturnTargetTieBreak();
