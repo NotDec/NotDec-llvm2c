@@ -1,11 +1,14 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
+#include "notdec-backends/Structuring/RecursiveStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cassert>
+#include <map>
 #include <memory>
+#include <vector>
 
 using namespace notdec::backend::structuring;
 
@@ -45,6 +48,38 @@ public:
 class TestPhoenixStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::refineCyclic;
+};
+
+class RecordingRegionStructurer : public RegionStructurer {
+public:
+  bool supportsChildRegions() const override { return true; }
+
+  NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
+                         StructuredTree &Tree) override {
+    static const RegionTree EmptyRegions;
+    static const std::map<RegionId, NodeId> EmptyChildren;
+    return structureRegion(Cfg, EmptyRegions, R, EmptyChildren, Tree);
+  }
+
+  NodeId structureRegion(
+      const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
+      const std::map<RegionId, NodeId> &StructuredChildren,
+      StructuredTree &Tree) override {
+    (void)Cfg;
+    (void)Regions;
+    SeenRegions.push_back(R.Kind);
+    ChildCounts.push_back(StructuredChildren.size());
+
+    StructuredNode Node;
+    Node.Kind = R.Kind == RegionKind::NaturalLoop
+                    ? StructuredNodeKind::InfiniteLoop
+                    : StructuredNodeKind::Sequence;
+    Node.Block = R.Head;
+    return Tree.addNode(std::move(Node));
+  }
+
+  std::vector<RegionKind> SeenRegions;
+  std::vector<std::size_t> ChildCounts;
 };
 
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
@@ -188,6 +223,28 @@ void testStructurerRegistryNames() {
   assert(Phoenix != nullptr);
   assert(Sailr != nullptr);
   assert(Missing == nullptr);
+}
+
+void testRecursiveStructurerUsesChildPassPolicy() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {0}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
+  const Region *Root = Regions.getRegion(Regions.root());
+  assert(Root != nullptr);
+  assert(Root->Children.size() == 1);
+
+  RecordingRegionStructurer Structurer;
+  StructuredTree Tree =
+      RecursiveStructurer().structure(Cfg, Regions, Structurer);
+  assert(Tree.root() != InvalidNodeId);
+  assert(Structurer.SeenRegions.size() == 2);
+  assert(Structurer.SeenRegions[0] == RegionKind::NaturalLoop);
+  assert(Structurer.SeenRegions[1] == RegionKind::Root);
+  assert(Structurer.ChildCounts[0] == 0);
+  assert(Structurer.ChildCounts[1] == 0);
 }
 
 void testMergedNaturalLoopKeepsAllLatchPaths() {
@@ -671,6 +728,7 @@ int main() {
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
+  testRecursiveStructurerUsesChildPassPolicy();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();

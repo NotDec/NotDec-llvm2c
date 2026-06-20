@@ -33,13 +33,6 @@ bool containsStructuredControl(const StructuredTree &Tree, NodeId Id) {
          containsStructuredControl(Tree, Node->Default);
 }
 
-bool shouldPassChildToParent(const Region &Parent, const Region &Child) {
-  if (Parent.Kind == RegionKind::Root && Child.Kind == RegionKind::NaturalLoop) {
-    return false;
-  }
-  return true;
-}
-
 NodeId structureRegionRecursive(
     const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
     RegionStructurer &Structurer,
@@ -58,7 +51,7 @@ NodeId structureRegionRecursive(
       }
       NodeId ChildRoot = structureRegionRecursive(
           Cfg, Regions, *Child, Structurer, StructuredRegions, Tree);
-      if (shouldPassChildToParent(R, *Child) &&
+      if (Structurer.shouldPassChildRegionToParent(R, *Child) &&
           containsStructuredControl(Tree, ChildRoot)) {
         StructuredChildren[ChildId] = ChildRoot;
       }
