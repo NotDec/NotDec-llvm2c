@@ -32,7 +32,7 @@ protected:
                           const MutableRegionGraph &Graph,
                           const MutableRegionGraphAnalysis &Analysis,
                           std::vector<VirtualEdge> Edges) const;
-  bool virtualizeOneEdge(const StructuredCFG &Cfg,
+  bool virtualizeOneEdge(const StructuredCFG &Cfg, const Region &R,
                          MutableRegionGraph &Graph) const;
 };
 

@@ -734,7 +734,7 @@ bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
 }
 
 std::vector<VirtualEdge>
-collectVirtualizableEdges(const MutableRegionGraph &Graph) {
+collectVirtualizableEdges(const Region &R, const MutableRegionGraph &Graph) {
   std::vector<VirtualEdge> Edges;
   for (const MutableRegionNode &Node : Graph.nodes()) {
     if (!Node.Active) {
@@ -749,8 +749,11 @@ collectVirtualizableEdges(const MutableRegionGraph &Graph) {
           Node.Blocks.empty() ? InvalidBlockId : Node.Blocks.back();
       BlockId ToBlock =
           SuccNode->Blocks.empty() ? InvalidBlockId : SuccNode->Blocks.front();
-      Edges.push_back(
-          {Node.Id, Succ, FromBlock, ToBlock, VirtualEdgeKind::Goto});
+      VirtualEdgeKind Kind = VirtualEdgeKind::Goto;
+      if (R.Kind == RegionKind::NaturalLoop && ToBlock == R.Head) {
+        Kind = VirtualEdgeKind::Continue;
+      }
+      Edges.push_back({Node.Id, Succ, FromBlock, ToBlock, Kind});
     }
   }
   return Edges;
@@ -967,10 +970,11 @@ std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
 }
 
 bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
+                                          const Region &R,
                                           MutableRegionGraph &Graph) const {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
   std::vector<VirtualEdge> Edges = orderVirtualizableEdges(
-      Cfg, Graph, Analysis, collectVirtualizableEdges(Graph));
+      Cfg, Graph, Analysis, collectVirtualizableEdges(R, Graph));
   if (Edges.empty()) {
     return false;
   }
@@ -1023,7 +1027,7 @@ NodeId PhoenixStructurer::structureRegion(
       Changed = reduceSwitchOnce(Cfg, Graph, Tree);
     }
     if (!Changed && Graph.activeNodes().size() > 1) {
-      Changed = virtualizeOneEdge(Cfg, Graph);
+      Changed = virtualizeOneEdge(Cfg, R, Graph);
     }
     ++Iterations;
   } while (Changed && Iterations < 1000);
