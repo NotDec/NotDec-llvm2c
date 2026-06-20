@@ -3,6 +3,9 @@
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
 
+#include <algorithm>
+#include <map>
+
 namespace notdec::backend::structuring {
 
 static StructuredNode makeGoto(BlockId Target) {
@@ -97,6 +100,47 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
       break;
     }
     }
+  }
+
+  return Tree.addNode(std::move(Root));
+}
+
+NodeId GotoStructurer::structureRegion(
+    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
+    const std::map<RegionId, NodeId> &StructuredChildren,
+    StructuredTree &Tree) {
+  (void)Regions;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  for (RegionId ChildId : R.Children) {
+    auto It = StructuredChildren.find(ChildId);
+    if (It != StructuredChildren.end()) {
+      Root.Children.push_back(It->second);
+    }
+  }
+
+  for (BlockId Id : R.Blocks) {
+    if (std::find(R.Children.begin(), R.Children.end(), Id) !=
+        R.Children.end()) {
+      continue;
+    }
+    const CFGBlock *BlockPtr = Cfg.getBlock(Id);
+    if (BlockPtr == nullptr) {
+      continue;
+    }
+    const CFGBlock &Block = *BlockPtr;
+
+    StructuredNode Label;
+    Label.Kind = StructuredNodeKind::Label;
+    Label.Block = Block.Id;
+    Root.Children.push_back(Tree.addNode(std::move(Label)));
+
+    StructuredNode Body;
+    Body.Kind = StructuredNodeKind::BasicBlock;
+    Body.Block = Block.Id;
+    Body.Statements = Block.Statements;
+    Root.Children.push_back(Tree.addNode(std::move(Body)));
   }
 
   return Tree.addNode(std::move(Root));
