@@ -217,6 +217,24 @@ exit:
         "contains": ["do {", "while (x == 0);", "return 0;"],
         "absent": ["goto body1", "while (1)"],
     },
+    {
+        "name": "self_loop_while",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  br label %head
+
+head:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %head, label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["while (x == 0)", "return 0;"],
+        "absent": ["do {", "goto head"],
+    },
 ]
 
 

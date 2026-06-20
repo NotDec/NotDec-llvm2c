@@ -730,6 +730,10 @@ bool collectLinearDoWhileBody(const StructuredCFG &Cfg,
                               const MutableRegionGraph &Graph,
                               GraphNodeId EntryId, GraphNodeId LatchId,
                               std::vector<GraphNodeId> &BodyIds) {
+  if (EntryId == LatchId) {
+    return false;
+  }
+
   std::set<GraphNodeId> Seen;
   GraphNodeId CurrentId = EntryId;
   while (true) {
@@ -854,11 +858,14 @@ bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     } else if (Header->Succs.size() == 2 &&
                Tail->Terminator == TerminatorKind::Branch &&
                Tail->Successors.size() == 2) {
+      bool HeadControlled = Tail->Statements.empty();
       if (Tail->Successors[0] == Header->Blocks.front()) {
-        LoopNode.Kind = StructuredNodeKind::DoWhile;
+        LoopNode.Kind = HeadControlled ? StructuredNodeKind::While
+                                       : StructuredNodeKind::DoWhile;
         LoopNode.Condition = Tail->Condition;
       } else if (Tail->Successors[1] == Header->Blocks.front()) {
-        LoopNode.Kind = StructuredNodeKind::DoWhile;
+        LoopNode.Kind = HeadControlled ? StructuredNodeKind::While
+                                       : StructuredNodeKind::DoWhile;
         LoopNode.Condition = Tail->Condition;
         LoopNode.ConditionNegated = true;
       } else {
