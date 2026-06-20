@@ -207,14 +207,23 @@ void testStructurerRegistryNames() {
   assert(Names[0] == "goto");
   assert(Names[1] == "phoenix");
   assert(Names[2] == "sailr");
+  assert(resolveStructurerName("structured-goto") == "goto");
+  assert(resolveStructurerName("structured-phoenix") == "phoenix");
+  assert(resolveStructurerName("structured-sailr") == "sailr");
+  assert(resolveStructurerName("structured-dream") == "dream");
+  assert(resolveStructurerName("phoenix").empty());
+  assert(resolveStructurerName("missing").empty());
 
   std::unique_ptr<Structurer> Goto = createStructurer("GOTO");
   std::unique_ptr<Structurer> Phoenix = createStructurer("Phoenix");
   std::unique_ptr<Structurer> Sailr = createStructurer("sailr");
+  std::unique_ptr<Structurer> StructuredPhoenix =
+      createStructurer("structured-phoenix");
   std::unique_ptr<Structurer> Missing = createStructurer("dream");
   assert(Goto != nullptr);
   assert(Phoenix != nullptr);
   assert(Sailr != nullptr);
+  assert(StructuredPhoenix != nullptr);
   assert(Missing == nullptr);
 }
 

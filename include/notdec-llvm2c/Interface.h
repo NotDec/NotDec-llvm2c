@@ -5,7 +5,6 @@
 
 #include <memory>
 #include <string>
-#include <string_view>
 
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
@@ -15,31 +14,11 @@
 
 namespace notdec::llvm2c {
 
-enum StructuralAlgorithms {
-  SA_Goto,
-  SA_StructuredPhoenix,
-  SA_StructuredGoto,
-  SA_StructuredSAILR
-};
-
-inline std::string_view getStructurerName(StructuralAlgorithms Algo) {
-  switch (Algo) {
-  case SA_Goto:
-  case SA_StructuredGoto:
-    return "goto";
-  case SA_StructuredPhoenix:
-    return "phoenix";
-  case SA_StructuredSAILR:
-    return "sailr";
-  }
-  return "";
-}
-
 struct Options {
   bool noDemoteSSA = false;
   bool enableColor = false;
   bool filterUnusedDefinitions = false;
-  StructuralAlgorithms algo;
+  std::string structurer;
   std::string workDir;
 };
 

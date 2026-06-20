@@ -15,7 +15,6 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include "notdec-llvm2c/Interface.h"
-#include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/Utils.h"
 
 using namespace llvm;

@@ -68,6 +68,7 @@
 #include "Interface/HType.h"
 #include "Interface/Utils.h"
 #include "TypeManager.h"
+#include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/Goto.h"
@@ -2123,10 +2124,12 @@ void SAFuncContext::run() {
   CCB.execute();
 
   // ============== structural analysis ==============
-  std::string_view StructurerName = getStructurerName(getOpts().algo);
-  if (StructurerName.empty()) {
-    llvm::errs() << "SAFuncContext::run: unknown algorithm: " << getOpts().algo
-                 << "\n";
+  std::string_view StructurerName = getOpts().structurer;
+  if (StructurerName.empty() ||
+      notdec::backend::structuring::createStructurer(StructurerName) ==
+          nullptr) {
+    llvm::errs() << "SAFuncContext::run: unknown algorithm: "
+                 << getOpts().structurer << "\n";
     std::abort();
   }
   StructuredGoto SA(*this, StructurerName);

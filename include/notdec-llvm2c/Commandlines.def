@@ -1,25 +1,53 @@
 
+#include "notdec-backends/Structuring/StructurerRegistry.h"
+
+struct StructurerChoice {
+  std::string_view Name =
+      ::notdec::backend::structuring::DefaultStructurerName;
+
+  friend bool operator==(const StructurerChoice &Lhs,
+                         const StructurerChoice &Rhs) {
+    return Lhs.Name == Rhs.Name;
+  }
+};
+
+namespace llvm::cl {
+template <> struct OptionValue<StructurerChoice> final
+    : OptionValueCopy<StructurerChoice> {
+  using WrapperType = StructurerChoice;
+
+  OptionValue() = default;
+  OptionValue(const StructurerChoice &V) { this->setValue(V); }
+
+  OptionValue<StructurerChoice> &operator=(const StructurerChoice &V) {
+    this->setValue(V);
+    return *this;
+  }
+};
+} // namespace llvm::cl
+
 static cl::OptionCategory NotdecLLVM2CCat("NotDec-llvm2c Options");
 
 static cl::opt<bool>
     enableColor("debug-color",
                 cl::desc("Enable color output for things like CFG dump."),
                 cl::init(false), cl::cat(NotdecLLVM2CCat));
-static cl::opt<::notdec::llvm2c::StructuralAlgorithms>
-    Algo("algo", cl::desc("Structural algorithm:"),
-         cl::values(clEnumValN(::notdec::llvm2c::SA_Goto, "goto",
-                               "alias of structured-goto"),
-                    clEnumValN(::notdec::llvm2c::SA_StructuredPhoenix,
-                               "structured-phoenix",
-                               "shared structuring phoenix reducer"),
-                    clEnumValN(::notdec::llvm2c::SA_StructuredGoto,
-                               "structured-goto",
-                               "shared structuring goto adapter"),
-                    clEnumValN(::notdec::llvm2c::SA_StructuredSAILR,
-                               "structured-sailr",
-                               "shared structuring SAILR adapter")),
-         cl::init(::notdec::llvm2c::SA_StructuredSAILR),
-         cl::cat(NotdecLLVM2CCat));
+static cl::opt<StructurerChoice> Algo(
+    "algo",
+    cl::desc("Structuring algorithm name."),
+    cl::init(StructurerChoice{}), cl::cat(NotdecLLVM2CCat));
+static bool InitAlgoChoices = []() {
+  auto &Parser = Algo.getParser();
+  Parser.addLiteralOption(
+      "goto", StructurerChoice{"goto"}, "alias of structured-goto");
+  Parser.addLiteralOption("structured-goto", StructurerChoice{"goto"},
+                          "shared structuring goto adapter");
+  Parser.addLiteralOption("structured-phoenix", StructurerChoice{"phoenix"},
+                          "shared structuring phoenix reducer");
+  Parser.addLiteralOption("structured-sailr", StructurerChoice{"sailr"},
+                          "shared structuring SAILR adapter");
+  return true;
+}();
 static cl::opt<bool>
     noDemoteSSA("no-demote-ssa",
                 cl::desc("Disable SSA demotion passes. Eliminate all phi nodes "
@@ -36,7 +64,7 @@ static cl::opt<bool>
       .noDemoteSSA = noDemoteSSA,
       .enableColor = enableColor,
       .filterUnusedDefinitions = filterUnusedDefinitions,
-      .algo = Algo,
+      .structurer = std::string(Algo.getValue().Name),
       .workDir = "",
   };
   return Opts;

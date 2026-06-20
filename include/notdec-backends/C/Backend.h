@@ -8,7 +8,6 @@
 namespace notdec::backend::c {
 
 using Options = ::notdec::llvm2c::Options;
-using StructuralAlgorithms = ::notdec::llvm2c::StructuralAlgorithms;
 using HTypeResult = ::notdec::llvm2c::HTypeResult;
 
 inline void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
