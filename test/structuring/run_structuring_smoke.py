@@ -104,6 +104,7 @@ exit:
         "contains": ["while (1)", "continue;", "break;"],
         "absent": ["goto exit"],
         "counts": {"continue;": 2, "break;": 2},
+        "ordered": [("c();", "return 0;")],
     },
     {
         "name": "simple_switch",
@@ -305,6 +306,15 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
         if actual != expected:
             failures.append(
                 f"{case['name']}: expected {expected} x {needle!r}, got {actual}"
+            )
+    for before, after in case.get("ordered", []):
+        before_index = output.find(before)
+        after_index = output.find(after)
+        if before_index == -1 or after_index == -1:
+            continue
+        if before_index >= after_index:
+            failures.append(
+                f"{case['name']}: expected {before!r} before {after!r}"
             )
     return failures
 
