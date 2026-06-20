@@ -229,6 +229,36 @@ void testSAILROrderPrefersLeastSiblingEdges() {
   assert(Ordered.front().ToBlock == 3);
 }
 
+void testSAILROrderPrefersMostPostDominators() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {3, 4}));
+  Cfg.addBlock(block(2, {3, 4}));
+  Cfg.addBlock(block(3, {5}));
+  Cfg.addBlock(block(4, {5, 6}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {5}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4, 5, 6};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  std::vector<VirtualEdge> Edges = {
+      {1, 3, 1, 3, VirtualEdgeKind::Goto},
+      {1, 4, 1, 4, VirtualEdgeKind::Goto},
+  };
+
+  TestSAILRStructurer Structurer;
+  std::vector<VirtualEdge> Ordered =
+      Structurer.orderVirtualizableEdges(Cfg, Graph, Analysis, Edges);
+  assert(!Ordered.empty());
+  assert(Ordered.front().FromBlock == 1);
+  assert(Ordered.front().ToBlock == 4);
+}
+
 void testSAILROrderPrefersReturnTargetTieBreak() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -269,6 +299,7 @@ int main() {
   testStructurerRegistryNames();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testSAILROrderPrefersLeastSiblingEdges();
+  testSAILROrderPrefersMostPostDominators();
   testSAILROrderPrefersReturnTargetTieBreak();
   return 0;
 }
