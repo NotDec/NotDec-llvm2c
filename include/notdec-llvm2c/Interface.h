@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
@@ -20,6 +21,19 @@ enum StructuralAlgorithms {
   SA_StructuredGoto,
   SA_StructuredSAILR
 };
+
+inline std::string_view getStructurerName(StructuralAlgorithms Algo) {
+  switch (Algo) {
+  case SA_Goto:
+  case SA_StructuredGoto:
+    return "goto";
+  case SA_StructuredPhoenix:
+    return "phoenix";
+  case SA_StructuredSAILR:
+    return "sailr";
+  }
+  return "";
+}
 
 struct Options {
   bool noDemoteSSA = false;

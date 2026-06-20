@@ -2123,23 +2123,14 @@ void SAFuncContext::run() {
   CCB.execute();
 
   // ============== structural analysis ==============
-  if (getOpts().algo == SA_Goto) {
-    StructuredGoto SA(*this);
-    SA.execute();
-  } else if (getOpts().algo == SA_StructuredPhoenix) {
-    StructuredGoto SA(*this, "phoenix");
-    SA.execute();
-  } else if (getOpts().algo == SA_StructuredGoto) {
-    StructuredGoto SA(*this);
-    SA.execute();
-  } else if (getOpts().algo == SA_StructuredSAILR) {
-    StructuredGoto SA(*this, "sailr");
-    SA.execute();
-  } else {
+  std::string_view StructurerName = getStructurerName(getOpts().algo);
+  if (StructurerName.empty()) {
     llvm::errs() << "SAFuncContext::run: unknown algorithm: " << getOpts().algo
                  << "\n";
     std::abort();
   }
+  StructuredGoto SA(*this, StructurerName);
+  SA.execute();
 
   LLVM_DEBUG(llvm::dbgs() << "========" << Func.getName() << ": "
                           << "After Structural Analysis ========"
