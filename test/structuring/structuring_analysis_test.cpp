@@ -463,6 +463,46 @@ void testFinalizedChildSnapshotAddsParentVisibleSuccessor() {
   assert(Graph.hasEdge(ChildNodeId, FollowNodeId));
 }
 
+void testFinalizedChildSnapshotSkipsParentLoopHead() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {1}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region ParentLoop;
+  ParentLoop.Kind = RegionKind::NaturalLoop;
+  ParentLoop.Head = 0;
+  ParentLoop.Blocks = {0, 1, 2};
+  ParentLoop.Children = {ChildId};
+  RegionId ParentLoopId = Regions.addRegion(ParentLoop);
+  Regions.setRoot(ParentLoopId);
+
+  OverlayManager Manager(std::move(Regions));
+  RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
+  assert(ChildOverlay != nullptr);
+  ChildOverlay->finalize(42, SuccessorSnapshot{{0, 2}});
+
+  RegionOverlay *ParentOverlay = Manager.root();
+  assert(ParentOverlay != nullptr);
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *ParentOverlay);
+
+  GraphNodeId ChildNodeId = Graph.getNodeForBlock(1);
+  GraphNodeId ParentHeadId = Graph.getNodeForBlock(0);
+  GraphNodeId FollowNodeId = Graph.getNodeForBlock(2);
+  const MutableRegionNode *ChildNode = Graph.getNode(ChildNodeId);
+  assert(ChildNode != nullptr);
+  assert(!ChildNode->hasExternalSuccessor(0));
+  assert(ChildNode->hasExternalSuccessor(2));
+  assert(!Graph.hasEdge(ChildNodeId, ParentHeadId));
+  assert(Graph.hasEdge(ChildNodeId, FollowNodeId));
+}
+
 void testMergedNaturalLoopKeepsAllLatchPaths() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 5}));
@@ -950,6 +990,7 @@ int main() {
   testVisibleRegionTreeOnlyIncludesFinalizedChildren();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
+  testFinalizedChildSnapshotSkipsParentLoopHead();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();

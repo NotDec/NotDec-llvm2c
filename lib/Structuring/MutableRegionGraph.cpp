@@ -460,6 +460,11 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
         if (containsBlock(ChildRegion->Blocks, Succ)) {
           continue;
         }
+        // Angr's finalize() does not reconnect a child continue edge to the
+        // enclosing loop head; exposing it here would add a fake parent edge.
+        if (R->Kind == RegionKind::NaturalLoop && Succ == R->Head) {
+          continue;
+        }
         appendUniqueBlock(Node->ExternalSuccs, Succ);
         PendingSnapshotSuccs.push_back({NodeId, Succ});
       }
