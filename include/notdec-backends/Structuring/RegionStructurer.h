@@ -3,6 +3,8 @@
 
 #include "notdec-backends/Structuring/Region.h"
 
+#include <map>
+
 namespace notdec::backend::structuring {
 
 // A replaceable algorithm for one region. Implementations append nodes to Tree
@@ -10,8 +12,18 @@ namespace notdec::backend::structuring {
 class RegionStructurer {
 public:
   virtual ~RegionStructurer() = default;
+  virtual bool supportsChildRegions() const { return false; }
   virtual NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                                  StructuredTree &Tree) = 0;
+  virtual NodeId
+  structureRegion(const StructuredCFG &Cfg, const RegionTree &Regions,
+                  const Region &R,
+                  const std::map<RegionId, NodeId> &StructuredChildren,
+                  StructuredTree &Tree) {
+    (void)Regions;
+    (void)StructuredChildren;
+    return structureRegion(Cfg, R, Tree);
+  }
 };
 
 } // namespace notdec::backend::structuring

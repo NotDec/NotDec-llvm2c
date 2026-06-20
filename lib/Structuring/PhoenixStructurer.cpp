@@ -988,7 +988,19 @@ StructuredTree PhoenixStructurer::structure(const StructuredCFG &Cfg) {
 NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
                                           const Region &R,
                                           StructuredTree &Tree) {
-  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, R);
+  static const RegionTree EmptyRegions;
+  static const std::map<RegionId, NodeId> EmptyChildren;
+  return structureRegion(Cfg, EmptyRegions, R, EmptyChildren, Tree);
+}
+
+NodeId PhoenixStructurer::structureRegion(
+    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
+    const std::map<RegionId, NodeId> &StructuredChildren,
+    StructuredTree &Tree) {
+  MutableRegionGraph Graph =
+      StructuredChildren.empty()
+          ? MutableRegionGraph::build(Cfg, R)
+          : MutableRegionGraph::build(Cfg, Regions, R, StructuredChildren);
 
   unsigned Iterations = 0;
   bool Changed = false;
