@@ -901,6 +901,37 @@ collectVirtualizableEdges(const Region &R, const MutableRegionGraph &Graph) {
   return Edges;
 }
 
+std::vector<VirtualEdge>
+filterByAngrLastResortPriority(const MutableRegionGraphAnalysis &Analysis,
+                               const std::vector<VirtualEdge> &Edges) {
+  // Match Angr Phoenix's last-resort buckets: prefer edges where neither end
+  // dominates the other, then edges whose source does not dominate the target.
+  // The final per-bucket order is still delegated to Phoenix/SAILR.
+  std::vector<VirtualEdge> NoDominanceEdges;
+  std::vector<VirtualEdge> SecondaryEdges;
+  std::vector<VirtualEdge> OtherEdges;
+
+  for (const VirtualEdge &Edge : Edges) {
+    bool FromDominatesTo = Analysis.dominates(Edge.From, Edge.To);
+    bool ToDominatesFrom = Analysis.dominates(Edge.To, Edge.From);
+    if (!FromDominatesTo && !ToDominatesFrom) {
+      NoDominanceEdges.push_back(Edge);
+    } else if (!FromDominatesTo) {
+      SecondaryEdges.push_back(Edge);
+    } else {
+      OtherEdges.push_back(Edge);
+    }
+  }
+
+  if (!NoDominanceEdges.empty()) {
+    return NoDominanceEdges;
+  }
+  if (!SecondaryEdges.empty()) {
+    return SecondaryEdges;
+  }
+  return OtherEdges;
+}
+
 std::map<GraphNodeId, std::vector<VirtualEdge>>
 groupVirtualEdgesBySource(const MutableRegionGraph &Graph) {
   std::map<GraphNodeId, std::vector<VirtualEdge>> Result;
@@ -1305,8 +1336,10 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
                                           const Region &R,
                                           MutableRegionGraph &Graph) const {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  std::vector<VirtualEdge> Candidates = filterByAngrLastResortPriority(
+      Analysis, collectVirtualizableEdges(R, Graph));
   std::vector<VirtualEdge> Edges = orderVirtualizableEdges(
-      Cfg, Graph, Analysis, collectVirtualizableEdges(R, Graph));
+      Cfg, Graph, Analysis, std::move(Candidates));
   if (Edges.empty()) {
     return false;
   }
