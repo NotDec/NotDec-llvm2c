@@ -234,7 +234,8 @@ void testRecursiveStructurerVisitsChildBeforeParent() {
   Cfg.addBlock(block(2, {}));
 
   RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
-  const Region *Root = Regions.getRegion(Regions.root());
+  RegionId RootId = Regions.root();
+  const Region *Root = Regions.getRegion(RootId);
   assert(Root != nullptr);
   assert(Root->Children.size() == 1);
   OverlayManager Manager(std::move(Regions));
@@ -246,6 +247,8 @@ void testRecursiveStructurerVisitsChildBeforeParent() {
   assert(Structurer.SeenRegions.size() == 2);
   assert(Structurer.SeenRegions[0] == RegionKind::NaturalLoop);
   assert(Structurer.SeenRegions[1] == RegionKind::Root);
+  assert(Manager.getStructuredRoot(RootId) == InvalidNodeId);
+  assert(!Manager.finalizedChildren(RootId).empty());
 }
 
 void testGotoRegionSkipsChildBlocks() {
