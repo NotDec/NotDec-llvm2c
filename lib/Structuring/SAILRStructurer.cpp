@@ -121,6 +121,11 @@ std::vector<VirtualEdge> SAILRStructurer::orderVirtualizableEdges(
                      std::make_pair(B.FromBlock, B.ToBlock);
             });
 
+  if (Analysis.Entry == InvalidGraphNodeId) {
+    return PhoenixStructurer::orderVirtualizableEdges(Cfg, Graph, Analysis,
+                                                      std::move(Edges));
+  }
+
   std::vector<VirtualEdge> Best = filterByLeastSiblingEdges(Graph, Edges);
   if (Best.size() > 1) {
     Best = filterByMostPostDominators(Graph, Best);
