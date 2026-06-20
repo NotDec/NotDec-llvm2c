@@ -119,13 +119,14 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
   std::set<BlockId> ChildBlocks;
   for (RegionId ChildId : Overlay.children()) {
     RegionOverlay *Child = Overlay.manager()->getRegion(ChildId);
-    const Region *ChildRegion = Child == nullptr ? nullptr : Child->region();
+    if (Child == nullptr || Child->structuredRoot() == InvalidNodeId) {
+      continue;
+    }
+    const Region *ChildRegion = Child->region();
     if (ChildRegion != nullptr) {
       ChildBlocks.insert(ChildRegion->Blocks.begin(), ChildRegion->Blocks.end());
     }
-    if (Child != nullptr && Child->structuredRoot() != InvalidNodeId) {
-      Root.Children.push_back(Child->structuredRoot());
-    }
+    Root.Children.push_back(Child->structuredRoot());
   }
 
   for (BlockId Id : R->Blocks) {

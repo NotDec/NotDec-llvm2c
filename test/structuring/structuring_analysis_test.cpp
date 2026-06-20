@@ -276,11 +276,31 @@ void testGotoRegionSkipsChildBlocks() {
   GotoRegionTester Structurer;
   StructuredTree Tree;
   NodeId LoopRoot = Structurer.structureRegion(Cfg, *LoopOverlay, Tree);
-  NodeId RootRoot = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
+  NodeId UnfinalizedRoot = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
   assert(LoopRoot != InvalidNodeId);
+  const StructuredNode *UnfinalizedRootNode = Tree.getNode(UnfinalizedRoot);
+  assert(UnfinalizedRootNode != nullptr);
+  bool FoundUnfinalizedChildLabel = false;
+  for (NodeId ChildId : UnfinalizedRootNode->Children) {
+    const StructuredNode *Child = Tree.getNode(ChildId);
+    if (Child != nullptr && Child->Kind == StructuredNodeKind::Label &&
+        Child->Block == 1) {
+      FoundUnfinalizedChildLabel = true;
+    }
+  }
+  assert(FoundUnfinalizedChildLabel);
+
+  LoopOverlay->finalize(LoopRoot);
+  NodeId RootRoot = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
   const StructuredNode *RootNode = Tree.getNode(RootRoot);
   assert(RootNode != nullptr);
-  assert(RootNode->Children.size() >= 1);
+  assert(!RootNode->Children.empty());
+  assert(RootNode->Children.front() == LoopRoot);
+  for (NodeId ChildId : RootNode->Children) {
+    const StructuredNode *Child = Tree.getNode(ChildId);
+    assert(Child == nullptr || Child->Kind != StructuredNodeKind::Label ||
+           Child->Block != 1);
+  }
 }
 
 void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
