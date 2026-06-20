@@ -313,6 +313,7 @@ void testRefineCyclicVirtualizesExtraContinues() {
   assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
   assert(Graph.virtualEdges().size() == 1);
   assert(Graph.virtualEdges().front().Kind == VirtualEdgeKind::Continue);
+  assert(Graph.virtualEdges().front().FromBlock == 4);
   assert(Graph.virtualEdges().front().ToBlock == 1);
 }
 

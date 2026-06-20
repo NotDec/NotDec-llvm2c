@@ -1740,6 +1740,7 @@ bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
                                   const Region &LoopRegion,
                                   const std::set<GraphNodeId> &Members,
                                   GraphNodeId HeadId,
+                                  const MutableRegionGraphAnalysis &Analysis,
                                   MutableRegionGraph &Graph,
                                   StructuredTree &Tree) {
   std::vector<GraphNodeId> ContinueSources;
@@ -1754,6 +1755,15 @@ bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
 
   std::sort(ContinueSources.begin(), ContinueSources.end(),
             [&](GraphNodeId A, GraphNodeId B) {
+              unsigned AOrder = Analysis.NodeOrder.count(A) == 0
+                                    ? 0
+                                    : Analysis.NodeOrder.at(A);
+              unsigned BOrder = Analysis.NodeOrder.count(B) == 0
+                                    ? 0
+                                    : Analysis.NodeOrder.at(B);
+              if (AOrder != BOrder) {
+                return AOrder < BOrder;
+              }
               const MutableRegionNode *ANode = Graph.getNode(A);
               const MutableRegionNode *BNode = Graph.getNode(B);
               BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
@@ -2018,8 +2028,8 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
       virtualizeNonFollowLoopExits(Cfg, LoopRegion, MemberSet, FollowBlock,
                                    Graph, Tree);
     }
-    virtualizeExtraContinueEdges(Cfg, LoopRegion, MemberSet, HeadId, Graph,
-                                 Tree);
+    virtualizeExtraContinueEdges(Cfg, LoopRegion, MemberSet, HeadId, Analysis,
+                                 Graph, Tree);
 
     StructuredNode LoopNode;
     bool CanTryDoWhile = PreferDoWhile || Successors.size() <= 1;
