@@ -1701,6 +1701,41 @@ bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
   return Changed;
 }
 
+bool wouldDetachAllPredecessorsOfNonFollowSuccessor(
+    const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+    const std::set<GraphNodeId> &Members, BlockId FollowBlock) {
+  std::map<GraphNodeId, unsigned> RemovedPredsByTarget;
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr) {
+      continue;
+    }
+    for (GraphNodeId SuccId : Node->Succs) {
+      if (Members.count(SuccId)) {
+        continue;
+      }
+      const MutableRegionNode *Succ = Graph.getNode(SuccId);
+      if (Succ == nullptr || Succ->Blocks.empty() ||
+          Succ->Blocks.front() == FollowBlock) {
+        continue;
+      }
+      ++RemovedPredsByTarget[SuccId];
+    }
+  }
+
+  for (const auto &Entry : RemovedPredsByTarget) {
+    const MutableRegionNode *Target = Graph.getNode(Entry.first);
+    if (Target != nullptr && !Target->Blocks.empty() &&
+        isTerminalBlock(Cfg, Target->Blocks.front())) {
+      continue;
+    }
+    if (Target != nullptr && Target->Preds.size() == Entry.second) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
                                   const Region &LoopRegion,
                                   const std::set<GraphNodeId> &Members,
@@ -1968,6 +2003,12 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
         LoopRegion.Blocks.insert(LoopRegion.Blocks.end(),
                                  Node->Blocks.begin(), Node->Blocks.end());
       }
+    }
+
+    if (Successors.size() > 1 &&
+        wouldDetachAllPredecessorsOfNonFollowSuccessor(Cfg, Graph, MemberSet,
+                                                       FollowBlock)) {
+      continue;
     }
 
     if (Successors.size() > 1) {
