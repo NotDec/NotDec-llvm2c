@@ -267,7 +267,7 @@ exit:
   ret i32 0
 }
 """,
-        "contains": ["while (1)", "c();", "return 0;"],
+        "contains": ["do {", "c();", "while (y == (char **)0);", "return 0;"],
         "absent": ["goto head", "goto c;"],
     },
 ]

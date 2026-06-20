@@ -1447,8 +1447,50 @@ NodeId wrapNaturalLoopFallback(const Region &R, NodeId Body,
   return Tree.addNode(std::move(LoopNode));
 }
 
-void dropGotoIntoFollowingInfiniteLoop(StructuredNode &Node,
-                                       const StructuredTree &Tree) {
+bool isStructuredLoopKind(StructuredNodeKind Kind) {
+  return Kind == StructuredNodeKind::While ||
+         Kind == StructuredNodeKind::DoWhile ||
+         Kind == StructuredNodeKind::InfiniteLoop;
+}
+
+BlockId firstRenderedBlock(const StructuredTree &Tree, NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return InvalidBlockId;
+  }
+  if ((Node->Kind == StructuredNodeKind::Label ||
+       Node->Kind == StructuredNodeKind::BasicBlock) &&
+      Node->Block != InvalidBlockId) {
+    return Node->Block;
+  }
+  for (NodeId Child : Node->Children) {
+    BlockId Block = firstRenderedBlock(Tree, Child);
+    if (Block != InvalidBlockId) {
+      return Block;
+    }
+  }
+  return firstRenderedBlock(Tree, Node->Body);
+}
+
+BlockId structuredLoopEntryBlock(const StructuredTree &Tree, NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return InvalidBlockId;
+  }
+  if (Node->Kind == StructuredNodeKind::DoWhile) {
+    return firstRenderedBlock(Tree, Node->Body);
+  }
+  if (isStructuredLoopKind(Node->Kind)) {
+    return Node->Block;
+  }
+  if (Node->Kind == StructuredNodeKind::Sequence && !Node->Children.empty()) {
+    return structuredLoopEntryBlock(Tree, Node->Children.front());
+  }
+  return InvalidBlockId;
+}
+
+void dropGotoIntoFollowingLoop(StructuredNode &Node,
+                               const StructuredTree &Tree) {
   if (Node.Kind != StructuredNodeKind::Sequence || Node.Children.size() < 2) {
     return;
   }
@@ -1463,8 +1505,8 @@ void dropGotoIntoFollowingInfiniteLoop(StructuredNode &Node,
     }
     if (Current != nullptr && Next != nullptr &&
         Current->Kind == StructuredNodeKind::Goto &&
-        Next->Kind == StructuredNodeKind::InfiniteLoop &&
-        Current->Target == Next->Block) {
+        Current->Target ==
+            structuredLoopEntryBlock(Tree, Node.Children[Index + 1])) {
       continue;
     }
     Filtered.push_back(Node.Children[Index]);
@@ -2271,14 +2313,19 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   Changed = preprocessRegionGraph(Cfg, R, Graph);
   do {
     Changed = false;
+    bool HasCycle = Graph.hasCycle();
     static const RegionTree EmptyRegions;
     if (analyzeAcyclic(Cfg, EmptyRegions, R, Graph, Tree)) {
       Changed = true;
-    } else if (analyzeCyclic(Cfg, Graph, Tree)) {
+    }
+    if (HasCycle && analyzeCyclic(Cfg, Graph, Tree)) {
       Changed = true;
-    } else if (refineCyclic(Cfg, EmptyRegions, R, Graph, Tree)) {
+    }
+    if (!Changed && HasCycle &&
+        refineCyclic(Cfg, EmptyRegions, R, Graph, Tree)) {
       Changed = true;
-    } else if (lastResortRefinement(Cfg, R, Graph, Tree)) {
+    }
+    if (!Changed && lastResortRefinement(Cfg, R, Graph, Tree)) {
       Changed = true;
     }
     ++Iterations;
@@ -2314,7 +2361,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
     }
   }
 
-  dropGotoIntoFollowingInfiniteLoop(Root, Tree);
+  dropGotoIntoFollowingLoop(Root, Tree);
   NodeId RootId = Tree.addNode(std::move(Root));
   return wrapNaturalLoopFallback(R, RootId, Tree);
 }
@@ -2335,13 +2382,18 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   Changed = preprocessRegionGraph(Cfg, *R, Graph);
   do {
     Changed = false;
+    bool HasCycle = Graph.hasCycle();
     if (analyzeAcyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
       Changed = true;
-    } else if (analyzeCyclic(Cfg, Graph, Tree)) {
+    }
+    if (HasCycle && analyzeCyclic(Cfg, Graph, Tree)) {
       Changed = true;
-    } else if (refineCyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
+    }
+    if (!Changed && HasCycle &&
+        refineCyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
       Changed = true;
-    } else if (lastResortRefinement(Cfg, *R, Graph, Tree)) {
+    }
+    if (!Changed && lastResortRefinement(Cfg, *R, Graph, Tree)) {
       Changed = true;
     }
     ++Iterations;
@@ -2377,7 +2429,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
     }
   }
 
-  dropGotoIntoFollowingInfiniteLoop(Root, Tree);
+  dropGotoIntoFollowingLoop(Root, Tree);
   NodeId RootId = Tree.addNode(std::move(Root));
   return wrapNaturalLoopFallback(*R, RootId, Tree);
 }

@@ -79,6 +79,7 @@ public:
   MutableRegionNode *getNode(GraphNodeId Id);
 
   std::vector<GraphNodeId> activeNodes() const;
+  bool hasCycle() const;
   bool hasEdge(GraphNodeId From, GraphNodeId To) const;
   void addEdge(GraphNodeId From, GraphNodeId To);
   void removeEdge(GraphNodeId From, GraphNodeId To);

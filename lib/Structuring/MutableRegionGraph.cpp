@@ -6,6 +6,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <set>
 
@@ -512,6 +513,42 @@ std::vector<GraphNodeId> MutableRegionGraph::activeNodes() const {
     }
   }
   return Result;
+}
+
+bool MutableRegionGraph::hasCycle() const {
+  std::set<GraphNodeId> Visited;
+  std::set<GraphNodeId> InStack;
+
+  std::function<bool(GraphNodeId)> Visit = [&](GraphNodeId Id) {
+    if (!isActive(Id)) {
+      return false;
+    }
+    if (contains(InStack, Id)) {
+      return true;
+    }
+    if (!Visited.insert(Id).second) {
+      return false;
+    }
+
+    InStack.insert(Id);
+    const MutableRegionNode *Node = getNode(Id);
+    if (Node != nullptr) {
+      for (GraphNodeId Succ : Node->Succs) {
+        if (Visit(Succ)) {
+          return true;
+        }
+      }
+    }
+    InStack.erase(Id);
+    return false;
+  };
+
+  for (GraphNodeId Id : activeNodes()) {
+    if (Visit(Id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool MutableRegionGraph::isActive(GraphNodeId Id) const {
