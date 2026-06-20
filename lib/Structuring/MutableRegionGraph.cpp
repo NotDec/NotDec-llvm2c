@@ -427,6 +427,11 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
   MutableRegionGraph Graph;
   std::map<BlockId, GraphNodeId> BlockToNode;
   std::map<BlockId, GraphNodeId> PlaceholderToNode;
+  struct PendingSnapshotSuccessor {
+    GraphNodeId From = InvalidGraphNodeId;
+    BlockId Succ = InvalidBlockId;
+  };
+  std::vector<PendingSnapshotSuccessor> PendingSnapshotSuccs;
 
   auto getOrCreateExternalPlaceholder = [&](BlockId Block) {
     auto It = PlaceholderToNode.find(Block);
@@ -451,6 +456,13 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
       Node->Blocks = ChildRegion->Blocks;
+      for (BlockId Succ : Child.Snapshot.Successors) {
+        if (containsBlock(ChildRegion->Blocks, Succ)) {
+          continue;
+        }
+        appendUniqueBlock(Node->ExternalSuccs, Succ);
+        PendingSnapshotSuccs.push_back({NodeId, Succ});
+      }
     }
     for (BlockId Block : ChildRegion->Blocks) {
       if (containsBlock(R->Blocks, Block)) {
@@ -485,6 +497,16 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
       if (From != It->second || Succ == Block) {
         Graph.addEdge(From, It->second);
       }
+    }
+  }
+
+  for (const PendingSnapshotSuccessor &Pending : PendingSnapshotSuccs) {
+    auto It = BlockToNode.find(Pending.Succ);
+    GraphNodeId To = It == BlockToNode.end()
+                         ? getOrCreateExternalPlaceholder(Pending.Succ)
+                         : It->second;
+    if (Pending.From != To) {
+      Graph.addEdge(Pending.From, To);
     }
   }
 

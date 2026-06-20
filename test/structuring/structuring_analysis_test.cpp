@@ -424,6 +424,45 @@ void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   assert(Head->hasExternalSuccessor(1));
 }
 
+void testFinalizedChildSnapshotAddsParentVisibleSuccessor() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {0}));
+  Cfg.addBlock(block(1, {}));
+
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 0;
+  Child.Blocks = {0};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
+  assert(ChildOverlay != nullptr);
+  ChildOverlay->finalize(42, SuccessorSnapshot{{1}});
+
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+
+  GraphNodeId ChildNodeId = Graph.getNodeForBlock(0);
+  GraphNodeId FollowNodeId = Graph.getNodeForBlock(1);
+  const MutableRegionNode *ChildNode = Graph.getNode(ChildNodeId);
+  const MutableRegionNode *FollowNode = Graph.getNode(FollowNodeId);
+  assert(ChildNode != nullptr);
+  assert(FollowNode != nullptr);
+  assert(!FollowNode->ExternalPlaceholder);
+  assert(ChildNode->hasExternalSuccessor(1));
+  assert(Graph.hasEdge(ChildNodeId, FollowNodeId));
+}
+
 void testMergedNaturalLoopKeepsAllLatchPaths() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 5}));
@@ -910,6 +949,7 @@ int main() {
   testGotoRegionSkipsChildBlocks();
   testVisibleRegionTreeOnlyIncludesFinalizedChildren();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
+  testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();
