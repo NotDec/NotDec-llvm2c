@@ -178,6 +178,38 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     return failures
 
 
+def run_sailr_improved_phoenix_case(notdec_llvm2c: Path,
+                                    work_dir: Path) -> list[str]:
+    case = next(c for c in CASES if c["name"] == "linear_while_break")
+    input_path = work_dir / "sailr_improved_phoenix.ll"
+    input_path.write_text(case["ir"].strip() + "\n")
+
+    failures = []
+    outputs = {}
+    for algo in ("structured-sailr", "structured-phoenix"):
+        output_path = work_dir / f"sailr_improved_phoenix.{algo}.c"
+        proc = subprocess.run(
+            [str(notdec_llvm2c), str(input_path), "-o", str(output_path),
+             f"--algo={algo}"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode != 0:
+            failures.append(f"{algo}: command failed\n{proc.stdout}")
+            continue
+        outputs[algo] = output_path.read_text()
+
+    sailr_output = outputs.get("structured-sailr", "")
+    phoenix_output = outputs.get("structured-phoenix", "")
+    if "break;" not in sailr_output:
+        failures.append("structured-sailr: missing improved break output")
+    if "break;" in phoenix_output:
+        failures.append(
+            "structured-phoenix: unexpectedly used SAILR improved break schema")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notdec-llvm2c", required=True, type=Path)
@@ -188,6 +220,8 @@ def main() -> int:
         work_dir = Path(tmp)
         for case in CASES:
             all_failures.extend(run_case(args.notdec_llvm2c, work_dir, case))
+        all_failures.extend(
+            run_sailr_improved_phoenix_case(args.notdec_llvm2c, work_dir))
 
     if all_failures:
         print("\n".join(all_failures))

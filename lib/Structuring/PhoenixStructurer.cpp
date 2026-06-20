@@ -1141,7 +1141,8 @@ bool PhoenixStructurer::analyzeCyclic(const StructuredCFG &Cfg,
   if (reduceLinearWhileOnce(Cfg, Graph, Tree)) {
     return true;
   }
-  if (reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree)) {
+  if (useImprovedCyclicSchemas() &&
+      reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree)) {
     return true;
   }
   return reduceSelfLoopOnce(Cfg, Graph, Tree);

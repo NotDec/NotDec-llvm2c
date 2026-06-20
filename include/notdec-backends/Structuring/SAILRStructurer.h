@@ -10,6 +10,7 @@ namespace notdec::backend::structuring {
 // whose first reusable part is virtual edge ordering.
 class SAILRStructurer : public PhoenixStructurer {
 protected:
+  bool useImprovedCyclicSchemas() const override { return true; }
   std::vector<VirtualEdge>
   orderVirtualizableEdges(const StructuredCFG &Cfg,
                           const MutableRegionGraph &Graph,

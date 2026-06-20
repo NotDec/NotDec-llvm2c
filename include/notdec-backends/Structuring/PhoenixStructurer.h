@@ -41,6 +41,7 @@ protected:
                             StructuredTree &Tree) const;
   virtual bool lastResortRefinement(const StructuredCFG &Cfg, const Region &R,
                                     MutableRegionGraph &Graph) const;
+  virtual bool useImprovedCyclicSchemas() const { return false; }
   virtual bool preprocessRegionGraph(const StructuredCFG &Cfg, const Region &R,
                                      MutableRegionGraph &Graph) const {
     (void)Cfg;
