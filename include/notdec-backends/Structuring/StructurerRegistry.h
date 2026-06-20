@@ -12,6 +12,7 @@ namespace notdec::backend::structuring {
 
 constexpr std::string_view DefaultStructurerName = "sailr";
 
+llvm::ArrayRef<std::string_view> knownStructurerNames();
 llvm::ArrayRef<std::string_view> registeredStructurerNames();
 std::unique_ptr<Structurer> createStructurer(std::string_view Name);
 

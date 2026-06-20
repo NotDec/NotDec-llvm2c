@@ -31,6 +31,16 @@ struct StructurerRegistration {
   StructurerFactory Factory;
 };
 
+// Keep planned Angr-compatible algorithm names in one place even before every
+// factory is implemented. The executable registry below only exposes working
+// algorithms.
+constexpr std::string_view KnownStructurers[] = {
+    "goto",
+    "phoenix",
+    "sailr",
+    "dream",
+};
+
 constexpr StructurerRegistration Structurers[] = {
     {"goto", createGoto},
     {"phoenix", createPhoenix},
@@ -55,6 +65,10 @@ bool equalsIgnoreCase(std::string_view Lhs, std::string_view Rhs) {
 }
 
 } // namespace
+
+llvm::ArrayRef<std::string_view> knownStructurerNames() {
+  return KnownStructurers;
+}
 
 llvm::ArrayRef<std::string_view> registeredStructurerNames() {
   return StructurerNames;

@@ -167,6 +167,13 @@ void testFallthroughVirtualizationInstallsSourceRoot() {
 }
 
 void testStructurerRegistryNames() {
+  llvm::ArrayRef<std::string_view> KnownNames = knownStructurerNames();
+  assert(KnownNames.size() == 4);
+  assert(KnownNames[0] == "goto");
+  assert(KnownNames[1] == "phoenix");
+  assert(KnownNames[2] == "sailr");
+  assert(KnownNames[3] == "dream");
+
   llvm::ArrayRef<std::string_view> Names = registeredStructurerNames();
   assert(Names.size() == 3);
   assert(Names[0] == "goto");
