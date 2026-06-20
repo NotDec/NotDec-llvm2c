@@ -14,6 +14,13 @@
 
 namespace notdec::llvm2c {
 
+clang::Stmt *getStmt(CFGElement Element) {
+  if (auto Stmt = Element.getAs<CFGStmt>()) {
+    return const_cast<clang::Stmt *>(Stmt->getStmt());
+  }
+  return nullptr;
+}
+
 IStructuralAnalysis::IStructuralAnalysis(SAFuncContext &ctx)
     : FCtx(ctx), Cfg(FCtx.getCFG()), Ctx(ctx.getASTContext()) {}
 

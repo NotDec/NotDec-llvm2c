@@ -66,8 +66,6 @@ inline bool isAddrOf(clang::Expr *E) {
   return false;
 }
 
-// utility functions
-clang::Stmt *getStmt(CFGElement e);
 bool onlyUsedInCurrentBlock(llvm::Instruction &inst);
 bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb);
 clang::DeclRefExpr *

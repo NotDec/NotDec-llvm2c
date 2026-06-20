@@ -19,6 +19,8 @@ namespace notdec::llvm2c {
 class SAFuncContext;
 struct ValueNamer;
 
+clang::Stmt *getStmt(CFGElement Element);
+
 // This is the minimal C-backend bridge that shared structuring still needs
 // while the old StructuralAnalysis monolith is being split apart. Keep the CFG
 // editing helpers here so StructuredGoto/Goto/CFG cleanup stop depending on the
