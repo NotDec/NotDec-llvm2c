@@ -1281,6 +1281,13 @@ bool nodeTreeContainsControlTransfer(const StructuredTree &Tree, NodeId Id) {
          nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Continue);
 }
 
+bool sourceContainsStructuredSwitch(const MutableRegionNode &Source,
+                                    const StructuredTree &Tree) {
+  return Source.StructuredRoot != InvalidNodeId &&
+         nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                              StructuredNodeKind::Switch);
+}
+
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
                         const std::vector<VirtualEdge> &VirtualEdges,
                         const Region &R, StructuredNode &Root,
@@ -1785,10 +1792,12 @@ bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
     }
     VirtualEdge Edge{SourceId, HeadId, Source->TailBlock, Head->Blocks.front(),
                      VirtualEdgeKind::Continue};
-    NodeId Replacement =
-        buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion, Tree);
-    if (Replacement != InvalidNodeId) {
-      Graph.setStructuredRoot(SourceId, Replacement);
+    if (!sourceContainsStructuredSwitch(*Source, Tree)) {
+      NodeId Replacement =
+          buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion, Tree);
+      if (Replacement != InvalidNodeId) {
+        Graph.setStructuredRoot(SourceId, Replacement);
+      }
     }
     Graph.virtualizeEdge(SourceId, HeadId, Edge.Kind);
     Changed = true;

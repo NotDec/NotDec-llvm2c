@@ -324,6 +324,41 @@ void testRefineCyclicVirtualizesExtraContinues() {
   assert(Graph.virtualEdges().front().ToBlock == 1);
 }
 
+void testRefineCyclicSkipsSwitchSourceContinueRewrite() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 5}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {1}));
+  Cfg.addBlock(block(5, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4, 5};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  StructuredNode SwitchRoot;
+  SwitchRoot.Kind = StructuredNodeKind::Switch;
+  SwitchRoot.Block = 4;
+  NodeId SwitchRootId = Tree.addNode(std::move(SwitchRoot));
+  Graph.setStructuredRoot(Graph.getNodeForBlock(4), SwitchRootId);
+
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
+  assert(Graph.virtualEdges().size() == 1);
+  assert(Graph.virtualEdges().front().Kind == VirtualEdgeKind::Continue);
+  assert(Graph.virtualEdges().front().FromBlock == 4);
+  const MutableRegionNode *Source =
+      Graph.getNode(Graph.virtualEdges().front().From);
+  assert(Source != nullptr);
+  assert(Source->StructuredRoot == SwitchRootId);
+}
+
 void testRefineCyclicBuildsDoWhileFromLatchCondition() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -640,6 +675,7 @@ int main() {
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();
   testRefineCyclicVirtualizesExtraContinues();
+  testRefineCyclicSkipsSwitchSourceContinueRewrite();
   testRefineCyclicBuildsDoWhileFromLatchCondition();
   testRefineCyclicPrefersDoWhileWhenLatchConditionWouldBecomeBreak();
   testRefineCyclicVirtualizesNonFollowExits();
