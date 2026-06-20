@@ -7,15 +7,26 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace notdec::backend::structuring {
 
 namespace {
 
-StructuredNode makeGoto(BlockId Target) {
+StructuredNode makeControlTransfer(BlockId Target, VirtualEdgeKind Kind) {
   StructuredNode Node;
-  Node.Kind = StructuredNodeKind::Goto;
   Node.Target = Target;
+  switch (Kind) {
+  case VirtualEdgeKind::Goto:
+    Node.Kind = StructuredNodeKind::Goto;
+    break;
+  case VirtualEdgeKind::Break:
+    Node.Kind = StructuredNodeKind::Break;
+    break;
+  case VirtualEdgeKind::Continue:
+    Node.Kind = StructuredNodeKind::Continue;
+    break;
+  }
   return Node;
 }
 
@@ -474,13 +485,10 @@ NodeId buildLoopBodyWithBreak(const StructuredCFG &Cfg,
   return Tree.addNode(std::move(Sequence));
 }
 
-bool collectLinearLoopBodyWithBreak(const StructuredCFG &Cfg,
-                                    const MutableRegionGraph &Graph,
-                                    GraphNodeId HeaderId,
-                                    GraphNodeId BodyEntryId,
-                                    GraphNodeId FollowId,
-                                    std::vector<GraphNodeId> &BodyIds,
-                                    LoopBreakSite &BreakSite) {
+bool collectLinearLoopBodyWithBreak(
+    const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+    GraphNodeId HeaderId, GraphNodeId BodyEntryId, GraphNodeId FollowId,
+    std::vector<GraphNodeId> &BodyIds, LoopBreakSite &BreakSite) {
   // This is a conservative fast path for `while (...) { ... if (...) break; }`.
   // It only accepts a linear loop body and at most one break edge.
   const MutableRegionNode *BodyEntry = Graph.getNode(BodyEntryId);
@@ -594,7 +602,8 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       }
     }
 
-    if (BodyEntryId == InvalidGraphNodeId || Graph.getNode(FollowId) == nullptr) {
+    if (BodyEntryId == InvalidGraphNodeId ||
+        Graph.getNode(FollowId) == nullptr) {
       continue;
     }
 
@@ -774,20 +783,19 @@ void appendControlTransfer(StructuredNode &Root, StructuredTree &Tree,
     return;
   }
 
-  StructuredNode Node;
-  Node.Target = Target;
-  switch (Kind) {
-  case VirtualEdgeKind::Goto:
-    Node.Kind = StructuredNodeKind::Goto;
-    break;
-  case VirtualEdgeKind::Break:
-    Node.Kind = StructuredNodeKind::Break;
-    break;
-  case VirtualEdgeKind::Continue:
-    Node.Kind = StructuredNodeKind::Continue;
-    break;
+  Root.Children.push_back(Tree.addNode(makeControlTransfer(Target, Kind)));
+}
+
+VirtualEdgeKind classifyNaturalLoopExit(const Region &R, BlockId Target) {
+  if (R.Kind == RegionKind::NaturalLoop) {
+    if (Target == R.Head) {
+      return VirtualEdgeKind::Continue;
+    }
+    if (R.Successors.size() == 1 && R.Successors.front() == Target) {
+      return VirtualEdgeKind::Break;
+    }
   }
-  Root.Children.push_back(Tree.addNode(std::move(Node)));
+  return VirtualEdgeKind::Goto;
 }
 
 bool hasSuccessorTarget(const CFGBlock &Block, BlockId Target) {
@@ -840,7 +848,8 @@ bool nodeTreeContainsStructuredControl(const StructuredTree &Tree, NodeId Id) {
 
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
                         const std::vector<VirtualEdge> &VirtualEdges,
-                        StructuredNode &Root, StructuredTree &Tree) {
+                        const Region &R, StructuredNode &Root,
+                        StructuredTree &Tree) {
   if (Node.StructuredRoot != InvalidNodeId) {
     Root.Children.push_back(Node.StructuredRoot);
     if (Node.Blocks.empty()) {
@@ -853,7 +862,10 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     if (nodeTreeContainsStructuredControl(Tree, Node.StructuredRoot)) {
       for (const VirtualEdge &Edge : VirtualEdges) {
         if (!nodeHasSuccessorTarget(Cfg, Node, Edge.ToBlock)) {
-          appendControlTransfer(Root, Tree, Edge.ToBlock, Edge.Kind);
+          appendControlTransfer(Root, Tree, Edge.ToBlock,
+                                Edge.Kind == VirtualEdgeKind::Goto
+                                    ? classifyNaturalLoopExit(R, Edge.ToBlock)
+                                    : Edge.Kind);
         }
       }
       return;
@@ -880,12 +892,14 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     IfNode.Block = Tail->Id;
     IfNode.Condition = Tail->Condition;
     if (!Tail->Successors.empty()) {
-      IfNode.Then = Tree.addNode(makeGoto(Tail->Successors[0]));
-      IfNode.Children.push_back(IfNode.Then);
+      IfNode.Then = Tree.addNode(
+          makeControlTransfer(Tail->Successors[0],
+                              classifyNaturalLoopExit(R, Tail->Successors[0])));
     }
     if (Tail->Successors.size() > 1) {
-      IfNode.Else = Tree.addNode(makeGoto(Tail->Successors[1]));
-      IfNode.Children.push_back(IfNode.Else);
+      IfNode.Else = Tree.addNode(
+          makeControlTransfer(Tail->Successors[1],
+                              classifyNaturalLoopExit(R, Tail->Successors[1])));
     }
     Root.Children.push_back(Tree.addNode(std::move(IfNode)));
     break;
@@ -897,22 +911,22 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     SwitchNode.Condition = Tail->Condition;
     SwitchNode.Cases = Tail->Cases;
     if (!Tail->Successors.empty()) {
-      SwitchNode.Default = Tree.addNode(makeGoto(Tail->Successors[0]));
+      SwitchNode.Default = Tree.addNode(
+          makeControlTransfer(Tail->Successors[0],
+                              classifyNaturalLoopExit(R, Tail->Successors[0])));
     }
     for (const auto &Case : Tail->Cases) {
-      NodeId CaseBody = Tree.addNode(makeGoto(Case.Target));
+      NodeId CaseBody = Tree.addNode(makeControlTransfer(
+          Case.Target, classifyNaturalLoopExit(R, Case.Target)));
       SwitchNode.StructuredCases.push_back({Case.Value, Case.Target, CaseBody});
-      SwitchNode.Children.push_back(CaseBody);
-    }
-    for (BlockId Succ : Tail->Successors) {
-      SwitchNode.Children.push_back(Tree.addNode(makeGoto(Succ)));
     }
     Root.Children.push_back(Tree.addNode(std::move(SwitchNode)));
     break;
   }
   case TerminatorKind::Fallthrough:
     for (BlockId Succ : Tail->Successors) {
-      Root.Children.push_back(Tree.addNode(makeGoto(Succ)));
+      Root.Children.push_back(Tree.addNode(
+          makeControlTransfer(Succ, classifyNaturalLoopExit(R, Succ))));
     }
     break;
   case TerminatorKind::Return: {
@@ -931,9 +945,149 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
 
   for (const VirtualEdge &Edge : VirtualEdges) {
     if (!hasSuccessorTarget(*Tail, Edge.ToBlock)) {
-      appendControlTransfer(Root, Tree, Edge.ToBlock, Edge.Kind);
+      appendControlTransfer(Root, Tree, Edge.ToBlock,
+                            Edge.Kind == VirtualEdgeKind::Goto
+                                ? classifyNaturalLoopExit(R, Edge.ToBlock)
+                                : Edge.Kind);
     }
   }
+  if (R.Kind == RegionKind::NaturalLoop) {
+    for (BlockId Succ : Node.ExternalSuccs) {
+      appendControlTransfer(Root, Tree, Succ, classifyNaturalLoopExit(R, Succ));
+    }
+  }
+}
+
+bool hasDirectLoopControlTransfer(const StructuredTree &Tree, NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  for (NodeId Child : Node->Children) {
+    const StructuredNode *ChildNode = Tree.getNode(Child);
+    if (ChildNode != nullptr &&
+        (ChildNode->Kind == StructuredNodeKind::Break ||
+         ChildNode->Kind == StructuredNodeKind::Continue)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+NodeId wrapNaturalLoopFallback(const Region &R, NodeId Body,
+                               StructuredTree &Tree) {
+  if (R.Kind != RegionKind::NaturalLoop ||
+      !hasDirectLoopControlTransfer(Tree, Body)) {
+    return Body;
+  }
+
+  StructuredNode LoopNode;
+  LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
+  LoopNode.Block = R.Head;
+  LoopNode.Body = Body;
+  return Tree.addNode(std::move(LoopNode));
+}
+
+bool nodeIntersectsRegion(const MutableRegionNode &Node, const Region &R) {
+  for (BlockId Block : Node.Blocks) {
+    if (std::find(R.Blocks.begin(), R.Blocks.end(), Block) != R.Blocks.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool nodeContainedByRegion(const MutableRegionNode &Node, const Region &R) {
+  for (BlockId Block : Node.Blocks) {
+    if (std::find(R.Blocks.begin(), R.Blocks.end(), Block) == R.Blocks.end()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool regionAlreadyStructured(const MutableRegionGraph &Graph,
+                             const Region &Loop, const StructuredTree &Tree) {
+  for (GraphNodeId Id : Graph.activeNodes()) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr || !nodeIntersectsRegion(*Node, Loop) ||
+        Node->StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+    if (nodeTreeContainsKind(Tree, Node->StructuredRoot,
+                             StructuredNodeKind::While) ||
+        nodeTreeContainsKind(Tree, Node->StructuredRoot,
+                             StructuredNodeKind::DoWhile) ||
+        nodeTreeContainsKind(Tree, Node->StructuredRoot,
+                             StructuredNodeKind::InfiniteLoop)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool reduceNaturalLoopFallbackOnce(const StructuredCFG &Cfg,
+                                   const RegionTree &Regions,
+                                   const Region &Parent,
+                                   MutableRegionGraph &Graph,
+                                   StructuredTree &Tree) {
+  if (Parent.Kind != RegionKind::Root) {
+    return false;
+  }
+
+  for (RegionId ChildId : Parent.Children) {
+    const Region *Loop = Regions.getRegion(ChildId);
+    if (Loop == nullptr || Loop->Kind != RegionKind::NaturalLoop ||
+        regionAlreadyStructured(Graph, *Loop, Tree)) {
+      continue;
+    }
+
+    std::vector<GraphNodeId> Members;
+    for (GraphNodeId Id : Graph.activeNodes()) {
+      const MutableRegionNode *Node = Graph.getNode(Id);
+      if (Node == nullptr || !nodeIntersectsRegion(*Node, *Loop)) {
+        continue;
+      }
+      if (!nodeContainedByRegion(*Node, *Loop)) {
+        continue;
+      }
+      Members.push_back(Id);
+    }
+    if (Members.empty()) {
+      continue;
+    }
+
+    std::sort(Members.begin(), Members.end(),
+              [&](GraphNodeId A, GraphNodeId B) {
+                const MutableRegionNode *ANode = Graph.getNode(A);
+                const MutableRegionNode *BNode = Graph.getNode(B);
+                BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
+                                     ? InvalidBlockId
+                                     : ANode->Blocks.front();
+                BlockId BBlock = (BNode == nullptr || BNode->Blocks.empty())
+                                     ? InvalidBlockId
+                                     : BNode->Blocks.front();
+                return ABlock < BBlock;
+              });
+
+    StructuredNode Body;
+    Body.Kind = StructuredNodeKind::Sequence;
+    static const std::vector<VirtualEdge> EmptyVirtualEdges;
+    for (GraphNodeId Id : Members) {
+      const MutableRegionNode *Node = Graph.getNode(Id);
+      if (Node != nullptr) {
+        appendFallbackNode(Cfg, *Node, EmptyVirtualEdges, *Loop, Body, Tree);
+      }
+    }
+
+    StructuredNode LoopNode;
+    LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
+    LoopNode.Block = Loop->Head;
+    LoopNode.Body = Tree.addNode(std::move(Body));
+    Graph.collapseNodes(Members, Loop->Head, Tree.addNode(std::move(LoopNode)));
+    return true;
+  }
+  return false;
 }
 
 } // namespace
@@ -1026,6 +1180,9 @@ NodeId PhoenixStructurer::structureRegion(
     if (!Changed) {
       Changed = reduceSwitchOnce(Cfg, Graph, Tree);
     }
+    if (!Changed) {
+      Changed = reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree);
+    }
     if (!Changed && Graph.activeNodes().size() > 1) {
       Changed = virtualizeOneEdge(Cfg, R, Graph);
     }
@@ -1056,14 +1213,14 @@ NodeId PhoenixStructurer::structureRegion(
       auto It = VirtualEdgesBySource.find(Id);
       static const std::vector<VirtualEdge> EmptyVirtualEdges;
       appendFallbackNode(Cfg, *Node,
-                         It == VirtualEdgesBySource.end()
-                             ? EmptyVirtualEdges
-                             : It->second,
-                         Root, Tree);
+                         It == VirtualEdgesBySource.end() ? EmptyVirtualEdges
+                                                          : It->second,
+                         R, Root, Tree);
     }
   }
 
-  return Tree.addNode(std::move(Root));
+  NodeId RootId = Tree.addNode(std::move(Root));
+  return wrapNaturalLoopFallback(R, RootId, Tree);
 }
 
 } // namespace notdec::backend::structuring
