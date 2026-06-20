@@ -1162,6 +1162,7 @@ NodeId PhoenixStructurer::structureRegion(
 
   unsigned Iterations = 0;
   bool Changed = false;
+  Changed = preprocessRegionGraph(Cfg, R, Graph);
   do {
     Changed = false;
     Changed = reduceLinearWhileOnce(Cfg, Graph, Tree);

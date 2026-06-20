@@ -20,13 +20,19 @@ public:
   bool supportsChildRegions() const override { return true; }
   NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                          StructuredTree &Tree) override;
-  NodeId
-  structureRegion(const StructuredCFG &Cfg, const RegionTree &Regions,
-                  const Region &R,
-                  const std::map<RegionId, NodeId> &StructuredChildren,
-                  StructuredTree &Tree) override;
+  NodeId structureRegion(const StructuredCFG &Cfg, const RegionTree &Regions,
+                         const Region &R,
+                         const std::map<RegionId, NodeId> &StructuredChildren,
+                         StructuredTree &Tree) override;
 
 protected:
+  virtual bool preprocessRegionGraph(const StructuredCFG &Cfg, const Region &R,
+                                     MutableRegionGraph &Graph) const {
+    (void)Cfg;
+    (void)R;
+    (void)Graph;
+    return false;
+  }
   virtual std::vector<VirtualEdge>
   orderVirtualizableEdges(const StructuredCFG &Cfg,
                           const MutableRegionGraph &Graph,
