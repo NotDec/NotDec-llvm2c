@@ -42,6 +42,11 @@ public:
   using SAILRStructurer::orderVirtualizableEdges;
 };
 
+class TestPhoenixStructurer : public PhoenixStructurer {
+public:
+  using PhoenixStructurer::refineCyclic;
+};
+
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
   CFGBlock Block;
   Block.Id = Id;
@@ -201,6 +206,49 @@ void testMergedNaturalLoopKeepsAllLatchPaths() {
   assert(Loop->Follow == 5);
 }
 
+void testRefineCyclicReducesGraphNaturalLoop() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 4}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
+  std::vector<GraphNodeId> Active = Graph.activeNodes();
+  assert(Active.size() == 3);
+
+  bool FoundLoop = false;
+  for (GraphNodeId Id : Active) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    assert(Node != nullptr);
+    if (Node->StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+    const StructuredNode *RootNode = Tree.getNode(Node->StructuredRoot);
+    assert(RootNode != nullptr);
+    if (RootNode->Kind == StructuredNodeKind::InfiniteLoop) {
+      FoundLoop = true;
+      assert(Node->Succs.size() == 1);
+      const MutableRegionNode *Follow = Graph.getNode(Node->Succs.front());
+      assert(Follow != nullptr);
+      assert(!Follow->Blocks.empty());
+      assert(Follow->Blocks.front() == 4);
+    }
+  }
+  assert(FoundLoop);
+}
+
 void testSAILROrderPrefersLeastSiblingEdges() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -298,6 +346,7 @@ int main() {
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
   testMergedNaturalLoopKeepsAllLatchPaths();
+  testRefineCyclicReducesGraphNaturalLoop();
   testSAILROrderPrefersLeastSiblingEdges();
   testSAILROrderPrefersMostPostDominators();
   testSAILROrderPrefersReturnTargetTieBreak();

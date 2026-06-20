@@ -1496,6 +1496,143 @@ bool regionAlreadyStructured(const MutableRegionGraph &Graph,
   return false;
 }
 
+bool collectNaturalLoopMembers(const MutableRegionGraph &Graph,
+                               const MutableRegionGraphAnalysis &Analysis,
+                               GraphNodeId HeadId, GraphNodeId LatchId,
+                               std::set<GraphNodeId> &Members) {
+  if (!Analysis.dominates(HeadId, LatchId)) {
+    return false;
+  }
+
+  Members.clear();
+  Members.insert(HeadId);
+  std::vector<GraphNodeId> Worklist = {LatchId};
+  while (!Worklist.empty()) {
+    GraphNodeId CurrentId = Worklist.back();
+    Worklist.pop_back();
+    if (!Members.insert(CurrentId).second) {
+      continue;
+    }
+
+    const MutableRegionNode *Current = Graph.getNode(CurrentId);
+    if (Current == nullptr || !Analysis.dominates(HeadId, CurrentId)) {
+      return false;
+    }
+    for (GraphNodeId PredId : Current->Preds) {
+      if (PredId != HeadId) {
+        Worklist.push_back(PredId);
+      }
+    }
+  }
+  return Members.size() > 1;
+}
+
+std::vector<BlockId>
+collectNaturalLoopSuccessors(const MutableRegionGraph &Graph,
+                             const std::set<GraphNodeId> &Members) {
+  std::vector<BlockId> Successors;
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr) {
+      continue;
+    }
+    for (GraphNodeId SuccId : Node->Succs) {
+      if (Members.count(SuccId)) {
+        continue;
+      }
+      const MutableRegionNode *Succ = Graph.getNode(SuccId);
+      if (Succ != nullptr && !Succ->Blocks.empty() &&
+          !containsBlock(Successors, Succ->Blocks.front())) {
+        Successors.push_back(Succ->Blocks.front());
+      }
+    }
+    for (BlockId Succ : Node->ExternalSuccs) {
+      if (!containsBlock(Successors, Succ)) {
+        Successors.push_back(Succ);
+      }
+    }
+  }
+  return Successors;
+}
+
+bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
+                                MutableRegionGraph &Graph,
+                                StructuredTree &Tree) {
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  for (GraphNodeId LatchId : Graph.activeNodes()) {
+    const MutableRegionNode *Latch = Graph.getNode(LatchId);
+    if (Latch == nullptr) {
+      continue;
+    }
+    for (GraphNodeId HeadId : Latch->Succs) {
+      const MutableRegionNode *Head = Graph.getNode(HeadId);
+      if (Head == nullptr || Head->Blocks.empty()) {
+        continue;
+      }
+
+      std::set<GraphNodeId> MemberSet;
+      if (!collectNaturalLoopMembers(Graph, Analysis, HeadId, LatchId,
+                                     MemberSet)) {
+        continue;
+      }
+
+      std::vector<BlockId> Successors =
+          collectNaturalLoopSuccessors(Graph, MemberSet);
+      if (Successors.size() > 1) {
+        continue;
+      }
+
+      Region LoopRegion;
+      LoopRegion.Kind = RegionKind::NaturalLoop;
+      LoopRegion.Head = Head->Blocks.front();
+      LoopRegion.Latch = Latch->Blocks.empty() ? InvalidBlockId
+                                               : Latch->Blocks.back();
+      LoopRegion.Successors = Successors;
+
+      std::vector<GraphNodeId> Members(MemberSet.begin(), MemberSet.end());
+      std::sort(Members.begin(), Members.end(),
+                [&](GraphNodeId A, GraphNodeId B) {
+                  const MutableRegionNode *ANode = Graph.getNode(A);
+                  const MutableRegionNode *BNode = Graph.getNode(B);
+                  BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
+                                       ? InvalidBlockId
+                                       : ANode->Blocks.front();
+                  BlockId BBlock = (BNode == nullptr || BNode->Blocks.empty())
+                                       ? InvalidBlockId
+                                       : BNode->Blocks.front();
+                  return ABlock < BBlock;
+                });
+      for (GraphNodeId Id : Members) {
+        const MutableRegionNode *Node = Graph.getNode(Id);
+        if (Node != nullptr) {
+          LoopRegion.Blocks.insert(LoopRegion.Blocks.end(),
+                                   Node->Blocks.begin(), Node->Blocks.end());
+        }
+      }
+
+      StructuredNode Body;
+      Body.Kind = StructuredNodeKind::Sequence;
+      static const std::vector<VirtualEdge> EmptyVirtualEdges;
+      for (GraphNodeId Id : Members) {
+        const MutableRegionNode *Node = Graph.getNode(Id);
+        if (Node != nullptr) {
+          appendFallbackNode(Cfg, *Node, EmptyVirtualEdges, LoopRegion, Body,
+                             Tree);
+        }
+      }
+
+      StructuredNode LoopNode;
+      LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
+      LoopNode.Block = LoopRegion.Head;
+      LoopNode.Body = Tree.addNode(std::move(Body));
+      Graph.collapseNodes(Members, LoopRegion.Head,
+                          Tree.addNode(std::move(LoopNode)));
+      return true;
+    }
+  }
+  return false;
+}
+
 bool reduceNaturalLoopFallbackOnce(const StructuredCFG &Cfg,
                                    const RegionTree &Regions,
                                    const Region &Parent,
@@ -1636,6 +1773,9 @@ bool PhoenixStructurer::refineCyclic(const StructuredCFG &Cfg,
                                      const RegionTree &Regions, const Region &R,
                                      MutableRegionGraph &Graph,
                                      StructuredTree &Tree) const {
+  if (reduceGraphNaturalLoopOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
   return reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree);
 }
 
