@@ -19,6 +19,11 @@ public:
 
   void execute() override;
   std::string_view getStructurerName() const { return StructurerName; }
+  clang::ASTContext &getRenderASTContext() { return getASTContext(); }
+  CFG &getRenderCFG() { return getCurrentCFG(); }
+  clang::Expr *castRenderSwitchCondition(clang::Expr *Cond) {
+    return castSwitchConditionToInt(Cond);
+  }
 
   clang::LabelDecl *getOrCreateBlockLabel(CFGBlock *Block) {
     return getBlockLabel(Block);

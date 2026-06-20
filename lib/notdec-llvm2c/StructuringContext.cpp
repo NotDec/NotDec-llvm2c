@@ -66,6 +66,24 @@ ValueNamer &IStructuralAnalysis::getValueNamer() {
   return FCtx.getSAContext().getValueNamer();
 }
 
+clang::Expr *IStructuralAnalysis::castSwitchConditionToInt(clang::Expr *Cond) {
+  if (Cond == nullptr || !Cond->getType()->isPointerType()) {
+    return Cond;
+  }
+  return FCtx.getTypeBuilder().checkCast(
+      Cond, Ctx.getIntTypeForBitwidth(
+                FCtx.getTypeBuilder().getPointerSizeInBits(), 1));
+}
+
+void IStructuralAnalysis::removeLabelUse(clang::LabelStmt *Label,
+                                         clang::GotoStmt *Goto) {
+  FCtx.removeLabelUse(Label, Goto);
+}
+
+bool IStructuralAnalysis::eraseLabelUseIfEmpty(clang::LabelStmt *Label) {
+  return FCtx.eraseLabelUseIfEmpty(Label);
+}
+
 clang::Expr *IStructuralAnalysis::takeBinaryCond(CFGBlock &B) {
   assert(B.succ_size() == 2 && "getBinaryCond: block should have 2 successors!");
   auto ret = llvm::cast<clang::Expr>(B.getTerminatorStmt());

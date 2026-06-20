@@ -41,10 +41,15 @@ public:
   virtual ~IStructuralAnalysis() = default;
   virtual void execute() = 0;
 
+  clang::ASTContext &getASTContext() { return Ctx; }
+  class CFG &getCurrentCFG() { return Cfg; }
   clang::LabelDecl *getBlockLabel(CFGBlock *blk, bool prepend = false);
   void mergeBlock(llvm::BasicBlock &bb, llvm::BasicBlock &next);
   ValueNamer &getValueNamer();
 
+  clang::Expr *castSwitchConditionToInt(clang::Expr *Cond);
+  void removeLabelUse(clang::LabelStmt *Label, clang::GotoStmt *Goto);
+  bool eraseLabelUseIfEmpty(clang::LabelStmt *Label);
   clang::Expr *takeBinaryCond(CFGBlock &B);
   static void addAllStmtTo(CFGBlock *From, CFGBlock *To);
   static void addAllStmtTo(CFGBlock *B, std::vector<clang::Stmt *> &stmts,

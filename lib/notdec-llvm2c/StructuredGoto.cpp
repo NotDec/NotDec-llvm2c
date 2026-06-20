@@ -11,7 +11,6 @@
 
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
-#include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/StructuredGoto.h"
 #include "notdec-llvm2c/Utils.h"
 
@@ -22,7 +21,6 @@ namespace st = notdec::backend::structuring;
 namespace {
 
 class StructuredGotoAdapter {
-  SAFuncContext &FCtx;
   CFG &Cfg;
   clang::ASTContext &Ctx;
   StructuredGoto &SA;
@@ -32,8 +30,8 @@ class StructuredGotoAdapter {
   std::set<st::BlockId> TargetedLabels;
 
 public:
-  StructuredGotoAdapter(SAFuncContext &FCtx, StructuredGoto &SA)
-      : FCtx(FCtx), Cfg(FCtx.getCFG()), Ctx(FCtx.getASTContext()), SA(SA) {}
+  StructuredGotoAdapter(StructuredGoto &SA)
+      : Cfg(SA.getRenderCFG()), Ctx(SA.getRenderASTContext()), SA(SA) {}
 
   void execute() {
     std::unique_ptr<st::Structurer> Structurer =
@@ -292,11 +290,7 @@ private:
   clang::Stmt *renderSwitch(const st::StructuredTree &Tree,
                             const st::StructuredNode &Node) {
     auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
-    if (Cond->getType()->isPointerType()) {
-      Cond = FCtx.getTypeBuilder().checkCast(
-          Cond, Ctx.getIntTypeForBitwidth(
-                    FCtx.getTypeBuilder().getPointerSizeInBits(), 1));
-    }
+    Cond = SA.castRenderSwitchCondition(Cond);
 
     auto *Switch = clang::SwitchStmt::Create(
         Ctx, nullptr, nullptr, Cond, clang::SourceLocation(),
@@ -333,11 +327,7 @@ private:
     assert(Block->succ_size() > 2);
 
     auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
-    if (Cond->getType()->isPointerType()) {
-      Cond = FCtx.getTypeBuilder().checkCast(
-          Cond, Ctx.getIntTypeForBitwidth(
-                    FCtx.getTypeBuilder().getPointerSizeInBits(), 1));
-    }
+    Cond = SA.castRenderSwitchCondition(Cond);
 
     auto *Switch = clang::SwitchStmt::Create(
         Ctx, nullptr, nullptr, Cond, clang::SourceLocation(),
@@ -420,7 +410,7 @@ private:
 } // namespace
 
 void StructuredGoto::execute() {
-  StructuredGotoAdapter Adapter(FCtx, *this);
+  StructuredGotoAdapter Adapter(*this);
   Adapter.execute();
 }
 

@@ -11,7 +11,6 @@
 
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Goto.h"
-#include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {
@@ -28,7 +27,7 @@ next(ForwardIt it,
 
 // 1. Look at the CFG edges, instead of the basic block terminator edges.
 void Goto::execute() {
-  auto &ASTCtx = FCtx.getASTContext();
+  auto &ASTCtx = getASTContext();
   // for each block, insert goto statement to represent outgoing edges.
 
   for (auto it = Cfg.begin(); it != Cfg.end(); ++it) {
@@ -74,12 +73,7 @@ void Goto::execute() {
       // create SwitchStmt
       auto &term = std::get<SwitchTerminator>(Current->getTerminator());
       auto cond = llvm::cast<clang::Expr>(term.getStmt());
-      // if cond is pointer type, cast to int.
-      if (cond->getType()->isPointerType()) {
-        cond = FCtx.getTypeBuilder().checkCast(
-            cond, Ctx.getIntTypeForBitwidth(
-                      FCtx.getTypeBuilder().getPointerSizeInBits(), 1));
-      }
+      cond = castSwitchConditionToInt(cond);
       auto sw = clang::SwitchStmt::Create(Ctx, nullptr, nullptr, cond,
                                           clang::SourceLocation(),
                                           clang::SourceLocation());
@@ -173,7 +167,7 @@ void Goto::simplifyBlock(CFGBlock &Block) {
             if (label->getDecl() == gotoStmt->getLabel()) {
               LLVM_DEBUG(llvm::dbgs() << "Removing redundant goto: "
                                       << label->getName() << "\n");
-              FCtx.removeLabelUse(label, gotoStmt);
+              removeLabelUse(label, gotoStmt);
               it = Block.erase(it);
               continue;
             }
@@ -213,7 +207,7 @@ void Goto::simplifyBlock(CFGBlock &Block) {
   for (auto it = Block.begin(); it != Block.end();) {
     if (auto stmt = getStmt(*it)) {
       if (auto label = llvm::dyn_cast<clang::LabelStmt>(stmt)) {
-        if (FCtx.eraseLabelUseIfEmpty(label)) {
+        if (eraseLabelUseIfEmpty(label)) {
           LLVM_DEBUG(llvm::dbgs() << "Removing unused LabelStmt: "
                                   << label->getName() << "\n");
           it = Block.erase(it);
