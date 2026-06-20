@@ -39,10 +39,8 @@ RegionTree OverlayManager::visibleRegionTree() const {
   for (Region &R : Visible.regions()) {
     std::vector<RegionId> VisibleChildren;
     VisibleChildren.reserve(R.Children.size());
-    for (RegionId ChildId : R.Children) {
-      if (getStructuredRoot(ChildId) != InvalidNodeId) {
-        VisibleChildren.push_back(ChildId);
-      }
+    for (const FinalizedChildRegion &Child : finalizedChildren(R.Id)) {
+      VisibleChildren.push_back(Child.RegionData->Id);
     }
     R.Children = std::move(VisibleChildren);
   }
@@ -52,6 +50,32 @@ RegionTree OverlayManager::visibleRegionTree() const {
 NodeId OverlayManager::getStructuredRoot(RegionId Id) const {
   auto It = StructuredRoots.find(Id);
   return It == StructuredRoots.end() ? InvalidNodeId : It->second;
+}
+
+bool OverlayManager::isRegionFinalized(RegionId Id) const {
+  return getStructuredRoot(Id) != InvalidNodeId;
+}
+
+std::vector<FinalizedChildRegion>
+OverlayManager::finalizedChildren(RegionId Id) const {
+  std::vector<FinalizedChildRegion> Result;
+  const Region *Parent = getRegionData(Id);
+  if (Parent == nullptr) {
+    return Result;
+  }
+
+  Result.reserve(Parent->Children.size());
+  for (RegionId ChildId : Parent->Children) {
+    const RegionOverlay *ChildOverlay = getRegion(ChildId);
+    const Region *ChildRegion = getRegionData(ChildId);
+    NodeId StructuredRoot = getStructuredRoot(ChildId);
+    if (ChildOverlay == nullptr || ChildRegion == nullptr ||
+        StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+    Result.push_back({ChildOverlay, ChildRegion, StructuredRoot});
+  }
+  return Result;
 }
 
 void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId) {

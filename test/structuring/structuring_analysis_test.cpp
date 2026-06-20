@@ -328,10 +328,16 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   const Region *InitialRoot = InitialVisible.getRegion(RootId);
   assert(InitialRoot != nullptr);
   assert(InitialRoot->Children.empty());
+  assert(Manager.finalizedChildren(RootId).empty());
 
   RegionOverlay *FirstChildOverlay = Manager.getRegion(FirstChildId);
   assert(FirstChildOverlay != nullptr);
   FirstChildOverlay->finalize(42);
+  std::vector<FinalizedChildRegion> Finalized = Manager.finalizedChildren(RootId);
+  assert(Finalized.size() == 1);
+  assert(Finalized.front().RegionData != nullptr);
+  assert(Finalized.front().RegionData->Id == FirstChildId);
+  assert(Finalized.front().StructuredRoot == 42);
 
   RegionTree Visible = Manager.visibleRegionTree();
   const Region *VisibleRoot = Visible.getRegion(RootId);
@@ -343,6 +349,7 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   const Region *DissolvedRoot = DissolvedVisible.getRegion(RootId);
   assert(DissolvedRoot != nullptr);
   assert(DissolvedRoot->Children.empty());
+  assert(Manager.finalizedChildren(RootId).empty());
 }
 
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {

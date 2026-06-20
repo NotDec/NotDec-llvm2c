@@ -437,24 +437,16 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     return Id;
   };
 
-  for (RegionId ChildId : Overlay.children()) {
-    const RegionOverlay *Child = Overlay.manager()->getRegion(ChildId);
-    const Region *ChildRegion = Child == nullptr ? nullptr : Child->region();
-    if (ChildRegion == nullptr) {
-      continue;
-    }
-
-    NodeId StructuredRoot =
-        Child == nullptr ? InvalidNodeId : Child->structuredRoot();
-    if (StructuredRoot == InvalidNodeId) {
-      continue;
-    }
+  for (const FinalizedChildRegion &Child :
+       Overlay.manager()->finalizedChildren(Overlay.id())) {
+    const Region *ChildRegion = Child.RegionData;
 
     // Until overlay finalize/dissolve lands, child regions stay visible as
     // grouped blocks with a recorded structured root. This moves the graph
     // builder to the overlay boundary instead of the old child-result
     // injection path, even before full shared-graph mutation lands.
-    GraphNodeId NodeId = Graph.addNode(ChildRegion->Head, StructuredRoot);
+    GraphNodeId NodeId =
+        Graph.addNode(ChildRegion->Head, Child.StructuredRoot);
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
       Node->Blocks = ChildRegion->Blocks;

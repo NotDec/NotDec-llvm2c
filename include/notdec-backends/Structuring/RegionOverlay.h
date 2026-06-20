@@ -11,6 +11,12 @@ namespace notdec::backend::structuring {
 
 class RegionOverlay;
 
+struct FinalizedChildRegion {
+  const RegionOverlay *Overlay = nullptr;
+  const Region *RegionData = nullptr;
+  NodeId StructuredRoot = InvalidNodeId;
+};
+
 // This is the first C++ step toward angr's OverlayManager/RegionOverlay model.
 // The full graph mutation API will be filled in as Phoenix/SAILR move over.
 // For now it gives RecursiveStructurer a shared region tree object instead of
@@ -29,6 +35,8 @@ public:
   const RegionTree &regionTree() const { return Regions; }
   RegionTree visibleRegionTree() const;
   NodeId getStructuredRoot(RegionId Id) const;
+  bool isRegionFinalized(RegionId Id) const;
+  std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
   void setStructuredRoot(RegionId Id, NodeId RootId);
   void clearStructuredRoot(RegionId Id);
 
