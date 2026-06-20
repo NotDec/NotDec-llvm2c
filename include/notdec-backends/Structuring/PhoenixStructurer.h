@@ -40,7 +40,8 @@ protected:
                             const Region &R, MutableRegionGraph &Graph,
                             StructuredTree &Tree) const;
   virtual bool lastResortRefinement(const StructuredCFG &Cfg, const Region &R,
-                                    MutableRegionGraph &Graph) const;
+                                    MutableRegionGraph &Graph,
+                                    StructuredTree &Tree) const;
   virtual bool useImprovedCyclicSchemas() const { return false; }
   virtual bool preprocessRegionGraph(const StructuredCFG &Cfg, const Region &R,
                                      MutableRegionGraph &Graph) const {
@@ -59,7 +60,7 @@ protected:
                           const MutableRegionGraphAnalysis &Analysis,
                           std::vector<VirtualEdge> Edges) const;
   bool virtualizeOneEdge(const StructuredCFG &Cfg, const Region &R,
-                         MutableRegionGraph &Graph) const;
+                         MutableRegionGraph &Graph, StructuredTree &Tree) const;
 };
 
 } // namespace notdec::backend::structuring

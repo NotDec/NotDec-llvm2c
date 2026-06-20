@@ -235,6 +235,41 @@ exit:
         "contains": ["while (x == 0)", "return 0;"],
         "absent": ["do {", "goto head"],
     },
+    {
+        "name": "root_cycle_follow",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  br label %head
+
+head:
+  %c0 = icmp eq i32 %x, 0
+  br i1 %c0, label %a, label %b
+
+a:
+  call void @a()
+  br label %c
+
+b:
+  call void @b()
+  br label %c
+
+c:
+  call void @c()
+  %c1 = icmp eq i32 %y, 0
+  br i1 %c1, label %head, label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["while (1)", "c();", "return 0;"],
+        "absent": ["goto c;"],
+    },
 ]
 
 

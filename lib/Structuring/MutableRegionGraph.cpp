@@ -77,16 +77,16 @@ struct GraphTraits<notdec::backend::structuring::detail::DomOverlayGraph *>
   using NodeRef = notdec::backend::structuring::detail::DomOverlayNode *;
   using nodes_iterator = std::vector<NodeRef>::const_iterator;
 
-  static NodeRef getEntryNode(
-      notdec::backend::structuring::detail::DomOverlayGraph *G) {
+  static NodeRef
+  getEntryNode(notdec::backend::structuring::detail::DomOverlayGraph *G) {
     return G->Entry;
   }
-  static nodes_iterator nodes_begin(
-      notdec::backend::structuring::detail::DomOverlayGraph *G) {
+  static nodes_iterator
+  nodes_begin(notdec::backend::structuring::detail::DomOverlayGraph *G) {
     return G->NodePtrs.begin();
   }
-  static nodes_iterator nodes_end(
-      notdec::backend::structuring::detail::DomOverlayGraph *G) {
+  static nodes_iterator
+  nodes_end(notdec::backend::structuring::detail::DomOverlayGraph *G) {
     return G->NodePtrs.end();
   }
   static unsigned
@@ -143,9 +143,8 @@ static bool containsBlock(const std::vector<BlockId> &Values, BlockId Id) {
   return std::find(Values.begin(), Values.end(), Id) != Values.end();
 }
 
-static void appendUniqueNode(
-    std::vector<detail::DomOverlayNode *> &Values,
-    detail::DomOverlayNode *Node) {
+static void appendUniqueNode(std::vector<detail::DomOverlayNode *> &Values,
+                             detail::DomOverlayNode *Node) {
   if (std::find(Values.begin(), Values.end(), Node) == Values.end()) {
     Values.push_back(Node);
   }
@@ -372,6 +371,7 @@ GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot) {
   MutableRegionNode Node;
   Node.Id = static_cast<GraphNodeId>(Nodes.size());
   Node.Block = Block;
+  Node.TailBlock = Block;
   if (Block != InvalidBlockId) {
     Node.Blocks.push_back(Block);
   }
@@ -537,6 +537,14 @@ void MutableRegionGraph::removeEdge(GraphNodeId From, GraphNodeId To) {
       ToNode->Preds.end());
 }
 
+void MutableRegionGraph::setStructuredRoot(GraphNodeId Id,
+                                           NodeId StructuredRoot) {
+  MutableRegionNode *Node = getNode(Id);
+  if (Node != nullptr) {
+    Node->StructuredRoot = StructuredRoot;
+  }
+}
+
 void MutableRegionGraph::virtualizeEdge(GraphNodeId From, GraphNodeId To,
                                         VirtualEdgeKind Kind) {
   if (!hasEdge(From, To)) {
@@ -544,9 +552,8 @@ void MutableRegionGraph::virtualizeEdge(GraphNodeId From, GraphNodeId To,
   }
   const MutableRegionNode *FromNode = getNode(From);
   const MutableRegionNode *ToNode = getNode(To);
-  BlockId FromBlock = (FromNode == nullptr || FromNode->Blocks.empty())
-                          ? InvalidBlockId
-                          : FromNode->Blocks.back();
+  BlockId FromBlock =
+      (FromNode == nullptr) ? InvalidBlockId : FromNode->TailBlock;
   BlockId ToBlock = (ToNode == nullptr || ToNode->Blocks.empty())
                         ? InvalidBlockId
                         : ToNode->Blocks.front();
@@ -572,11 +579,13 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
   std::set<GraphNodeId> Succs;
   std::vector<BlockId> ExternalSuccs;
   std::vector<BlockId> Blocks;
+  BlockId TailBlock = InvalidBlockId;
+  bool FoundOutgoingTail = false;
   for (GraphNodeId Id : MemberSet) {
     const MutableRegionNode *Node = getNode(Id);
     Blocks.insert(Blocks.end(), Node->Blocks.begin(), Node->Blocks.end());
-    for (BlockId ExternalSucc : Node->ExternalSuccs) {
-      appendUniqueBlock(ExternalSuccs, ExternalSucc);
+    if (!FoundOutgoingTail && Node->TailBlock != InvalidBlockId) {
+      TailBlock = Node->TailBlock;
     }
     for (GraphNodeId Pred : Node->Preds) {
       if (!MemberSet.count(Pred) && isActive(Pred)) {
@@ -586,6 +595,17 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
     for (GraphNodeId Succ : Node->Succs) {
       if (!MemberSet.count(Succ) && isActive(Succ)) {
         Succs.insert(Succ);
+        if (Node->TailBlock != InvalidBlockId) {
+          TailBlock = Node->TailBlock;
+          FoundOutgoingTail = true;
+        }
+      }
+    }
+    for (BlockId ExternalSucc : Node->ExternalSuccs) {
+      appendUniqueBlock(ExternalSuccs, ExternalSucc);
+      if (Node->TailBlock != InvalidBlockId) {
+        TailBlock = Node->TailBlock;
+        FoundOutgoingTail = true;
       }
     }
   }
@@ -601,6 +621,7 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
   GraphNodeId Collapsed = addNode(RepresentativeBlock, StructuredRoot);
   MutableRegionNode *CollapsedNode = getNode(Collapsed);
   CollapsedNode->Blocks = std::move(Blocks);
+  CollapsedNode->TailBlock = TailBlock;
   CollapsedNode->ExternalSuccs = std::move(ExternalSuccs);
   for (GraphNodeId Pred : Preds) {
     MutableRegionNode *PredNode = getNode(Pred);
