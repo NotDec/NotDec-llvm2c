@@ -138,6 +138,27 @@ exit:
 """,
         "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
     },
+    {
+        "name": "early_return_if",
+        "ir": r"""
+declare void @a()
+
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %ret, label %cont
+
+ret:
+  ret i32 1
+
+cont:
+  call void @a()
+  ret i32 0
+}
+""",
+        "contains": ["if (x == 0)", "return 1;", "return 0;"],
+        "absent": ["goto ret", "goto cont"],
+    },
 ]
 
 

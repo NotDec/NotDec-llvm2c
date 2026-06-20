@@ -196,6 +196,19 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       ElseId = FalseId;
       FollowId = TrueNode->Succs[0];
     } else if (TrueNode->Preds.size() == 1 && FalseNode->Preds.size() == 1 &&
+               IsTerminalNode(TrueNode) && FalseNode->Succs.size() == 1 &&
+               FalseNode->Succs[0] != HeaderId &&
+               !Graph.hasEdge(FalseNode->Succs[0], HeaderId)) {
+      ThenId = TrueId;
+      FollowId = FalseId;
+    } else if (TrueNode->Preds.size() == 1 && FalseNode->Preds.size() == 1 &&
+               TrueNode->Succs.size() == 1 && TrueNode->Succs[0] != HeaderId &&
+               !Graph.hasEdge(TrueNode->Succs[0], HeaderId) &&
+               IsTerminalNode(FalseNode)) {
+      ThenId = FalseId;
+      FollowId = TrueId;
+      NegateCondition = true;
+    } else if (TrueNode->Preds.size() == 1 && FalseNode->Preds.size() == 1 &&
                IsTerminalNode(TrueNode) && IsTerminalNode(FalseNode)) {
       ThenId = TrueId;
       ElseId = FalseId;
