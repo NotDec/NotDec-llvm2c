@@ -1555,6 +1555,82 @@ collectNaturalLoopSuccessors(const MutableRegionGraph &Graph,
   return Successors;
 }
 
+bool makeGraphWhileLoop(const StructuredCFG &Cfg,
+                        const MutableRegionGraph &Graph,
+                        const std::vector<GraphNodeId> &Members,
+                        const std::set<GraphNodeId> &MemberSet,
+                        const Region &LoopRegion, GraphNodeId HeadId,
+                        StructuredTree &Tree, StructuredNode &LoopNode) {
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  if (Head == nullptr || Head->Blocks.size() != 1 ||
+      LoopRegion.Successors.size() != 1) {
+    return false;
+  }
+
+  const CFGBlock *HeadBlock = Cfg.getBlock(Head->Blocks.back());
+  if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Branch ||
+      !HeadBlock->Statements.empty() || HeadBlock->Successors.size() != 2) {
+    return false;
+  }
+
+  GraphNodeId TrueId = Graph.getNodeForBlock(HeadBlock->Successors[0]);
+  GraphNodeId FalseId = Graph.getNodeForBlock(HeadBlock->Successors[1]);
+  bool TrueInLoop = MemberSet.count(TrueId) != 0;
+  bool FalseInLoop = MemberSet.count(FalseId) != 0;
+  if (TrueInLoop == FalseInLoop) {
+    return false;
+  }
+
+  BlockId ExitBlock = TrueInLoop ? HeadBlock->Successors[1]
+                                 : HeadBlock->Successors[0];
+  if (ExitBlock != LoopRegion.Successors.front()) {
+    return false;
+  }
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  static const std::vector<VirtualEdge> EmptyVirtualEdges;
+  for (GraphNodeId Id : Members) {
+    if (Id == HeadId) {
+      continue;
+    }
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node != nullptr) {
+      appendFallbackNode(Cfg, *Node, EmptyVirtualEdges, LoopRegion, Body,
+                         Tree);
+    }
+  }
+
+  LoopNode.Kind = StructuredNodeKind::While;
+  LoopNode.Block = HeadBlock->Id;
+  LoopNode.Condition = HeadBlock->Condition;
+  LoopNode.ConditionNegated = !TrueInLoop;
+  LoopNode.Body = Tree.addNode(std::move(Body));
+  return true;
+}
+
+StructuredNode makeGraphInfiniteLoop(const StructuredCFG &Cfg,
+                                     const MutableRegionGraph &Graph,
+                                     const std::vector<GraphNodeId> &Members,
+                                     const Region &LoopRegion,
+                                     StructuredTree &Tree) {
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  static const std::vector<VirtualEdge> EmptyVirtualEdges;
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node != nullptr) {
+      appendFallbackNode(Cfg, *Node, EmptyVirtualEdges, LoopRegion, Body, Tree);
+    }
+  }
+
+  StructuredNode LoopNode;
+  LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
+  LoopNode.Block = LoopRegion.Head;
+  LoopNode.Body = Tree.addNode(std::move(Body));
+  return LoopNode;
+}
+
 bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
                                 MutableRegionGraph &Graph,
                                 StructuredTree &Tree) {
@@ -1610,21 +1686,11 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
         }
       }
 
-      StructuredNode Body;
-      Body.Kind = StructuredNodeKind::Sequence;
-      static const std::vector<VirtualEdge> EmptyVirtualEdges;
-      for (GraphNodeId Id : Members) {
-        const MutableRegionNode *Node = Graph.getNode(Id);
-        if (Node != nullptr) {
-          appendFallbackNode(Cfg, *Node, EmptyVirtualEdges, LoopRegion, Body,
-                             Tree);
-        }
-      }
-
       StructuredNode LoopNode;
-      LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
-      LoopNode.Block = LoopRegion.Head;
-      LoopNode.Body = Tree.addNode(std::move(Body));
+      if (!makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion,
+                              HeadId, Tree, LoopNode)) {
+        LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
+      }
       Graph.collapseNodes(Members, LoopRegion.Head,
                           Tree.addNode(std::move(LoopNode)));
       return true;

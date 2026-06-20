@@ -237,8 +237,9 @@ void testRefineCyclicReducesGraphNaturalLoop() {
     }
     const StructuredNode *RootNode = Tree.getNode(Node->StructuredRoot);
     assert(RootNode != nullptr);
-    if (RootNode->Kind == StructuredNodeKind::InfiniteLoop) {
+    if (RootNode->Kind == StructuredNodeKind::While) {
       FoundLoop = true;
+      assert(RootNode->Block == 1);
       assert(Node->Succs.size() == 1);
       const MutableRegionNode *Follow = Graph.getNode(Node->Succs.front());
       assert(Follow != nullptr);
