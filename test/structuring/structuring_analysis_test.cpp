@@ -1,10 +1,32 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
+#include "notdec-backends/Structuring/PhoenixStructurer.h"
 
 #include <cassert>
 
 using namespace notdec::backend::structuring;
 
 namespace {
+
+class HintStructurer : public PhoenixStructurer {
+public:
+  using PhoenixStructurer::virtualizeOneEdge;
+
+protected:
+  std::vector<VirtualEdge>
+  edgeVirtualizationHints(const StructuredCFG &Cfg,
+                          const MutableRegionGraph &Graph,
+                          const MutableRegionGraphAnalysis &Analysis)
+      const override {
+    (void)Cfg;
+    (void)Analysis;
+    const MutableRegionNode *From = Graph.getNode(0);
+    const MutableRegionNode *To = Graph.getNode(2);
+    assert(From != nullptr);
+    assert(To != nullptr);
+    return {{0, 2, From->Blocks.back(), To->Blocks.front(),
+             VirtualEdgeKind::Goto}};
+  }
+};
 
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
   CFGBlock Block;
@@ -39,9 +61,32 @@ void testAcyclicDroppedEdges() {
   assert(Edge.ToBlock == 1);
 }
 
+void testEdgeVirtualizationHints() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  HintStructurer Structurer;
+
+  assert(Structurer.virtualizeOneEdge(Cfg, Root, Graph));
+  assert(Graph.virtualEdges().size() == 1);
+  const VirtualEdge &Edge = Graph.virtualEdges().front();
+  assert(Edge.FromBlock == 0);
+  assert(Edge.ToBlock == 2);
+}
+
 } // namespace
 
 int main() {
   testAcyclicDroppedEdges();
+  testEdgeVirtualizationHints();
   return 0;
 }

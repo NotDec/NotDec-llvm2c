@@ -1290,6 +1290,15 @@ std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
   return Edges;
 }
 
+std::vector<VirtualEdge> PhoenixStructurer::edgeVirtualizationHints(
+    const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+    const MutableRegionGraphAnalysis &Analysis) const {
+  (void)Cfg;
+  (void)Graph;
+  (void)Analysis;
+  return {};
+}
+
 bool PhoenixStructurer::analyzeAcyclic(const StructuredCFG &Cfg,
                                        MutableRegionGraph &Graph,
                                        StructuredTree &Tree) const {
@@ -1339,6 +1348,14 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
                                           const Region &R,
                                           MutableRegionGraph &Graph) const {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  for (const VirtualEdge &Hint :
+       edgeVirtualizationHints(Cfg, Graph, Analysis)) {
+    if (Graph.hasEdge(Hint.From, Hint.To)) {
+      Graph.virtualizeEdge(Hint.From, Hint.To, Hint.Kind);
+      return true;
+    }
+  }
+
   std::vector<VirtualEdge> Candidates = filterByAngrLastResortPriority(
       R, Analysis, collectVirtualizableEdges(R, Graph));
   std::vector<VirtualEdge> Edges = orderVirtualizableEdges(

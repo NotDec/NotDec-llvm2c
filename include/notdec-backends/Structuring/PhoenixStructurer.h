@@ -50,6 +50,10 @@ protected:
     return false;
   }
   virtual std::vector<VirtualEdge>
+  edgeVirtualizationHints(const StructuredCFG &Cfg,
+                          const MutableRegionGraph &Graph,
+                          const MutableRegionGraphAnalysis &Analysis) const;
+  virtual std::vector<VirtualEdge>
   orderVirtualizableEdges(const StructuredCFG &Cfg,
                           const MutableRegionGraph &Graph,
                           const MutableRegionGraphAnalysis &Analysis,
