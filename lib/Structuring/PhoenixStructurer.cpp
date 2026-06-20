@@ -902,14 +902,16 @@ collectVirtualizableEdges(const Region &R, const MutableRegionGraph &Graph) {
 }
 
 std::vector<VirtualEdge>
-filterByAngrLastResortPriority(const MutableRegionGraphAnalysis &Analysis,
+filterByAngrLastResortPriority(const Region &R,
+                               const MutableRegionGraphAnalysis &Analysis,
                                const std::vector<VirtualEdge> &Edges) {
   // Match Angr Phoenix's last-resort buckets: prefer edges where neither end
   // dominates the other, then edges whose source does not dominate the target.
-  // The final per-bucket order is still delegated to Phoenix/SAILR.
+  // If the root acyclic view had to drop cycle-closing edges, use them only
+  // after the normal buckets are empty. The final per-bucket order is still
+  // delegated to Phoenix/SAILR.
   std::vector<VirtualEdge> NoDominanceEdges;
   std::vector<VirtualEdge> SecondaryEdges;
-  std::vector<VirtualEdge> OtherEdges;
 
   for (const VirtualEdge &Edge : Edges) {
     bool FromDominatesTo = Analysis.dominates(Edge.From, Edge.To);
@@ -918,8 +920,6 @@ filterByAngrLastResortPriority(const MutableRegionGraphAnalysis &Analysis,
       NoDominanceEdges.push_back(Edge);
     } else if (!FromDominatesTo) {
       SecondaryEdges.push_back(Edge);
-    } else {
-      OtherEdges.push_back(Edge);
     }
   }
 
@@ -929,7 +929,10 @@ filterByAngrLastResortPriority(const MutableRegionGraphAnalysis &Analysis,
   if (!SecondaryEdges.empty()) {
     return SecondaryEdges;
   }
-  return OtherEdges;
+  if (R.Kind == RegionKind::Root) {
+    return Analysis.AcyclicDroppedEdges;
+  }
+  return {};
 }
 
 std::map<GraphNodeId, std::vector<VirtualEdge>>
@@ -1337,7 +1340,7 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
                                           MutableRegionGraph &Graph) const {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
   std::vector<VirtualEdge> Candidates = filterByAngrLastResortPriority(
-      Analysis, collectVirtualizableEdges(R, Graph));
+      R, Analysis, collectVirtualizableEdges(R, Graph));
   std::vector<VirtualEdge> Edges = orderVirtualizableEdges(
       Cfg, Graph, Analysis, std::move(Candidates));
   if (Edges.empty()) {

@@ -49,6 +49,7 @@ struct MutableRegionNode {
 struct MutableRegionGraphAnalysis {
   GraphNodeId Entry = InvalidGraphNodeId;
   GraphNodeId Exit = InvalidGraphNodeId;
+  std::vector<VirtualEdge> AcyclicDroppedEdges;
   std::map<GraphNodeId, std::set<GraphNodeId>> Dominators;
   std::map<GraphNodeId, std::set<GraphNodeId>> PostDominators;
   std::map<GraphNodeId, GraphNodeId> ImmediateDominators;

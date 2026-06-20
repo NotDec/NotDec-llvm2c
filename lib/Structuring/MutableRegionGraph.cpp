@@ -190,16 +190,34 @@ static GraphNodeId firstWithoutActiveSucc(const MutableRegionGraph &Graph,
 static void dfsOrder(const MutableRegionGraph &Graph,
                      const std::set<GraphNodeId> &Active, GraphNodeId Id,
                      std::set<GraphNodeId> &Visited,
-                     std::vector<GraphNodeId> &Order) {
+                     std::set<GraphNodeId> &InStack,
+                     std::vector<GraphNodeId> &Order,
+                     std::vector<VirtualEdge> &DroppedEdges) {
   if (!contains(Active, Id) || !Visited.insert(Id).second) {
     return;
   }
+  InStack.insert(Id);
   const MutableRegionNode *Node = Graph.getNode(Id);
   std::vector<GraphNodeId> Succs = Node->Succs;
   std::sort(Succs.begin(), Succs.end());
   for (GraphNodeId Succ : Succs) {
-    dfsOrder(Graph, Active, Succ, Visited, Order);
+    if (!contains(Active, Succ)) {
+      continue;
+    }
+    if (contains(InStack, Succ)) {
+      const MutableRegionNode *SuccNode = Graph.getNode(Succ);
+      BlockId FromBlock =
+          Node->Blocks.empty() ? InvalidBlockId : Node->Blocks.back();
+      BlockId ToBlock = (SuccNode == nullptr || SuccNode->Blocks.empty())
+                            ? InvalidBlockId
+                            : SuccNode->Blocks.front();
+      DroppedEdges.push_back(
+          {Id, Succ, FromBlock, ToBlock, VirtualEdgeKind::Goto});
+      continue;
+    }
+    dfsOrder(Graph, Active, Succ, Visited, InStack, Order, DroppedEdges);
   }
+  InStack.erase(Id);
   Order.push_back(Id);
 }
 
@@ -629,10 +647,13 @@ MutableRegionGraphAnalysis MutableRegionGraph::analyze() const {
 
   std::set<GraphNodeId> Active = toSet(Ids);
   std::set<GraphNodeId> Visited;
+  std::set<GraphNodeId> InStack;
   std::vector<GraphNodeId> PostOrder;
-  dfsOrder(*this, Active, Result.Entry, Visited, PostOrder);
+  dfsOrder(*this, Active, Result.Entry, Visited, InStack, PostOrder,
+           Result.AcyclicDroppedEdges);
   for (GraphNodeId Id : Ids) {
-    dfsOrder(*this, Active, Id, Visited, PostOrder);
+    dfsOrder(*this, Active, Id, Visited, InStack, PostOrder,
+             Result.AcyclicDroppedEdges);
   }
   std::reverse(PostOrder.begin(), PostOrder.end());
   for (unsigned Index = 0; Index < PostOrder.size(); ++Index) {
