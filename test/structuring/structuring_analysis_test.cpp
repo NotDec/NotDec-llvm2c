@@ -1,5 +1,6 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
+#include "notdec-backends/Structuring/RegionIdentifier.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cassert>
@@ -170,6 +171,29 @@ void testStructurerRegistryNames() {
   assert(Missing == nullptr);
 }
 
+void testMergedNaturalLoopKeepsAllLatchPaths() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 5}));
+  Cfg.addBlock(branchBlock(1, {2, 3}));
+  Cfg.addBlock(block(2, {0}));
+  Cfg.addBlock(branchBlock(3, {5, 4}));
+  Cfg.addBlock(block(4, {0}));
+  Cfg.addBlock(block(5, {}));
+
+  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
+  const Region *Root = Regions.getRegion(Regions.root());
+  assert(Root != nullptr);
+  assert(Root->Children.size() == 1);
+
+  const Region *Loop = Regions.getRegion(Root->Children.front());
+  assert(Loop != nullptr);
+  assert(Loop->Kind == RegionKind::NaturalLoop);
+  assert(Loop->Head == 0);
+  assert(Loop->Blocks == std::vector<BlockId>({0, 1, 2, 3, 4}));
+  assert(Loop->Successors == std::vector<BlockId>({5}));
+  assert(Loop->Follow == 5);
+}
+
 } // namespace
 
 int main() {
@@ -178,5 +202,6 @@ int main() {
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
+  testMergedNaturalLoopKeepsAllLatchPaths();
   return 0;
 }
