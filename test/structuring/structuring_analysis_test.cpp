@@ -283,6 +283,48 @@ void testGotoRegionSkipsChildBlocks() {
   assert(RootNode->Children.size() >= 1);
 }
 
+void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
+  RegionTree Regions;
+  Region FirstChild;
+  FirstChild.Kind = RegionKind::NaturalLoop;
+  FirstChild.Head = 1;
+  FirstChild.Blocks = {1};
+  RegionId FirstChildId = Regions.addRegion(FirstChild);
+  Region SecondChild;
+  SecondChild.Kind = RegionKind::NaturalLoop;
+  SecondChild.Head = 2;
+  SecondChild.Blocks = {2};
+  RegionId SecondChildId = Regions.addRegion(SecondChild);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  Root.Children = {FirstChildId, SecondChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  RegionTree InitialVisible = Manager.visibleRegionTree();
+  const Region *InitialRoot = InitialVisible.getRegion(RootId);
+  assert(InitialRoot != nullptr);
+  assert(InitialRoot->Children.empty());
+
+  RegionOverlay *FirstChildOverlay = Manager.getRegion(FirstChildId);
+  assert(FirstChildOverlay != nullptr);
+  FirstChildOverlay->finalize(42);
+
+  RegionTree Visible = Manager.visibleRegionTree();
+  const Region *VisibleRoot = Visible.getRegion(RootId);
+  assert(VisibleRoot != nullptr);
+  assert(VisibleRoot->Children == std::vector<RegionId>({FirstChildId}));
+
+  FirstChildOverlay->dissolve();
+  RegionTree DissolvedVisible = Manager.visibleRegionTree();
+  const Region *DissolvedRoot = DissolvedVisible.getRegion(RootId);
+  assert(DissolvedRoot != nullptr);
+  assert(DissolvedRoot->Children.empty());
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -794,6 +836,7 @@ int main() {
   testStructurerRegistryNames();
   testRecursiveStructurerVisitsChildBeforeParent();
   testGotoRegionSkipsChildBlocks();
+  testVisibleRegionTreeOnlyIncludesFinalizedChildren();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();

@@ -2326,18 +2326,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   if (R == nullptr) {
     return InvalidNodeId;
   }
-  RegionTree VisibleRegions = Overlay.manager()->regionTree();
-  if (Region *Visible = VisibleRegions.getRegion(R->Id)) {
-    std::vector<RegionId> FilteredChildren;
-    FilteredChildren.reserve(Visible->Children.size());
-    for (RegionId ChildId : Visible->Children) {
-      const RegionOverlay *Child = Overlay.manager()->getRegion(ChildId);
-      if (Child != nullptr && Child->structuredRoot() != InvalidNodeId) {
-        FilteredChildren.push_back(ChildId);
-      }
-    }
-    Visible->Children = std::move(FilteredChildren);
-  }
+  RegionTree VisibleRegions = Overlay.manager()->visibleRegionTree();
 
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Overlay);
 

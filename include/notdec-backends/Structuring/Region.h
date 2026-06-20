@@ -42,6 +42,7 @@ public:
   const Region *getRegion(RegionId Id) const;
   Region *getRegion(RegionId Id);
   const std::vector<Region> &regions() const { return Regions; }
+  std::vector<Region> &regions() { return Regions; }
 
 private:
   RegionId Root = InvalidRegionId;

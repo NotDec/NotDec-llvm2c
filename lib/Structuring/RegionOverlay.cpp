@@ -34,6 +34,21 @@ const Region *OverlayManager::getRegionData(RegionId Id) const {
   return Regions.getRegion(Id);
 }
 
+RegionTree OverlayManager::visibleRegionTree() const {
+  RegionTree Visible = Regions;
+  for (Region &R : Visible.regions()) {
+    std::vector<RegionId> VisibleChildren;
+    VisibleChildren.reserve(R.Children.size());
+    for (RegionId ChildId : R.Children) {
+      if (getStructuredRoot(ChildId) != InvalidNodeId) {
+        VisibleChildren.push_back(ChildId);
+      }
+    }
+    R.Children = std::move(VisibleChildren);
+  }
+  return Visible;
+}
+
 NodeId OverlayManager::getStructuredRoot(RegionId Id) const {
   auto It = StructuredRoots.find(Id);
   return It == StructuredRoots.end() ? InvalidNodeId : It->second;

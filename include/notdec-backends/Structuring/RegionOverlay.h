@@ -27,6 +27,7 @@ public:
   Region *getRegionData(RegionId Id);
   const Region *getRegionData(RegionId Id) const;
   const RegionTree &regionTree() const { return Regions; }
+  RegionTree visibleRegionTree() const;
   NodeId getStructuredRoot(RegionId Id) const;
   void setStructuredRoot(RegionId Id, NodeId RootId);
   void clearStructuredRoot(RegionId Id);
