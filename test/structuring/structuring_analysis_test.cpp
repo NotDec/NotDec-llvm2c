@@ -374,6 +374,7 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   assert(Finalized.front().RegionData != nullptr);
   assert(Finalized.front().RegionData->Id == FirstChildId);
   assert(Finalized.front().StructuredRoot == 42);
+  assert(Finalized.front().Snapshot.Successors == std::vector<BlockId>({3}));
 
   RegionTree Visible = Manager.visibleRegionTree();
   const Region *VisibleRoot = Visible.getRegion(RootId);
@@ -385,6 +386,13 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   const Region *DissolvedRoot = DissolvedVisible.getRegion(RootId);
   assert(DissolvedRoot != nullptr);
   assert(DissolvedRoot->Children.empty());
+  assert(Manager.finalizedChildren(RootId).empty());
+
+  std::size_t Checkpoint = Manager.checkpoint();
+  FirstChildOverlay->finalize(42, FirstChildSnapshot);
+  assert(!Manager.finalizedChildren(RootId).empty());
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
   assert(Manager.finalizedChildren(RootId).empty());
 }
 

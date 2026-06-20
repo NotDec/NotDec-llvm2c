@@ -12,14 +12,15 @@ namespace notdec::backend::structuring {
 
 class RegionOverlay;
 
+struct SuccessorSnapshot {
+  std::vector<BlockId> Successors;
+};
+
 struct FinalizedChildRegion {
   const RegionOverlay *Overlay = nullptr;
   const Region *RegionData = nullptr;
   NodeId StructuredRoot = InvalidNodeId;
-};
-
-struct SuccessorSnapshot {
-  std::vector<BlockId> Successors;
+  SuccessorSnapshot Snapshot;
 };
 
 // This is the first C++ step toward angr's OverlayManager/RegionOverlay model.
@@ -45,14 +46,21 @@ public:
   std::size_t checkpoint();
   void rollback(std::size_t Checkpoint);
   void commit(std::size_t Checkpoint);
-  void setStructuredRoot(RegionId Id, NodeId RootId);
+  void setStructuredRoot(RegionId Id, NodeId RootId,
+                         const SuccessorSnapshot &Snapshot = {});
   void clearStructuredRoot(RegionId Id);
 
 private:
+  struct CheckpointState {
+    std::map<RegionId, NodeId> StructuredRoots;
+    std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
+  };
+
   RegionTree Regions;
   std::map<RegionId, RegionOverlay> Overlays;
   std::map<RegionId, NodeId> StructuredRoots;
-  std::vector<std::map<RegionId, NodeId>> StructuredRootCheckpoints;
+  std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
+  std::vector<CheckpointState> StructuredRootCheckpoints;
 };
 
 class RegionOverlay {

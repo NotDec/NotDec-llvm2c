@@ -73,13 +73,17 @@ OverlayManager::finalizedChildren(RegionId Id) const {
         StructuredRoot == InvalidNodeId) {
       continue;
     }
-    Result.push_back({ChildOverlay, ChildRegion, StructuredRoot});
+    auto SnapshotIt = SuccessorSnapshots.find(ChildId);
+    SuccessorSnapshot Snapshot =
+        SnapshotIt == SuccessorSnapshots.end() ? SuccessorSnapshot{}
+                                               : SnapshotIt->second;
+    Result.push_back({ChildOverlay, ChildRegion, StructuredRoot, Snapshot});
   }
   return Result;
 }
 
 std::size_t OverlayManager::checkpoint() {
-  StructuredRootCheckpoints.push_back(StructuredRoots);
+  StructuredRootCheckpoints.push_back({StructuredRoots, SuccessorSnapshots});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -87,7 +91,9 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
   if (Checkpoint >= StructuredRootCheckpoints.size()) {
     return;
   }
-  StructuredRoots = StructuredRootCheckpoints[Checkpoint];
+  StructuredRoots = StructuredRootCheckpoints[Checkpoint].StructuredRoots;
+  SuccessorSnapshots =
+      StructuredRootCheckpoints[Checkpoint].SuccessorSnapshots;
 }
 
 void OverlayManager::commit(std::size_t Checkpoint) {
@@ -99,16 +105,19 @@ void OverlayManager::commit(std::size_t Checkpoint) {
                                   StructuredRootCheckpoints.end());
 }
 
-void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId) {
+void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId,
+                                       const SuccessorSnapshot &Snapshot) {
   if (RootId == InvalidNodeId) {
-    StructuredRoots.erase(Id);
+    clearStructuredRoot(Id);
     return;
   }
   StructuredRoots[Id] = RootId;
+  SuccessorSnapshots[Id] = Snapshot;
 }
 
 void OverlayManager::clearStructuredRoot(RegionId Id) {
   StructuredRoots.erase(Id);
+  SuccessorSnapshots.erase(Id);
 }
 
 RegionOverlay::RegionOverlay(OverlayManager *Manager, RegionId Id)
@@ -179,7 +188,7 @@ void RegionOverlay::finalize(NodeId RootId, const SuccessorSnapshot &Snapshot) {
   if (Manager == nullptr || RootId == InvalidNodeId) {
     return;
   }
-  Manager->setStructuredRoot(Id, RootId);
+  Manager->setStructuredRoot(Id, RootId, Snapshot);
 }
 
 void RegionOverlay::dissolve() {
