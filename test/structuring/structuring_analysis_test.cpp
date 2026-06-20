@@ -11,19 +11,25 @@ class HintStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::virtualizeOneEdge;
 
+  HintStructurer(GraphNodeId From, GraphNodeId To) : From(From), To(To) {}
+
 protected:
   std::vector<VirtualEdge> edgeVirtualizationHints(
       const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
       const MutableRegionGraphAnalysis &Analysis) const override {
     (void)Cfg;
     (void)Analysis;
-    const MutableRegionNode *From = Graph.getNode(0);
-    const MutableRegionNode *To = Graph.getNode(2);
-    assert(From != nullptr);
-    assert(To != nullptr);
-    return {
-        {0, 2, From->Blocks.back(), To->Blocks.front(), VirtualEdgeKind::Goto}};
+    const MutableRegionNode *FromNode = Graph.getNode(From);
+    const MutableRegionNode *ToNode = Graph.getNode(To);
+    assert(FromNode != nullptr);
+    assert(ToNode != nullptr);
+    return {{From, To, FromNode->TailBlock, ToNode->Blocks.front(),
+             VirtualEdgeKind::Goto}};
   }
+
+private:
+  GraphNodeId From;
+  GraphNodeId To;
 };
 
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
@@ -38,6 +44,18 @@ CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
 CFGBlock branchBlock(BlockId Id, std::vector<BlockId> Successors) {
   CFGBlock Block = block(Id, std::move(Successors));
   Block.Terminator = TerminatorKind::Branch;
+  return Block;
+}
+
+CFGBlock switchBlock(BlockId Id, std::vector<BlockId> Successors) {
+  CFGBlock Block = block(Id, std::move(Successors));
+  Block.Terminator = TerminatorKind::Switch;
+  if (Block.Successors.size() > 1) {
+    for (BlockId Target : std::vector<BlockId>(Block.Successors.begin() + 1,
+                                               Block.Successors.end())) {
+      Block.Cases.push_back({{}, Target});
+    }
+  }
   return Block;
 }
 
@@ -78,7 +96,7 @@ void testEdgeVirtualizationHints() {
 
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
   StructuredTree Tree;
-  HintStructurer Structurer;
+  HintStructurer Structurer(0, 2);
 
   assert(Structurer.virtualizeOneEdge(Cfg, Root, Graph, Tree));
   assert(Graph.virtualEdges().size() == 1);
@@ -90,10 +108,55 @@ void testEdgeVirtualizationHints() {
   assert(Source->StructuredRoot != InvalidNodeId);
 }
 
+void testSwitchVirtualizationInstallsSourceRoot() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2, 3}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {4}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  HintStructurer Structurer(0, 2);
+
+  assert(Structurer.virtualizeOneEdge(Cfg, Root, Graph, Tree));
+  const MutableRegionNode *Source = Graph.getNode(0);
+  assert(Source != nullptr);
+  assert(Source->StructuredRoot != InvalidNodeId);
+}
+
+void testFallthroughVirtualizationInstallsSourceRoot() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  HintStructurer Structurer(0, 1);
+
+  assert(Structurer.virtualizeOneEdge(Cfg, Root, Graph, Tree));
+  const MutableRegionNode *Source = Graph.getNode(0);
+  assert(Source != nullptr);
+  assert(Source->StructuredRoot != InvalidNodeId);
+}
+
 } // namespace
 
 int main() {
   testAcyclicDroppedEdges();
   testEdgeVirtualizationHints();
+  testSwitchVirtualizationInstallsSourceRoot();
+  testFallthroughVirtualizationInstallsSourceRoot();
   return 0;
 }

@@ -992,43 +992,39 @@ bool nodeContainsBlock(const MutableRegionNode &Node, BlockId Target) {
          Node.Blocks.end();
 }
 
-NodeId buildVirtualizedBranchSource(const StructuredCFG &Cfg,
+void appendSourceBody(const StructuredCFG &Cfg, const MutableRegionNode &Source,
+                      StructuredNode &Sequence, StructuredTree &Tree) {
+  if (Source.StructuredRoot != InvalidNodeId) {
+    Sequence.Children.push_back(Source.StructuredRoot);
+    return;
+  }
+  for (BlockId Block : Source.Blocks) {
+    appendBlockLabel(Block, Sequence, Tree);
+    appendBlockBody(Cfg, Block, Sequence, Tree);
+  }
+}
+
+NodeId buildVirtualizedBranchSource(const CFGBlock &Tail,
                                     const MutableRegionNode &Source,
                                     const VirtualEdge &Edge, const Region &R,
+                                    const StructuredCFG &Cfg,
                                     StructuredTree &Tree) {
-  if (Source.Blocks.empty()) {
-    return InvalidNodeId;
-  }
-
-  const CFGBlock *Tail = Cfg.getBlock(Source.TailBlock);
-  if (Tail == nullptr || Tail->Terminator != TerminatorKind::Branch ||
-      Tail->Successors.size() != 2) {
-    return InvalidNodeId;
-  }
-
-  bool RemovedTrue = Tail->Successors[0] == Edge.ToBlock;
-  bool RemovedFalse = Tail->Successors[1] == Edge.ToBlock;
+  bool RemovedTrue = Tail.Successors[0] == Edge.ToBlock;
+  bool RemovedFalse = Tail.Successors[1] == Edge.ToBlock;
   if (!RemovedTrue && !RemovedFalse) {
     return InvalidNodeId;
   }
 
-  BlockId KeptTarget = RemovedTrue ? Tail->Successors[1] : Tail->Successors[0];
+  BlockId KeptTarget = RemovedTrue ? Tail.Successors[1] : Tail.Successors[0];
 
   StructuredNode Sequence;
   Sequence.Kind = StructuredNodeKind::Sequence;
-  if (Source.StructuredRoot != InvalidNodeId) {
-    Sequence.Children.push_back(Source.StructuredRoot);
-  } else {
-    for (BlockId Block : Source.Blocks) {
-      appendBlockLabel(Block, Sequence, Tree);
-      appendBlockBody(Cfg, Block, Sequence, Tree);
-    }
-  }
+  appendSourceBody(Cfg, Source, Sequence, Tree);
 
   StructuredNode IfNode;
   IfNode.Kind = StructuredNodeKind::If;
-  IfNode.Block = Tail->Id;
-  IfNode.Condition = Tail->Condition;
+  IfNode.Block = Tail.Id;
+  IfNode.Condition = Tail.Condition;
   IfNode.ConditionNegated = RemovedFalse;
   IfNode.Then = Tree.addNode(makeControlTransfer(
       Edge.ToBlock, Edge.Kind == VirtualEdgeKind::Goto
@@ -1038,6 +1034,103 @@ NodeId buildVirtualizedBranchSource(const StructuredCFG &Cfg,
   Sequence.Children.push_back(Tree.addNode(
       makeControlTransfer(KeptTarget, classifyNaturalLoopExit(R, KeptTarget))));
   return Tree.addNode(std::move(Sequence));
+}
+
+NodeId buildVirtualizedSwitchSource(const CFGBlock &Tail,
+                                    const MutableRegionNode &Source,
+                                    const VirtualEdge &Edge, const Region &R,
+                                    const StructuredCFG &Cfg,
+                                    StructuredTree &Tree) {
+  StructuredNode Sequence;
+  Sequence.Kind = StructuredNodeKind::Sequence;
+  appendSourceBody(Cfg, Source, Sequence, Tree);
+
+  StructuredNode SwitchNode;
+  SwitchNode.Kind = StructuredNodeKind::Switch;
+  SwitchNode.Block = Tail.Id;
+  SwitchNode.Condition = Tail.Condition;
+  SwitchNode.Cases = Tail.Cases;
+
+  bool Matched = false;
+  if (!Tail.Successors.empty() && Tail.Successors[0] == Edge.ToBlock) {
+    SwitchNode.Default = Tree.addNode(makeControlTransfer(
+        Edge.ToBlock, Edge.Kind == VirtualEdgeKind::Goto
+                          ? classifyNaturalLoopExit(R, Edge.ToBlock)
+                          : Edge.Kind));
+    Matched = true;
+  }
+  for (const SwitchCase &Case : Tail.Cases) {
+    if (Case.Target != Edge.ToBlock) {
+      continue;
+    }
+    NodeId CaseBody = Tree.addNode(makeControlTransfer(
+        Edge.ToBlock, Edge.Kind == VirtualEdgeKind::Goto
+                          ? classifyNaturalLoopExit(R, Edge.ToBlock)
+                          : Edge.Kind));
+    SwitchNode.StructuredCases.push_back({Case.Value, Case.Target, CaseBody});
+    Matched = true;
+  }
+  if (!Matched) {
+    return InvalidNodeId;
+  }
+
+  Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
+  for (BlockId Succ : Tail.Successors) {
+    if (Succ != Edge.ToBlock) {
+      Sequence.Children.push_back(Tree.addNode(
+          makeControlTransfer(Succ, classifyNaturalLoopExit(R, Succ))));
+    }
+  }
+  return Tree.addNode(std::move(Sequence));
+}
+
+NodeId buildVirtualizedFallthroughSource(const CFGBlock &Tail,
+                                         const MutableRegionNode &Source,
+                                         const VirtualEdge &Edge,
+                                         const Region &R,
+                                         const StructuredCFG &Cfg,
+                                         StructuredTree &Tree) {
+  if (!hasSuccessorTarget(Tail, Edge.ToBlock)) {
+    return InvalidNodeId;
+  }
+
+  StructuredNode Sequence;
+  Sequence.Kind = StructuredNodeKind::Sequence;
+  appendSourceBody(Cfg, Source, Sequence, Tree);
+  Sequence.Children.push_back(Tree.addNode(makeControlTransfer(
+      Edge.ToBlock, Edge.Kind == VirtualEdgeKind::Goto
+                        ? classifyNaturalLoopExit(R, Edge.ToBlock)
+                        : Edge.Kind)));
+  return Tree.addNode(std::move(Sequence));
+}
+
+NodeId buildVirtualizedSource(const StructuredCFG &Cfg,
+                              const MutableRegionNode &Source,
+                              const VirtualEdge &Edge, const Region &R,
+                              StructuredTree &Tree) {
+  if (Source.Blocks.empty()) {
+    return InvalidNodeId;
+  }
+
+  const CFGBlock *Tail = Cfg.getBlock(Source.TailBlock);
+  if (Tail == nullptr) {
+    return InvalidNodeId;
+  }
+  switch (Tail->Terminator) {
+  case TerminatorKind::Branch:
+    if (Tail->Successors.size() != 2) {
+      return InvalidNodeId;
+    }
+    return buildVirtualizedBranchSource(*Tail, Source, Edge, R, Cfg, Tree);
+  case TerminatorKind::Switch:
+    return buildVirtualizedSwitchSource(*Tail, Source, Edge, R, Cfg, Tree);
+  case TerminatorKind::Fallthrough:
+    return buildVirtualizedFallthroughSource(*Tail, Source, Edge, R, Cfg, Tree);
+  case TerminatorKind::Return:
+  case TerminatorKind::Unreachable:
+    return InvalidNodeId;
+  }
+  return InvalidNodeId;
 }
 
 bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
@@ -1425,7 +1518,7 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
       const MutableRegionNode *Source = Graph.getNode(Hint.From);
       if (Source != nullptr) {
         NodeId Replacement =
-            buildVirtualizedBranchSource(Cfg, *Source, Hint, R, Tree);
+            buildVirtualizedSource(Cfg, *Source, Hint, R, Tree);
         if (Replacement != InvalidNodeId) {
           Graph.setStructuredRoot(Hint.From, Replacement);
         }
@@ -1446,8 +1539,7 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
   const VirtualEdge &Edge = Edges.front();
   const MutableRegionNode *Source = Graph.getNode(Edge.From);
   if (Source != nullptr) {
-    NodeId Replacement =
-        buildVirtualizedBranchSource(Cfg, *Source, Edge, R, Tree);
+    NodeId Replacement = buildVirtualizedSource(Cfg, *Source, Edge, R, Tree);
     if (Replacement != InvalidNodeId) {
       Graph.setStructuredRoot(Edge.From, Replacement);
     }
