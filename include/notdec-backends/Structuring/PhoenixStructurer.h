@@ -5,7 +5,6 @@
 #include "notdec-backends/Structuring/RegionStructurer.h"
 #include "notdec-backends/Structuring/Structurer.h"
 
-#include <map>
 #include <vector>
 
 namespace notdec::backend::structuring {
@@ -20,9 +19,7 @@ public:
   bool supportsChildRegions() const override { return true; }
   NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                          StructuredTree &Tree) override;
-  NodeId structureRegion(const StructuredCFG &Cfg, const RegionTree &Regions,
-                         const Region &R,
-                         const std::map<RegionId, NodeId> &StructuredChildren,
+  NodeId structureRegion(const StructuredCFG &Cfg, RegionOverlay &Overlay,
                          StructuredTree &Tree) override;
 
 protected:

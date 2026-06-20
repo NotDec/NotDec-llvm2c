@@ -11,6 +11,7 @@
 
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/StructuredGoto.h"
 #include "notdec-llvm2c/Utils.h"
 

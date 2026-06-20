@@ -11,6 +11,7 @@
 
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/Goto.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/Utils.h"
 
 namespace notdec::llvm2c {

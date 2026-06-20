@@ -2257,37 +2257,26 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
 }
 
 StructuredTree PhoenixStructurer::structure(const StructuredCFG &Cfg) {
-  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
-  return RecursiveStructurer().structure(Cfg, Regions, *this);
+  OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
+  return RecursiveStructurer().structure(Cfg, Manager, *this);
 }
 
 NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
                                           const Region &R,
                                           StructuredTree &Tree) {
-  static const RegionTree EmptyRegions;
-  static const std::map<RegionId, NodeId> EmptyChildren;
-  return structureRegion(Cfg, EmptyRegions, R, EmptyChildren, Tree);
-}
-
-NodeId PhoenixStructurer::structureRegion(
-    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
-    const std::map<RegionId, NodeId> &StructuredChildren,
-    StructuredTree &Tree) {
-  MutableRegionGraph Graph =
-      StructuredChildren.empty()
-          ? MutableRegionGraph::build(Cfg, R)
-          : MutableRegionGraph::build(Cfg, Regions, R, StructuredChildren);
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, R);
 
   unsigned Iterations = 0;
   bool Changed = false;
   Changed = preprocessRegionGraph(Cfg, R, Graph);
   do {
     Changed = false;
-    if (analyzeAcyclic(Cfg, Regions, R, Graph, Tree)) {
+    static const RegionTree EmptyRegions;
+    if (analyzeAcyclic(Cfg, EmptyRegions, R, Graph, Tree)) {
       Changed = true;
     } else if (analyzeCyclic(Cfg, Graph, Tree)) {
       Changed = true;
-    } else if (refineCyclic(Cfg, Regions, R, Graph, Tree)) {
+    } else if (refineCyclic(Cfg, EmptyRegions, R, Graph, Tree)) {
       Changed = true;
     } else if (lastResortRefinement(Cfg, R, Graph, Tree)) {
       Changed = true;
@@ -2315,7 +2304,7 @@ NodeId PhoenixStructurer::structureRegion(
 
   for (GraphNodeId Id : Active) {
     const MutableRegionNode *Node = Graph.getNode(Id);
-    if (Node != nullptr) {
+    if (Node != nullptr && !Node->ExternalPlaceholder) {
       auto It = VirtualEdgesBySource.find(Id);
       static const std::vector<VirtualEdge> EmptyVirtualEdges;
       appendFallbackNode(Cfg, *Node,
@@ -2328,6 +2317,80 @@ NodeId PhoenixStructurer::structureRegion(
   dropGotoIntoFollowingInfiniteLoop(Root, Tree);
   NodeId RootId = Tree.addNode(std::move(Root));
   return wrapNaturalLoopFallback(R, RootId, Tree);
+}
+
+NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
+                                          RegionOverlay &Overlay,
+                                          StructuredTree &Tree) {
+  const Region *R = Overlay.region();
+  if (R == nullptr) {
+    return InvalidNodeId;
+  }
+  RegionTree VisibleRegions = Overlay.manager()->regionTree();
+  if (Region *Visible = VisibleRegions.getRegion(R->Id)) {
+    std::vector<RegionId> FilteredChildren;
+    FilteredChildren.reserve(Visible->Children.size());
+    for (RegionId ChildId : Visible->Children) {
+      const RegionOverlay *Child = Overlay.manager()->getRegion(ChildId);
+      if (Child != nullptr && Child->structuredRoot() != InvalidNodeId) {
+        FilteredChildren.push_back(ChildId);
+      }
+    }
+    Visible->Children = std::move(FilteredChildren);
+  }
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Overlay);
+
+  unsigned Iterations = 0;
+  bool Changed = false;
+  Changed = preprocessRegionGraph(Cfg, *R, Graph);
+  do {
+    Changed = false;
+    if (analyzeAcyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
+      Changed = true;
+    } else if (analyzeCyclic(Cfg, Graph, Tree)) {
+      Changed = true;
+    } else if (refineCyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
+      Changed = true;
+    } else if (lastResortRefinement(Cfg, *R, Graph, Tree)) {
+      Changed = true;
+    }
+    ++Iterations;
+  } while (Changed && Iterations < 1000);
+
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+  std::map<GraphNodeId, std::vector<VirtualEdge>> VirtualEdgesBySource =
+      groupVirtualEdgesBySource(Graph);
+
+  std::vector<GraphNodeId> Active = Graph.activeNodes();
+  std::sort(Active.begin(), Active.end(), [&](GraphNodeId A, GraphNodeId B) {
+    const MutableRegionNode *ANode = Graph.getNode(A);
+    const MutableRegionNode *BNode = Graph.getNode(B);
+    BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
+                         ? InvalidBlockId
+                         : ANode->Blocks.front();
+    BlockId BBlock = (BNode == nullptr || BNode->Blocks.empty())
+                         ? InvalidBlockId
+                         : BNode->Blocks.front();
+    return ABlock < BBlock;
+  });
+
+  for (GraphNodeId Id : Active) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node != nullptr && !Node->ExternalPlaceholder) {
+      auto It = VirtualEdgesBySource.find(Id);
+      static const std::vector<VirtualEdge> EmptyVirtualEdges;
+      appendFallbackNode(Cfg, *Node,
+                         It == VirtualEdgesBySource.end() ? EmptyVirtualEdges
+                                                          : It->second,
+                         *R, Root, Tree);
+    }
+  }
+
+  dropGotoIntoFollowingInfiniteLoop(Root, Tree);
+  NodeId RootId = Tree.addNode(std::move(Root));
+  return wrapNaturalLoopFallback(*R, RootId, Tree);
 }
 
 } // namespace notdec::backend::structuring

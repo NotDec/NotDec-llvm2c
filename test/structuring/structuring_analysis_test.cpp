@@ -3,6 +3,7 @@
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
+#include "notdec-backends/Structuring/RegionOverlay.h"
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
@@ -53,51 +54,20 @@ public:
 
 class RecordingRegionStructurer : public RegionStructurer {
 public:
-  RecordingRegionStructurer(bool PassRootNaturalLoopChild = false,
-                            bool ChildHasStructuredControl = true)
-      : PassRootNaturalLoopChild(PassRootNaturalLoopChild),
-        ChildHasStructuredControl(ChildHasStructuredControl) {}
-
   bool supportsChildRegions() const override { return true; }
-  bool shouldPassChildRegionToParent(const Region &Parent,
-                                     const Region &Child) const override {
-    if (PassRootNaturalLoopChild && Parent.Kind == RegionKind::Root &&
-        Child.Kind == RegionKind::NaturalLoop) {
-      return true;
-    }
-    return RegionStructurer::shouldPassChildRegionToParent(Parent, Child);
-  }
 
   NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                          StructuredTree &Tree) override {
-    static const RegionTree EmptyRegions;
-    static const std::map<RegionId, NodeId> EmptyChildren;
-    return structureRegion(Cfg, EmptyRegions, R, EmptyChildren, Tree);
-  }
-
-  NodeId structureRegion(
-      const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
-      const std::map<RegionId, NodeId> &StructuredChildren,
-      StructuredTree &Tree) override {
     (void)Cfg;
-    (void)Regions;
     SeenRegions.push_back(R.Kind);
-    ChildCounts.push_back(StructuredChildren.size());
 
     StructuredNode Node;
-    Node.Kind = R.Kind == RegionKind::NaturalLoop && ChildHasStructuredControl
-                    ? StructuredNodeKind::InfiniteLoop
-                    : StructuredNodeKind::Sequence;
+    Node.Kind = StructuredNodeKind::Sequence;
     Node.Block = R.Head;
     return Tree.addNode(std::move(Node));
   }
 
   std::vector<RegionKind> SeenRegions;
-  std::vector<std::size_t> ChildCounts;
-
-private:
-  bool PassRootNaturalLoopChild;
-  bool ChildHasStructuredControl;
 };
 
 class GotoRegionTester : public GotoStructurer {
@@ -248,7 +218,7 @@ void testStructurerRegistryNames() {
   assert(Missing == nullptr);
 }
 
-void testRecursiveStructurerUsesChildPassPolicy() {
+void testRecursiveStructurerVisitsChildBeforeParent() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 2}));
   Cfg.addBlock(block(1, {0}));
@@ -258,32 +228,15 @@ void testRecursiveStructurerUsesChildPassPolicy() {
   const Region *Root = Regions.getRegion(Regions.root());
   assert(Root != nullptr);
   assert(Root->Children.size() == 1);
+  OverlayManager Manager(std::move(Regions));
 
   RecordingRegionStructurer Structurer;
   StructuredTree Tree =
-      RecursiveStructurer().structure(Cfg, Regions, Structurer);
+      RecursiveStructurer().structure(Cfg, Manager, Structurer);
   assert(Tree.root() != InvalidNodeId);
   assert(Structurer.SeenRegions.size() == 2);
   assert(Structurer.SeenRegions[0] == RegionKind::NaturalLoop);
   assert(Structurer.SeenRegions[1] == RegionKind::Root);
-  assert(Structurer.ChildCounts[0] == 0);
-  assert(Structurer.ChildCounts[1] == 0);
-}
-
-void testRecursiveStructurerFiltersUnstructuredChildResult() {
-  StructuredCFG Cfg;
-  Cfg.addBlock(branchBlock(0, {1, 2}));
-  Cfg.addBlock(block(1, {0}));
-  Cfg.addBlock(block(2, {}));
-
-  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
-  RecordingRegionStructurer Structurer(/*PassRootNaturalLoopChild=*/true,
-                                       /*ChildHasStructuredControl=*/false);
-  StructuredTree Tree =
-      RecursiveStructurer().structure(Cfg, Regions, Structurer);
-  assert(Tree.root() != InvalidNodeId);
-  assert(Structurer.SeenRegions.size() == 2);
-  assert(Structurer.ChildCounts[1] == 0);
 }
 
 void testGotoRegionSkipsChildBlocks() {
@@ -305,16 +258,48 @@ void testGotoRegionSkipsChildBlocks() {
   RegionId RootId = Regions.addRegion(Root);
   Regions.setRoot(RootId);
 
+  OverlayManager Manager(std::move(Regions));
+  RegionOverlay *LoopOverlay = Manager.getRegion(LoopId);
+  RegionOverlay *RootOverlay = Manager.getRegion(RootId);
+  assert(LoopOverlay != nullptr);
+  assert(RootOverlay != nullptr);
+
   GotoRegionTester Structurer;
   StructuredTree Tree;
-  std::map<RegionId, NodeId> EmptyChildren;
-  NodeId LoopRoot = Structurer.structureRegion(Cfg, Regions, Loop,
-                                               EmptyChildren, Tree);
-  NodeId RootRoot = Structurer.structureRegion(Cfg, Regions, Root,
-                                               {{LoopId, LoopRoot}}, Tree);
+  NodeId LoopRoot = Structurer.structureRegion(Cfg, *LoopOverlay, Tree);
+  NodeId RootRoot = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
+  assert(LoopRoot != InvalidNodeId);
   const StructuredNode *RootNode = Tree.getNode(RootRoot);
   assert(RootNode != nullptr);
   assert(RootNode->Children.size() >= 1);
+}
+
+void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {0, 1}));
+  Cfg.addBlock(block(1, {}));
+
+  OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
+  RegionOverlay *Root = Manager.root();
+  assert(Root != nullptr);
+  assert(Root->children().size() == 1);
+
+  RegionOverlay *Loop = Manager.getRegion(Root->children().front());
+  assert(Loop != nullptr);
+  assert(Loop->kind() == RegionKind::NaturalLoop);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *Loop);
+  GraphNodeId HeadId = Graph.getNodeForBlock(0);
+  GraphNodeId FollowId = Graph.getNodeForBlock(1);
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  const MutableRegionNode *Follow = Graph.getNode(FollowId);
+  assert(Head != nullptr);
+  assert(Follow != nullptr);
+  assert(Follow->ExternalPlaceholder);
+  assert(Head->Succs.size() == 2);
+  assert(Graph.hasEdge(HeadId, HeadId));
+  assert(Graph.hasEdge(HeadId, FollowId));
+  assert(Head->hasExternalSuccessor(1));
 }
 
 void testMergedNaturalLoopKeepsAllLatchPaths() {
@@ -798,9 +783,9 @@ int main() {
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
-  testRecursiveStructurerUsesChildPassPolicy();
-  testRecursiveStructurerFiltersUnstructuredChildResult();
+  testRecursiveStructurerVisitsChildBeforeParent();
   testGotoRegionSkipsChildBlocks();
+  testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();

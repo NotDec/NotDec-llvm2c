@@ -1,6 +1,7 @@
 #ifndef NOTDEC_BACKENDS_STRUCTURING_MUTABLEREGIONGRAPH_H
 #define NOTDEC_BACKENDS_STRUCTURING_MUTABLEREGIONGRAPH_H
 
+#include "notdec-backends/Structuring/RegionOverlay.h"
 #include "notdec-backends/Structuring/Region.h"
 
 #include <cstdint>
@@ -39,6 +40,10 @@ struct MutableRegionNode {
   BlockId TailBlock = InvalidBlockId;
   std::vector<BlockId> Blocks;
   NodeId StructuredRoot = InvalidNodeId;
+  // Child-region reducers still need to see successor shape that leaves the
+  // current region. We model those exits as placeholder nodes in the mutable
+  // graph, but they must never be rendered as region-local statements.
+  bool ExternalPlaceholder = false;
   bool Active = true;
   std::vector<GraphNodeId> Preds;
   std::vector<GraphNodeId> Succs;
@@ -66,9 +71,8 @@ struct MutableRegionGraphAnalysis {
 class MutableRegionGraph {
 public:
   static MutableRegionGraph build(const StructuredCFG &Cfg, const Region &R);
-  static MutableRegionGraph
-  build(const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
-        const std::map<RegionId, NodeId> &StructuredChildren);
+  static MutableRegionGraph build(const StructuredCFG &Cfg,
+                                  const RegionOverlay &Overlay);
 
   const std::vector<MutableRegionNode> &nodes() const { return Nodes; }
   const MutableRegionNode *getNode(GraphNodeId Id) const;
@@ -91,7 +95,8 @@ public:
   }
 
 private:
-  GraphNodeId addNode(BlockId Block, NodeId StructuredRoot = InvalidNodeId);
+  GraphNodeId addNode(BlockId Block, NodeId StructuredRoot = InvalidNodeId,
+                      bool ExternalPlaceholder = false);
   bool isActive(GraphNodeId Id) const;
 
   std::vector<MutableRegionNode> Nodes;

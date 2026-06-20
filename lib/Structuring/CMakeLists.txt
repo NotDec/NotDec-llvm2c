@@ -1,7 +1,7 @@
 add_library(notdec-backend-structuring STATIC
     StructuredCFG.cpp
     Region.cpp
-    RegionStructurer.cpp
+    RegionOverlay.cpp
     RegionIdentifier.cpp
     MutableRegionGraph.cpp
     RecursiveStructurer.cpp

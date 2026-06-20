@@ -367,11 +367,13 @@ bool MutableRegionNode::hasExternalSuccessor(BlockId Target) const {
          ExternalSuccs.end();
 }
 
-GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot) {
+GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot,
+                                        bool ExternalPlaceholder) {
   MutableRegionNode Node;
   Node.Id = static_cast<GraphNodeId>(Nodes.size());
   Node.Block = Block;
   Node.TailBlock = Block;
+  Node.ExternalPlaceholder = ExternalPlaceholder;
   if (Block != InvalidBlockId) {
     Node.Blocks.push_back(Block);
   }
@@ -399,7 +401,9 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     for (BlockId Succ : CfgBlock->Successors) {
       auto It = BlockToNode.find(Succ);
       if (It != BlockToNode.end()) {
-        Graph.addEdge(From, It->second);
+        if (From != It->second || Succ == Block) {
+          Graph.addEdge(From, It->second);
+        }
       } else {
         MutableRegionNode *FromNode = Graph.getNode(From);
         if (FromNode != nullptr) {
@@ -412,39 +416,63 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
   return Graph;
 }
 
-MutableRegionGraph MutableRegionGraph::build(
-    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
-    const std::map<RegionId, NodeId> &StructuredChildren) {
+MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
+                                             const RegionOverlay &Overlay) {
+  const Region *R = Overlay.region();
+  if (R == nullptr) {
+    return {};
+  }
+
   MutableRegionGraph Graph;
   std::map<BlockId, GraphNodeId> BlockToNode;
+  std::map<BlockId, GraphNodeId> PlaceholderToNode;
 
-  for (RegionId ChildId : R.Children) {
-    auto RootIt = StructuredChildren.find(ChildId);
-    const Region *Child = Regions.getRegion(ChildId);
-    if (RootIt == StructuredChildren.end() || Child == nullptr ||
-        RootIt->second == InvalidNodeId) {
+  auto getOrCreateExternalPlaceholder = [&](BlockId Block) {
+    auto It = PlaceholderToNode.find(Block);
+    if (It != PlaceholderToNode.end()) {
+      return It->second;
+    }
+    GraphNodeId Id = Graph.addNode(Block, InvalidNodeId, true);
+    PlaceholderToNode[Block] = Id;
+    return Id;
+  };
+
+  for (RegionId ChildId : Overlay.children()) {
+    const RegionOverlay *Child = Overlay.manager()->getRegion(ChildId);
+    const Region *ChildRegion = Child == nullptr ? nullptr : Child->region();
+    if (ChildRegion == nullptr) {
       continue;
     }
 
-    GraphNodeId NodeId = Graph.addNode(Child->Head, RootIt->second);
+    NodeId StructuredRoot =
+        Child == nullptr ? InvalidNodeId : Child->structuredRoot();
+    if (StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+
+    // Until overlay finalize/dissolve lands, child regions stay visible as
+    // grouped blocks with a recorded structured root. This moves the graph
+    // builder to the overlay boundary instead of the old child-result
+    // injection path, even before full shared-graph mutation lands.
+    GraphNodeId NodeId = Graph.addNode(ChildRegion->Head, StructuredRoot);
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
-      Node->Blocks = Child->Blocks;
+      Node->Blocks = ChildRegion->Blocks;
     }
-    for (BlockId Block : Child->Blocks) {
-      if (containsBlock(R.Blocks, Block)) {
+    for (BlockId Block : ChildRegion->Blocks) {
+      if (containsBlock(R->Blocks, Block)) {
         BlockToNode[Block] = NodeId;
       }
     }
   }
 
-  for (BlockId Block : R.Blocks) {
+  for (BlockId Block : R->Blocks) {
     if (BlockToNode.find(Block) == BlockToNode.end()) {
       BlockToNode[Block] = Graph.addNode(Block);
     }
   }
 
-  for (BlockId Block : R.Blocks) {
+  for (BlockId Block : R->Blocks) {
     const CFGBlock *CfgBlock = Cfg.getBlock(Block);
     if (CfgBlock == nullptr) {
       continue;
@@ -458,9 +486,10 @@ MutableRegionGraph MutableRegionGraph::build(
         if (FromNode != nullptr) {
           appendUniqueBlock(FromNode->ExternalSuccs, Succ);
         }
+        Graph.addEdge(From, getOrCreateExternalPlaceholder(Succ));
         continue;
       }
-      if (From != It->second) {
+      if (From != It->second || Succ == Block) {
         Graph.addEdge(From, It->second);
       }
     }

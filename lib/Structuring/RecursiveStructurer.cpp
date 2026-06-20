@@ -1,38 +1,60 @@
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
 
-#include <map>
-
 namespace notdec::backend::structuring {
 namespace {
 
-NodeId structureRegionRecursive(
-    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
-    RegionStructurer &Structurer,
-    std::map<RegionId, NodeId> &StructuredRegions, StructuredTree &Tree) {
-  auto Existing = StructuredRegions.find(R.Id);
-  if (Existing != StructuredRegions.end()) {
-    return Existing->second;
+bool shouldFinalizeStructuredChild(const StructuredTree &Tree,
+                                   const RegionOverlay &Overlay,
+                                   NodeId ChildRoot) {
+  if (ChildRoot == InvalidNodeId) {
+    return false;
+  }
+  const Region *ChildRegion = Overlay.region();
+  if (ChildRegion == nullptr || ChildRegion->Kind != RegionKind::NaturalLoop) {
+    return true;
   }
 
-  std::map<RegionId, NodeId> StructuredChildren;
+  const StructuredNode *Node = Tree.getNode(ChildRoot);
+  if (Node == nullptr) {
+    return false;
+  }
+
+  // Keep fallback "wrap the whole region in while(1)" loops visible to the
+  // parent CFG until overlay graph mutation is implemented. Real while/do-while
+  // nodes can already propagate as stable child results.
+  return Node->Kind != StructuredNodeKind::InfiniteLoop;
+}
+
+NodeId structureRegionRecursive(const StructuredCFG &Cfg, OverlayManager &Manager,
+                                RegionOverlay &Overlay,
+                                RegionStructurer &Structurer,
+                                StructuredTree &Tree) {
   if (Structurer.supportsChildRegions()) {
-    for (RegionId ChildId : R.Children) {
-      const Region *Child = Regions.getRegion(ChildId);
+    for (RegionId ChildId : Overlay.children()) {
+      RegionOverlay *Child = Manager.getRegion(ChildId);
       if (Child == nullptr) {
         continue;
       }
-      NodeId ChildRoot = structureRegionRecursive(
-          Cfg, Regions, *Child, Structurer, StructuredRegions, Tree);
-      if (Structurer.shouldPassChildRegionToParent(R, *Child) &&
-          Structurer.shouldUseStructuredChildRegion(Tree, ChildRoot)) {
-        StructuredChildren[ChildId] = ChildRoot;
+      NodeId ChildRoot =
+          structureRegionRecursive(Cfg, Manager, *Child, Structurer, Tree);
+      if (shouldFinalizeStructuredChild(Tree, *Child, ChildRoot)) {
+        Child->finalize(ChildRoot);
+      } else {
+        Child->dissolve();
       }
     }
   }
 
-  NodeId Root = Structurer.structureRegion(Cfg, Regions, R, StructuredChildren,
-                                           Tree);
-  StructuredRegions[R.Id] = Root;
+  const Region *R = Overlay.region();
+  if (R == nullptr) {
+    return InvalidNodeId;
+  }
+  NodeId Root = Structurer.structureRegion(Cfg, Overlay, Tree);
+  if (Root != InvalidNodeId) {
+    Overlay.finalize(Root);
+  } else {
+    Overlay.dissolve();
+  }
   return Root;
 }
 
@@ -41,15 +63,21 @@ NodeId structureRegionRecursive(
 StructuredTree RecursiveStructurer::structure(const StructuredCFG &Cfg,
                                               const RegionTree &Regions,
                                               RegionStructurer &Structurer) {
+  OverlayManager Manager(Regions);
+  return structure(Cfg, Manager, Structurer);
+}
+
+StructuredTree RecursiveStructurer::structure(const StructuredCFG &Cfg,
+                                              OverlayManager &Manager,
+                                              RegionStructurer &Structurer) {
   StructuredTree Tree;
-  const Region *Root = Regions.getRegion(Regions.root());
+  RegionOverlay *Root = Manager.root();
   if (Root == nullptr) {
     return Tree;
   }
 
-  std::map<RegionId, NodeId> StructuredRegions;
-  NodeId RootNode = structureRegionRecursive(Cfg, Regions, *Root, Structurer,
-                                             StructuredRegions, Tree);
+  NodeId RootNode =
+      structureRegionRecursive(Cfg, Manager, *Root, Structurer, Tree);
   Tree.setRoot(RootNode);
   return Tree;
 }

@@ -1,6 +1,7 @@
 #ifndef NOTDEC_BACKENDS_STRUCTURING_REGIONIDENTIFIER_H
 #define NOTDEC_BACKENDS_STRUCTURING_REGIONIDENTIFIER_H
 
+#include "notdec-backends/Structuring/RegionOverlay.h"
 #include "notdec-backends/Structuring/Region.h"
 
 namespace notdec::backend::structuring {
@@ -11,6 +12,7 @@ namespace notdec::backend::structuring {
 class RegionIdentifier {
 public:
   static RegionTree identifyRoot(const StructuredCFG &Cfg);
+  static OverlayManager identifyOverlay(const StructuredCFG &Cfg);
 };
 
 } // namespace notdec::backend::structuring

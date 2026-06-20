@@ -4,8 +4,6 @@
 #include "notdec-backends/Structuring/RegionStructurer.h"
 #include "notdec-backends/Structuring/Structurer.h"
 
-#include <map>
-
 namespace notdec::backend::structuring {
 
 // Minimal total structurer. It preserves every block as a labeled leaf and
@@ -16,9 +14,7 @@ public:
   StructuredTree structure(const StructuredCFG &Cfg) override;
   NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                          StructuredTree &Tree) override;
-  NodeId structureRegion(const StructuredCFG &Cfg, const RegionTree &Regions,
-                         const Region &R,
-                         const std::map<RegionId, NodeId> &StructuredChildren,
+  NodeId structureRegion(const StructuredCFG &Cfg, RegionOverlay &Overlay,
                          StructuredTree &Tree) override;
   bool supportsChildRegions() const override { return true; }
 };

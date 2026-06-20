@@ -4,7 +4,6 @@
 #include "notdec-backends/Structuring/RegionIdentifier.h"
 
 #include <algorithm>
-#include <map>
 #include <set>
 
 namespace notdec::backend::structuring {
@@ -17,8 +16,8 @@ static StructuredNode makeGoto(BlockId Target) {
 }
 
 StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
-  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
-  return RecursiveStructurer().structure(Cfg, Regions, *this);
+  OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
+  return RecursiveStructurer().structure(Cfg, Manager, *this);
 }
 
 NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
@@ -106,26 +105,30 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
   return Tree.addNode(std::move(Root));
 }
 
-NodeId GotoStructurer::structureRegion(
-    const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
-    const std::map<RegionId, NodeId> &StructuredChildren,
-    StructuredTree &Tree) {
+NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
+                                       RegionOverlay &Overlay,
+                                       StructuredTree &Tree) {
+  const Region *R = Overlay.region();
+  if (R == nullptr) {
+    return InvalidNodeId;
+  }
+
   StructuredNode Root;
   Root.Kind = StructuredNodeKind::Sequence;
 
   std::set<BlockId> ChildBlocks;
-  for (RegionId ChildId : R.Children) {
-    auto It = StructuredChildren.find(ChildId);
-    const Region *Child = Regions.getRegion(ChildId);
-    if (Child != nullptr) {
-      ChildBlocks.insert(Child->Blocks.begin(), Child->Blocks.end());
+  for (RegionId ChildId : Overlay.children()) {
+    RegionOverlay *Child = Overlay.manager()->getRegion(ChildId);
+    const Region *ChildRegion = Child == nullptr ? nullptr : Child->region();
+    if (ChildRegion != nullptr) {
+      ChildBlocks.insert(ChildRegion->Blocks.begin(), ChildRegion->Blocks.end());
     }
-    if (It != StructuredChildren.end()) {
-      Root.Children.push_back(It->second);
+    if (Child != nullptr && Child->structuredRoot() != InvalidNodeId) {
+      Root.Children.push_back(Child->structuredRoot());
     }
   }
 
-  for (BlockId Id : R.Blocks) {
+  for (BlockId Id : R->Blocks) {
     if (ChildBlocks.count(Id) != 0) {
       continue;
     }

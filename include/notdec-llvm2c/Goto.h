@@ -1,7 +1,7 @@
 #ifndef _NOTDEC_BACKEND_GOTO_H_
 #define _NOTDEC_BACKEND_GOTO_H_
 
-#include "notdec-llvm2c/StructuralAnalysis.h"
+#include "notdec-llvm2c/StructuringContext.h"
 #include <clang/AST/Stmt.h>
 #include <map>
 #include <vector>

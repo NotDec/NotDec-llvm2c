@@ -1,6 +1,7 @@
 #ifndef NOTDEC_BACKENDS_STRUCTURING_RECURSIVESTRUCTURER_H
 #define NOTDEC_BACKENDS_STRUCTURING_RECURSIVESTRUCTURER_H
 
+#include "notdec-backends/Structuring/RegionOverlay.h"
 #include "notdec-backends/Structuring/RegionStructurer.h"
 
 namespace notdec::backend::structuring {
@@ -11,6 +12,8 @@ namespace notdec::backend::structuring {
 class RecursiveStructurer {
 public:
   StructuredTree structure(const StructuredCFG &Cfg, const RegionTree &Regions,
+                           RegionStructurer &Structurer);
+  StructuredTree structure(const StructuredCFG &Cfg, OverlayManager &Manager,
                            RegionStructurer &Structurer);
 };
 
