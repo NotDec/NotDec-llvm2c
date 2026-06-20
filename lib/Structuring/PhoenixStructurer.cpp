@@ -1635,6 +1635,30 @@ BlockId findGraphWhileSuccessor(const StructuredCFG &Cfg,
   return TrueInLoop ? HeadBlock->Successors[1] : HeadBlock->Successors[0];
 }
 
+BlockId findGraphDoWhileSuccessor(const StructuredCFG &Cfg,
+                                  const MutableRegionGraph &Graph,
+                                  BlockId LatchBlockId,
+                                  GraphNodeId HeadId) {
+  if (LatchBlockId == InvalidBlockId) {
+    return InvalidBlockId;
+  }
+
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  const CFGBlock *LatchBlock = Cfg.getBlock(LatchBlockId);
+  if (Head == nullptr || Head->Blocks.empty() || LatchBlock == nullptr ||
+      LatchBlock->Terminator != TerminatorKind::Branch ||
+      LatchBlock->Successors.size() != 2) {
+    return InvalidBlockId;
+  }
+
+  bool TrueIsHead = LatchBlock->Successors[0] == Head->Blocks.front();
+  bool FalseIsHead = LatchBlock->Successors[1] == Head->Blocks.front();
+  if (TrueIsHead == FalseIsHead) {
+    return InvalidBlockId;
+  }
+  return TrueIsHead ? LatchBlock->Successors[1] : LatchBlock->Successors[0];
+}
+
 bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
                                   const Region &LoopRegion,
                                   const std::set<GraphNodeId> &Members,
@@ -1876,6 +1900,7 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
 
     std::set<GraphNodeId> MemberSet;
     BlockId LatchBlock = InvalidBlockId;
+    unsigned BackEdgeCount = 0;
     for (GraphNodeId LatchId : Head->Preds) {
       if (!Graph.hasEdge(LatchId, HeadId)) {
         continue;
@@ -1887,6 +1912,7 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
         continue;
       }
       MemberSet.insert(BackEdgeMembers.begin(), BackEdgeMembers.end());
+      ++BackEdgeCount;
 
       const MutableRegionNode *Latch = Graph.getNode(LatchId);
       if (Latch != nullptr && !Latch->Blocks.empty()) {
@@ -1899,8 +1925,17 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
 
     std::vector<BlockId> Successors =
         collectNaturalLoopSuccessors(Graph, MemberSet);
-    BlockId FollowBlock =
+    BlockId WhileFollowBlock =
         findGraphWhileSuccessor(Cfg, Graph, MemberSet, HeadId);
+    BlockId DoWhileFollowBlock =
+        BackEdgeCount == 1
+            ? findGraphDoWhileSuccessor(Cfg, Graph, LatchBlock, HeadId)
+            : InvalidBlockId;
+    bool PreferDoWhile = DoWhileFollowBlock != InvalidBlockId &&
+                         WhileFollowBlock != InvalidBlockId &&
+                         DoWhileFollowBlock != WhileFollowBlock;
+
+    BlockId FollowBlock = PreferDoWhile ? DoWhileFollowBlock : WhileFollowBlock;
     if (FollowBlock == InvalidBlockId) {
       FollowBlock = chooseNaturalLoopSuccessor(Graph, MemberSet, Successors);
     }
@@ -1943,11 +1978,15 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
                                  Tree);
 
     StructuredNode LoopNode;
-    if (!makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion, HeadId,
-                            Tree, LoopNode) &&
-        (Successors.size() > 1 ||
-        !makeGraphDoWhileLoop(Cfg, Graph, Members, LoopRegion, HeadId, Tree,
+    bool CanTryDoWhile = PreferDoWhile || Successors.size() <= 1;
+    if ((!PreferDoWhile &&
+         makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion, HeadId,
+                            Tree, LoopNode)) ||
+        (CanTryDoWhile &&
+         makeGraphDoWhileLoop(Cfg, Graph, Members, LoopRegion, HeadId, Tree,
                               LoopNode))) {
+      // LoopNode was filled by one of the schema builders.
+    } else {
       LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
     }
     Graph.collapseNodes(Members, LoopRegion.Head,
