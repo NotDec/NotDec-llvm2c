@@ -3,6 +3,7 @@
 
 #include "notdec-backends/Structuring/Region.h"
 
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <vector>
@@ -37,6 +38,9 @@ public:
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
+  std::size_t checkpoint();
+  void rollback(std::size_t Checkpoint);
+  void commit(std::size_t Checkpoint);
   void setStructuredRoot(RegionId Id, NodeId RootId);
   void clearStructuredRoot(RegionId Id);
 
@@ -44,6 +48,7 @@ private:
   RegionTree Regions;
   std::map<RegionId, RegionOverlay> Overlays;
   std::map<RegionId, NodeId> StructuredRoots;
+  std::vector<std::map<RegionId, NodeId>> StructuredRootCheckpoints;
 };
 
 class RegionOverlay {

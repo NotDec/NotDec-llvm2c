@@ -113,7 +113,10 @@ StructuredTree RecursiveStructurer::structure(const StructuredCFG &Cfg,
     return Tree;
   }
 
+  std::size_t Checkpoint = Manager.checkpoint();
   NodeId RootNode = structureOverlayTree(Cfg, Manager, *Root, Structurer, Tree);
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
   Tree.setRoot(RootNode);
   return Tree;
 }

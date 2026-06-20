@@ -248,7 +248,7 @@ void testRecursiveStructurerVisitsChildBeforeParent() {
   assert(Structurer.SeenRegions[0] == RegionKind::NaturalLoop);
   assert(Structurer.SeenRegions[1] == RegionKind::Root);
   assert(Manager.getStructuredRoot(RootId) == InvalidNodeId);
-  assert(!Manager.finalizedChildren(RootId).empty());
+  assert(Manager.finalizedChildren(RootId).empty());
 }
 
 void testGotoRegionSkipsChildBlocks() {

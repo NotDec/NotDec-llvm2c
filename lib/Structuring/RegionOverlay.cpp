@@ -78,6 +78,27 @@ OverlayManager::finalizedChildren(RegionId Id) const {
   return Result;
 }
 
+std::size_t OverlayManager::checkpoint() {
+  StructuredRootCheckpoints.push_back(StructuredRoots);
+  return StructuredRootCheckpoints.size() - 1;
+}
+
+void OverlayManager::rollback(std::size_t Checkpoint) {
+  if (Checkpoint >= StructuredRootCheckpoints.size()) {
+    return;
+  }
+  StructuredRoots = StructuredRootCheckpoints[Checkpoint];
+}
+
+void OverlayManager::commit(std::size_t Checkpoint) {
+  if (Checkpoint >= StructuredRootCheckpoints.size()) {
+    return;
+  }
+  StructuredRootCheckpoints.erase(StructuredRootCheckpoints.begin() +
+                                  Checkpoint,
+                                  StructuredRootCheckpoints.end());
+}
+
 void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId) {
   if (RootId == InvalidNodeId) {
     StructuredRoots.erase(Id);
