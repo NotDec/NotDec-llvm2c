@@ -291,6 +291,50 @@ void testRefineCyclicMergesMultipleLatches() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicVirtualizesNonFollowExits() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 5}));
+  Cfg.addBlock(branchBlock(2, {3, 6}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 5, 6};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
+  assert(Graph.virtualEdges().size() == 1);
+  assert(Graph.virtualEdges().front().ToBlock == 6);
+
+  bool FoundLoop = false;
+  for (GraphNodeId Id : Graph.activeNodes()) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    assert(Node != nullptr);
+    if (Node->StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+    const StructuredNode *RootNode = Tree.getNode(Node->StructuredRoot);
+    assert(RootNode != nullptr);
+    if (RootNode->Kind == StructuredNodeKind::While) {
+      FoundLoop = true;
+      assert(Node->Succs.size() == 1);
+      const MutableRegionNode *Follow = Graph.getNode(Node->Succs.front());
+      assert(Follow != nullptr);
+      assert(!Follow->Blocks.empty());
+      assert(Follow->Blocks.front() == 5);
+    }
+  }
+  assert(FoundLoop);
+}
+
 void testSAILROrderPrefersLeastSiblingEdges() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -390,6 +434,7 @@ int main() {
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();
+  testRefineCyclicVirtualizesNonFollowExits();
   testSAILROrderPrefersLeastSiblingEdges();
   testSAILROrderPrefersMostPostDominators();
   testSAILROrderPrefersReturnTargetTieBreak();

@@ -101,9 +101,9 @@ exit:
   ret i32 0
 }
 """,
-        "contains": ["while (1)", "continue;", "break;"],
+        "contains": ["while (x == 0)", "continue;", "break;"],
         "absent": ["goto exit"],
-        "counts": {"continue;": 2, "break;": 2},
+        "counts": {"continue;": 2, "break;": 1},
         "ordered": [("c();", "return 0;")],
     },
     {

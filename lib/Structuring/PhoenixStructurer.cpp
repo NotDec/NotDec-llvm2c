@@ -1275,6 +1275,12 @@ bool nodeTreeContainsStructuredControl(const StructuredTree &Tree, NodeId Id) {
          nodeTreeContainsKind(Tree, Id, StructuredNodeKind::InfiniteLoop);
 }
 
+bool nodeTreeContainsControlTransfer(const StructuredTree &Tree, NodeId Id) {
+  return nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Goto) ||
+         nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Break) ||
+         nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Continue);
+}
+
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
                         const std::vector<VirtualEdge> &VirtualEdges,
                         const Region &R, StructuredNode &Root,
@@ -1288,7 +1294,8 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     if (Tail == nullptr) {
       return;
     }
-    if (nodeTreeContainsStructuredControl(Tree, Node.StructuredRoot)) {
+    if (nodeTreeContainsStructuredControl(Tree, Node.StructuredRoot) ||
+        nodeTreeContainsControlTransfer(Tree, Node.StructuredRoot)) {
       for (const VirtualEdge &Edge : VirtualEdges) {
         if (!nodeContainsBlock(Node, Edge.ToBlock) &&
             !nodeHasSuccessorTarget(Cfg, Node, Edge.ToBlock)) {
@@ -1555,6 +1562,55 @@ collectNaturalLoopSuccessors(const MutableRegionGraph &Graph,
   return Successors;
 }
 
+BlockId chooseNaturalLoopSuccessor(const std::vector<BlockId> &Successors) {
+  if (Successors.empty()) {
+    return InvalidBlockId;
+  }
+  return *std::min_element(Successors.begin(), Successors.end());
+}
+
+bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
+                                  const Region &LoopRegion,
+                                  const std::set<GraphNodeId> &Members,
+                                  BlockId FollowBlock,
+                                  MutableRegionGraph &Graph,
+                                  StructuredTree &Tree) {
+  bool Changed = false;
+  std::vector<VirtualEdge> Edges;
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr) {
+      continue;
+    }
+    for (GraphNodeId SuccId : Node->Succs) {
+      if (Members.count(SuccId)) {
+        continue;
+      }
+      const MutableRegionNode *Succ = Graph.getNode(SuccId);
+      if (Succ == nullptr || Succ->Blocks.empty() ||
+          Succ->Blocks.front() == FollowBlock) {
+        continue;
+      }
+      Edges.push_back({Id, SuccId, Node->TailBlock, Succ->Blocks.front(),
+                       VirtualEdgeKind::Goto});
+    }
+  }
+
+  for (const VirtualEdge &Edge : Edges) {
+    const MutableRegionNode *Source = Graph.getNode(Edge.From);
+    if (Source != nullptr) {
+      NodeId Replacement = buildVirtualizedSource(Cfg, *Source, Edge,
+                                                  LoopRegion, Tree);
+      if (Replacement != InvalidNodeId) {
+        Graph.setStructuredRoot(Edge.From, Replacement);
+      }
+    }
+    Graph.virtualizeEdge(Edge.From, Edge.To, Edge.Kind);
+    Changed = true;
+  }
+  return Changed;
+}
+
 bool makeGraphWhileLoop(const StructuredCFG &Cfg,
                         const MutableRegionGraph &Graph,
                         const std::vector<GraphNodeId> &Members,
@@ -1673,15 +1729,16 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
 
     std::vector<BlockId> Successors =
         collectNaturalLoopSuccessors(Graph, MemberSet);
-    if (Successors.size() > 1) {
-      continue;
-    }
+    BlockId FollowBlock = chooseNaturalLoopSuccessor(Successors);
 
     Region LoopRegion;
     LoopRegion.Kind = RegionKind::NaturalLoop;
     LoopRegion.Head = Head->Blocks.front();
     LoopRegion.Latch = LatchBlock;
-    LoopRegion.Successors = Successors;
+    if (FollowBlock != InvalidBlockId) {
+      LoopRegion.Follow = FollowBlock;
+      LoopRegion.Successors = {FollowBlock};
+    }
 
     std::vector<GraphNodeId> Members(MemberSet.begin(), MemberSet.end());
     std::sort(Members.begin(), Members.end(), [&](GraphNodeId A,
@@ -1702,6 +1759,11 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
         LoopRegion.Blocks.insert(LoopRegion.Blocks.end(),
                                  Node->Blocks.begin(), Node->Blocks.end());
       }
+    }
+
+    if (Successors.size() > 1) {
+      virtualizeNonFollowLoopExits(Cfg, LoopRegion, MemberSet, FollowBlock,
+                                   Graph, Tree);
     }
 
     StructuredNode LoopNode;
