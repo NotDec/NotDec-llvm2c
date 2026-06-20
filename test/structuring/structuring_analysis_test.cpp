@@ -1,7 +1,9 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
+#include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cassert>
+#include <memory>
 
 using namespace notdec::backend::structuring;
 
@@ -151,6 +153,23 @@ void testFallthroughVirtualizationInstallsSourceRoot() {
   assert(Source->StructuredRoot != InvalidNodeId);
 }
 
+void testStructurerRegistryNames() {
+  llvm::ArrayRef<std::string_view> Names = registeredStructurerNames();
+  assert(Names.size() == 3);
+  assert(Names[0] == "goto");
+  assert(Names[1] == "phoenix");
+  assert(Names[2] == "sailr");
+
+  std::unique_ptr<Structurer> Goto = createStructurer("GOTO");
+  std::unique_ptr<Structurer> Phoenix = createStructurer("Phoenix");
+  std::unique_ptr<Structurer> Sailr = createStructurer("sailr");
+  std::unique_ptr<Structurer> Missing = createStructurer("dream");
+  assert(Goto != nullptr);
+  assert(Phoenix != nullptr);
+  assert(Sailr != nullptr);
+  assert(Missing == nullptr);
+}
+
 } // namespace
 
 int main() {
@@ -158,5 +177,6 @@ int main() {
   testEdgeVirtualizationHints();
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
+  testStructurerRegistryNames();
   return 0;
 }

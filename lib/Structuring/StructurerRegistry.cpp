@@ -4,6 +4,11 @@
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 
+#include <llvm/ADT/StringExtras.h>
+
+#include <algorithm>
+#include <array>
+
 namespace notdec::backend::structuring {
 namespace {
 
@@ -32,11 +37,22 @@ constexpr StructurerRegistration Structurers[] = {
     {"sailr", createSAILR},
 };
 
-constexpr std::string_view StructurerNames[] = {
-    "goto",
-    "phoenix",
-    "sailr",
-};
+constexpr auto makeStructurerNames() {
+  std::array<std::string_view, std::size(Structurers)> Names{};
+  for (std::size_t I = 0; I < std::size(Structurers); ++I) {
+    Names[I] = Structurers[I].Name;
+  }
+  return Names;
+}
+
+constexpr auto StructurerNames = makeStructurerNames();
+
+bool equalsIgnoreCase(std::string_view Lhs, std::string_view Rhs) {
+  return Lhs.size() == Rhs.size() &&
+         std::equal(Lhs.begin(), Lhs.end(), Rhs.begin(), [](char A, char B) {
+           return llvm::toLower(A) == llvm::toLower(B);
+         });
+}
 
 } // namespace
 
@@ -46,7 +62,7 @@ llvm::ArrayRef<std::string_view> registeredStructurerNames() {
 
 std::unique_ptr<Structurer> createStructurer(std::string_view Name) {
   for (const StructurerRegistration &Registration : Structurers) {
-    if (Registration.Name == Name) {
+    if (equalsIgnoreCase(Registration.Name, Name)) {
       return Registration.Factory();
     }
   }
