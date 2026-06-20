@@ -139,6 +139,38 @@ exit:
         "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
     },
     {
+        "name": "switch_before_sequence",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define i32 @main(i32 %x) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+default:
+  call void @a()
+  br label %exit
+
+case1:
+  call void @b()
+  br label %exit
+
+case2:
+  call void @b()
+  br label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
+        "absent": ["goto case1", "goto case2", "goto default"],
+    },
+    {
         "name": "early_return_if",
         "ir": r"""
 declare void @a()

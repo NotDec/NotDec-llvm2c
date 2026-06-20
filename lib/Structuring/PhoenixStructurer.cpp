@@ -325,13 +325,26 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
         break;
       }
     }
+    bool HasTerminalCasesOnly = Valid && FollowId == InvalidGraphNodeId;
     if (!Valid || FollowId == InvalidGraphNodeId) {
       std::set<GraphNodeId> UniqueTargets(Targets.begin(), Targets.end());
       if (Valid && UniqueTargets.size() == 1) {
         FollowId = *UniqueTargets.begin();
+        HasTerminalCasesOnly = false;
+      } else if (HasTerminalCasesOnly) {
+        for (GraphNodeId TargetId : Targets) {
+          const MutableRegionNode *Target = Graph.getNode(TargetId);
+          if (Target == nullptr || !Target->Succs.empty()) {
+            Valid = false;
+            break;
+          }
+        }
       } else {
         continue;
       }
+    }
+    if (!Valid) {
+      continue;
     }
 
     std::set<GraphNodeId> Members;
@@ -342,8 +355,10 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
       }
       const MutableRegionNode *Target = Graph.getNode(TargetId);
       if (Target == nullptr || Target->Preds.size() != 1 ||
-          Target->Preds[0] != HeaderId || Target->Succs.size() != 1 ||
-          Target->Succs[0] != FollowId) {
+          Target->Preds[0] != HeaderId ||
+          (HasTerminalCasesOnly ? !Target->Succs.empty()
+                                : (Target->Succs.size() != 1 ||
+                                   Target->Succs[0] != FollowId))) {
         Valid = false;
         break;
       }
@@ -1244,13 +1259,13 @@ std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
 bool PhoenixStructurer::analyzeAcyclic(const StructuredCFG &Cfg,
                                        MutableRegionGraph &Graph,
                                        StructuredTree &Tree) const {
+  if (reduceSwitchOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
   if (reduceSequenceOnce(Cfg, Graph, Tree)) {
     return true;
   }
-  if (reduceIfOnce(Cfg, Graph, Tree)) {
-    return true;
-  }
-  return reduceSwitchOnce(Cfg, Graph, Tree);
+  return reduceIfOnce(Cfg, Graph, Tree);
 }
 
 bool PhoenixStructurer::analyzeCyclic(const StructuredCFG &Cfg,
