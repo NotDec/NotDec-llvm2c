@@ -13,6 +13,28 @@ bool contains(const std::set<BlockId> &Values, BlockId Id) {
   return Values.find(Id) != Values.end();
 }
 
+bool contains(const std::vector<BlockId> &Values, BlockId Id) {
+  return std::find(Values.begin(), Values.end(), Id) != Values.end();
+}
+
+bool isSubset(const std::vector<BlockId> &A, const std::vector<BlockId> &B) {
+  for (BlockId Id : A) {
+    if (!contains(B, Id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool overlaps(const std::vector<BlockId> &A, const std::vector<BlockId> &B) {
+  for (BlockId Id : A) {
+    if (contains(B, Id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::set<BlockId> intersectSets(const std::set<BlockId> &A,
                                 const std::set<BlockId> &B) {
   std::set<BlockId> Result;
@@ -128,6 +150,117 @@ std::vector<BlockId> collectSuccessors(const StructuredCFG &Cfg,
   return {Successors.begin(), Successors.end()};
 }
 
+struct LoopCandidate {
+  BlockId Head = InvalidBlockId;
+  BlockId Latch = InvalidBlockId;
+  std::vector<BlockId> Blocks;
+};
+
+LoopCandidate makeLoopCandidate(BlockId Head, BlockId Latch,
+                                std::vector<BlockId> Blocks) {
+  LoopCandidate Candidate;
+  Candidate.Head = Head;
+  Candidate.Latch = Latch;
+  Candidate.Blocks = std::move(Blocks);
+  return Candidate;
+}
+
+void mergeLoopCandidate(std::vector<LoopCandidate> &Candidates,
+                        LoopCandidate Candidate,
+                        const std::vector<BlockId> &BlockOrder) {
+  for (LoopCandidate &Existing : Candidates) {
+    if (Existing.Head != Candidate.Head) {
+      continue;
+    }
+
+    std::set<BlockId> Blocks(Existing.Blocks.begin(), Existing.Blocks.end());
+    Blocks.insert(Candidate.Blocks.begin(), Candidate.Blocks.end());
+    std::vector<BlockId> Merged;
+    for (BlockId Id : BlockOrder) {
+      if (contains(Blocks, Id)) {
+        Merged.push_back(Id);
+      }
+    }
+    Existing.Blocks = std::move(Merged);
+    Existing.Latch = Candidate.Latch;
+    return;
+  }
+  Candidates.push_back(std::move(Candidate));
+}
+
+std::vector<LoopCandidate>
+collectLoopCandidates(const StructuredCFG &Cfg,
+                      const std::map<BlockId, std::set<BlockId>> &Preds,
+                      const std::map<BlockId, std::set<BlockId>> &Dom,
+                      const std::vector<BlockId> &BlockOrder) {
+  std::vector<LoopCandidate> Candidates;
+  for (const CFGBlock &Latch : Cfg.blocks()) {
+    for (BlockId Succ : Latch.Successors) {
+      auto DomIt = Dom.find(Latch.Id);
+      if (DomIt == Dom.end() || !contains(DomIt->second, Succ)) {
+        continue;
+      }
+
+      std::vector<BlockId> Blocks =
+          collectNaturalLoop(Succ, Latch.Id, Preds, BlockOrder);
+      if (Blocks.empty()) {
+        continue;
+      }
+      mergeLoopCandidate(Candidates,
+                         makeLoopCandidate(Succ, Latch.Id, std::move(Blocks)),
+                         BlockOrder);
+    }
+  }
+  return Candidates;
+}
+
+std::vector<LoopCandidate>
+filterLaminarLoops(std::vector<LoopCandidate> Candidates) {
+  std::vector<LoopCandidate> Result;
+  std::sort(Candidates.begin(), Candidates.end(),
+            [](const LoopCandidate &A, const LoopCandidate &B) {
+              if (A.Blocks.size() != B.Blocks.size()) {
+                return A.Blocks.size() < B.Blocks.size();
+              }
+              return A.Head < B.Head;
+            });
+
+  for (LoopCandidate &Candidate : Candidates) {
+    bool HasPartialOverlap = false;
+    for (const LoopCandidate &Existing : Result) {
+      if (!overlaps(Candidate.Blocks, Existing.Blocks)) {
+        continue;
+      }
+      if (!isSubset(Candidate.Blocks, Existing.Blocks) &&
+          !isSubset(Existing.Blocks, Candidate.Blocks)) {
+        HasPartialOverlap = true;
+        break;
+      }
+    }
+    if (!HasPartialOverlap) {
+      Result.push_back(std::move(Candidate));
+    }
+  }
+
+  return Result;
+}
+
+Region makeLoopRegion(const StructuredCFG &Cfg, const LoopCandidate &Candidate) {
+  std::set<BlockId> BlockSet(Candidate.Blocks.begin(), Candidate.Blocks.end());
+  std::vector<BlockId> Successors = collectSuccessors(Cfg, BlockSet);
+
+  Region Loop;
+  Loop.Kind = RegionKind::NaturalLoop;
+  Loop.Head = Candidate.Head;
+  Loop.Latch = Candidate.Latch;
+  if (Successors.size() == 1) {
+    Loop.Follow = Successors.front();
+  }
+  Loop.Blocks = Candidate.Blocks;
+  Loop.Successors = std::move(Successors);
+  return Loop;
+}
+
 void identifyNaturalLoopChildren(const StructuredCFG &Cfg, RegionTree &Tree,
                                  RegionId RootId) {
   Region *Root = Tree.getRegion(RootId);
@@ -145,36 +278,37 @@ void identifyNaturalLoopChildren(const StructuredCFG &Cfg, RegionTree &Tree,
     BlockOrder.push_back(Block.Id);
   }
 
-  std::set<std::vector<BlockId>> SeenLoops;
-  for (const CFGBlock &Latch : Cfg.blocks()) {
-    for (BlockId Succ : Latch.Successors) {
-      auto DomIt = Dom.find(Latch.Id);
-      if (DomIt == Dom.end() || !contains(DomIt->second, Succ)) {
+  std::vector<LoopCandidate> Candidates =
+      filterLaminarLoops(collectLoopCandidates(Cfg, Preds, Dom, BlockOrder));
+  std::map<RegionId, std::vector<BlockId>> RegionBlocks;
+  std::vector<RegionId> LoopRegionIds;
+  RegionBlocks[RootId] = Root->Blocks;
+
+  for (const LoopCandidate &Candidate : Candidates) {
+    Region Loop = makeLoopRegion(Cfg, Candidate);
+    RegionId LoopId = Tree.addRegion(std::move(Loop));
+    RegionBlocks[LoopId] = Candidate.Blocks;
+    LoopRegionIds.push_back(LoopId);
+  }
+
+  for (RegionId ChildId : LoopRegionIds) {
+    RegionId ParentId = RootId;
+    for (RegionId CandidateParent : LoopRegionIds) {
+      if (CandidateParent == ChildId) {
         continue;
       }
-
-      std::vector<BlockId> Blocks =
-          collectNaturalLoop(Succ, Latch.Id, Preds, BlockOrder);
-      if (Blocks.empty() || !SeenLoops.insert(Blocks).second) {
+      if (!isSubset(RegionBlocks[ChildId], RegionBlocks[CandidateParent])) {
         continue;
       }
+      if (RegionBlocks[CandidateParent].size() <
+          RegionBlocks[ParentId].size()) {
+        ParentId = CandidateParent;
+      }
+    }
 
-      std::set<BlockId> BlockSet(Blocks.begin(), Blocks.end());
-      std::vector<BlockId> Successors = collectSuccessors(Cfg, BlockSet);
-      Region Loop;
-      Loop.Kind = RegionKind::NaturalLoop;
-      Loop.Head = Succ;
-      Loop.Latch = Latch.Id;
-      if (Successors.size() == 1) {
-        Loop.Follow = Successors.front();
-      }
-      Loop.Blocks = std::move(Blocks);
-      Loop.Successors = std::move(Successors);
-      RegionId LoopId = Tree.addRegion(std::move(Loop));
-      Root = Tree.getRegion(RootId);
-      if (Root != nullptr) {
-        Root->Children.push_back(LoopId);
-      }
+    Region *Parent = Tree.getRegion(ParentId);
+    if (Parent != nullptr) {
+      Parent->Children.push_back(ChildId);
     }
   }
 }
