@@ -13,6 +13,8 @@ class RegionStructurer {
 public:
   virtual ~RegionStructurer() = default;
   virtual bool supportsChildRegions() const { return false; }
+  virtual bool shouldUseStructuredChildRegion(const StructuredTree &Tree,
+                                              NodeId ChildRoot) const;
   virtual bool shouldPassChildRegionToParent(const Region &Parent,
                                              const Region &Child) const {
     if (Parent.Kind == RegionKind::Root &&

@@ -52,7 +52,20 @@ public:
 
 class RecordingRegionStructurer : public RegionStructurer {
 public:
+  RecordingRegionStructurer(bool PassRootNaturalLoopChild = false,
+                            bool ChildHasStructuredControl = true)
+      : PassRootNaturalLoopChild(PassRootNaturalLoopChild),
+        ChildHasStructuredControl(ChildHasStructuredControl) {}
+
   bool supportsChildRegions() const override { return true; }
+  bool shouldPassChildRegionToParent(const Region &Parent,
+                                     const Region &Child) const override {
+    if (PassRootNaturalLoopChild && Parent.Kind == RegionKind::Root &&
+        Child.Kind == RegionKind::NaturalLoop) {
+      return true;
+    }
+    return RegionStructurer::shouldPassChildRegionToParent(Parent, Child);
+  }
 
   NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
                          StructuredTree &Tree) override {
@@ -71,7 +84,7 @@ public:
     ChildCounts.push_back(StructuredChildren.size());
 
     StructuredNode Node;
-    Node.Kind = R.Kind == RegionKind::NaturalLoop
+    Node.Kind = R.Kind == RegionKind::NaturalLoop && ChildHasStructuredControl
                     ? StructuredNodeKind::InfiniteLoop
                     : StructuredNodeKind::Sequence;
     Node.Block = R.Head;
@@ -80,6 +93,10 @@ public:
 
   std::vector<RegionKind> SeenRegions;
   std::vector<std::size_t> ChildCounts;
+
+private:
+  bool PassRootNaturalLoopChild;
+  bool ChildHasStructuredControl;
 };
 
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
@@ -244,6 +261,22 @@ void testRecursiveStructurerUsesChildPassPolicy() {
   assert(Structurer.SeenRegions[0] == RegionKind::NaturalLoop);
   assert(Structurer.SeenRegions[1] == RegionKind::Root);
   assert(Structurer.ChildCounts[0] == 0);
+  assert(Structurer.ChildCounts[1] == 0);
+}
+
+void testRecursiveStructurerFiltersUnstructuredChildResult() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {0}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions = RegionIdentifier::identifyRoot(Cfg);
+  RecordingRegionStructurer Structurer(/*PassRootNaturalLoopChild=*/true,
+                                       /*ChildHasStructuredControl=*/false);
+  StructuredTree Tree =
+      RecursiveStructurer().structure(Cfg, Regions, Structurer);
+  assert(Tree.root() != InvalidNodeId);
+  assert(Structurer.SeenRegions.size() == 2);
   assert(Structurer.ChildCounts[1] == 0);
 }
 
@@ -729,6 +762,7 @@ int main() {
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
   testRecursiveStructurerUsesChildPassPolicy();
+  testRecursiveStructurerFiltersUnstructuredChildResult();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();
