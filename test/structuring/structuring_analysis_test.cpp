@@ -320,7 +320,9 @@ void testGotoRegionSkipsChildBlocks() {
   }
   assert(FoundUnfinalizedChildLabel);
 
-  LoopOverlay->finalize(LoopRoot);
+  SuccessorSnapshot Snapshot = LoopOverlay->snapshotSuccessors();
+  assert(Snapshot.Successors.empty());
+  LoopOverlay->finalize(LoopRoot, Snapshot);
   NodeId RootRoot = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
   const StructuredNode *RootNode = Tree.getNode(RootRoot);
   assert(RootNode != nullptr);
@@ -339,6 +341,7 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   FirstChild.Kind = RegionKind::NaturalLoop;
   FirstChild.Head = 1;
   FirstChild.Blocks = {1};
+  FirstChild.Successors = {3};
   RegionId FirstChildId = Regions.addRegion(FirstChild);
   Region SecondChild;
   SecondChild.Kind = RegionKind::NaturalLoop;
@@ -362,7 +365,10 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
 
   RegionOverlay *FirstChildOverlay = Manager.getRegion(FirstChildId);
   assert(FirstChildOverlay != nullptr);
-  FirstChildOverlay->finalize(42);
+  SuccessorSnapshot FirstChildSnapshot =
+      FirstChildOverlay->snapshotSuccessors();
+  assert(FirstChildSnapshot.Successors == std::vector<BlockId>({3}));
+  FirstChildOverlay->finalize(42, FirstChildSnapshot);
   std::vector<FinalizedChildRegion> Finalized = Manager.finalizedChildren(RootId);
   assert(Finalized.size() == 1);
   assert(Finalized.front().RegionData != nullptr);

@@ -30,9 +30,9 @@ bool shouldFinalizeStructuredChild(const StructuredTree &Tree,
 }
 
 void finishChildRegion(const StructuredTree &Tree, RegionOverlay &Overlay,
-                       NodeId Root) {
+                       NodeId Root, const SuccessorSnapshot &Snapshot) {
   if (shouldFinalizeStructuredChild(Tree, Overlay, Root)) {
-    Overlay.finalize(Root);
+    Overlay.finalize(Root, Snapshot);
   } else {
     Overlay.dissolve();
   }
@@ -80,6 +80,7 @@ NodeId structureOverlayTree(const StructuredCFG &Cfg, OverlayManager &Manager,
 
     Stack.pop_back();
     const Region *R = Current->region();
+    SuccessorSnapshot Snapshot = Current->snapshotSuccessors();
     NodeId RootNode =
         R == nullptr ? InvalidNodeId
                      : Structurer.structureRegion(Cfg, *Current, Tree);
@@ -87,7 +88,7 @@ NodeId structureOverlayTree(const StructuredCFG &Cfg, OverlayManager &Manager,
     Processed.insert(Current->id());
 
     if (Current->id() != Root.id()) {
-      finishChildRegion(Tree, *Current, RootNode);
+      finishChildRegion(Tree, *Current, RootNode, Snapshot);
     }
   }
 

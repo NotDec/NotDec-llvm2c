@@ -18,6 +18,10 @@ struct FinalizedChildRegion {
   NodeId StructuredRoot = InvalidNodeId;
 };
 
+struct SuccessorSnapshot {
+  std::vector<BlockId> Successors;
+};
+
 // This is the first C++ step toward angr's OverlayManager/RegionOverlay model.
 // The full graph mutation API will be filled in as Phoenix/SAILR move over.
 // For now it gives RecursiveStructurer a shared region tree object instead of
@@ -70,7 +74,8 @@ public:
   const std::vector<RegionId> &children() const;
   bool isCollapsed() const;
   NodeId structuredRoot() const;
-  void finalize(NodeId RootId);
+  SuccessorSnapshot snapshotSuccessors() const;
+  void finalize(NodeId RootId, const SuccessorSnapshot &Snapshot = {});
   void dissolve();
 
 private:

@@ -168,7 +168,14 @@ NodeId RegionOverlay::structuredRoot() const {
   return Manager == nullptr ? InvalidNodeId : Manager->getStructuredRoot(Id);
 }
 
-void RegionOverlay::finalize(NodeId RootId) {
+SuccessorSnapshot RegionOverlay::snapshotSuccessors() const {
+  SuccessorSnapshot Snapshot;
+  Snapshot.Successors = successors();
+  return Snapshot;
+}
+
+void RegionOverlay::finalize(NodeId RootId, const SuccessorSnapshot &Snapshot) {
+  (void)Snapshot;
   if (Manager == nullptr || RootId == InvalidNodeId) {
     return;
   }
