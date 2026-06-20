@@ -31,6 +31,7 @@ protected:
   // same boundary here so SAILR and future algorithms can override one stage
   // without replacing the whole reducer loop.
   virtual bool analyzeAcyclic(const StructuredCFG &Cfg,
+                              const RegionTree &Regions, const Region &R,
                               MutableRegionGraph &Graph,
                               StructuredTree &Tree) const;
   virtual bool analyzeCyclic(const StructuredCFG &Cfg,

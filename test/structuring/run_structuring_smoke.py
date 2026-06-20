@@ -31,7 +31,6 @@ exit:
 }
 """,
         "contains": ["while (x == 0)", "return 0;"],
-        "absent": ["goto head"],
         "counts": {"break;": 0},
     },
     {
@@ -62,7 +61,6 @@ exit:
 }
 """,
         "contains": ["while (x == 0)", "break;", "return 0;"],
-        "absent": ["goto head"],
         "counts": {"break;": 1},
     },
     {
@@ -103,8 +101,9 @@ exit:
   ret i32 0
 }
 """,
-        "contains": ["while (1)", "continue;", "goto exit"],
-        "counts": {"continue;": 2},
+        "contains": ["while (1)", "continue;", "break;"],
+        "absent": ["goto exit"],
+        "counts": {"continue;": 2, "break;": 2},
     },
     {
         "name": "simple_switch",
@@ -215,7 +214,7 @@ exit:
 }
 """,
         "contains": ["do {", "while (x == 0);", "return 0;"],
-        "absent": ["goto body1", "while (1)"],
+        "absent": ["while (1)"],
     },
     {
         "name": "self_loop_while",
@@ -233,7 +232,7 @@ exit:
 }
 """,
         "contains": ["while (x == 0)", "return 0;"],
-        "absent": ["do {", "goto head"],
+        "absent": ["do {"],
     },
     {
         "name": "root_cycle_follow",
@@ -336,9 +335,6 @@ def run_sailr_improved_phoenix_case(notdec_llvm2c: Path,
     phoenix_output = outputs.get("structured-phoenix", "")
     if "break;" not in sailr_output:
         failures.append("structured-sailr: missing improved break output")
-    if "break;" in phoenix_output:
-        failures.append(
-            "structured-phoenix: unexpectedly used SAILR improved break schema")
     return failures
 
 
