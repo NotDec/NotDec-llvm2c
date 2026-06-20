@@ -1788,6 +1788,60 @@ bool makeGraphWhileLoop(const StructuredCFG &Cfg,
   return true;
 }
 
+bool makeGraphDoWhileLoop(const StructuredCFG &Cfg,
+                          const MutableRegionGraph &Graph,
+                          const std::vector<GraphNodeId> &Members,
+                          const Region &LoopRegion, GraphNodeId HeadId,
+                          StructuredTree &Tree, StructuredNode &LoopNode) {
+  if (LoopRegion.Latch == InvalidBlockId ||
+      LoopRegion.Successors.size() != 1) {
+    return false;
+  }
+
+  GraphNodeId LatchId = Graph.getNodeForBlock(LoopRegion.Latch);
+  const MutableRegionNode *Latch = Graph.getNode(LatchId);
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  if (Latch == nullptr || Head == nullptr || Head->Blocks.empty()) {
+    return false;
+  }
+
+  const CFGBlock *LatchBlock = Cfg.getBlock(Latch->Blocks.back());
+  if (LatchBlock == nullptr ||
+      LatchBlock->Terminator != TerminatorKind::Branch ||
+      LatchBlock->Successors.size() != 2) {
+    return false;
+  }
+
+  bool TrueIsHead = LatchBlock->Successors[0] == Head->Blocks.front();
+  bool FalseIsHead = LatchBlock->Successors[1] == Head->Blocks.front();
+  if (TrueIsHead == FalseIsHead) {
+    return false;
+  }
+  BlockId ExitBlock =
+      TrueIsHead ? LatchBlock->Successors[1] : LatchBlock->Successors[0];
+  if (ExitBlock != LoopRegion.Successors.front()) {
+    return false;
+  }
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  static const std::vector<VirtualEdge> EmptyVirtualEdges;
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node != nullptr) {
+      appendFallbackNode(Cfg, *Node, EmptyVirtualEdges, LoopRegion, Body,
+                         Tree);
+    }
+  }
+
+  LoopNode.Kind = StructuredNodeKind::DoWhile;
+  LoopNode.Block = LatchBlock->Id;
+  LoopNode.Condition = LatchBlock->Condition;
+  LoopNode.ConditionNegated = !TrueIsHead;
+  LoopNode.Body = Tree.addNode(std::move(Body));
+  return true;
+}
+
 StructuredNode makeGraphInfiniteLoop(const StructuredCFG &Cfg,
                                      const MutableRegionGraph &Graph,
                                      const std::vector<GraphNodeId> &Members,
@@ -1890,7 +1944,10 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
 
     StructuredNode LoopNode;
     if (!makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion, HeadId,
-                            Tree, LoopNode)) {
+                            Tree, LoopNode) &&
+        (Successors.size() > 1 ||
+        !makeGraphDoWhileLoop(Cfg, Graph, Members, LoopRegion, HeadId, Tree,
+                              LoopNode))) {
       LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
     }
     Graph.collapseNodes(Members, LoopRegion.Head,
