@@ -1923,7 +1923,7 @@ StructuredNode makeGraphInfiniteLoop(const StructuredCFG &Cfg,
   return LoopNode;
 }
 
-bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
+bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
                                 MutableRegionGraph &Graph,
                                 StructuredTree &Tree) {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
@@ -1960,6 +1960,9 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
 
     std::vector<BlockId> Successors =
         collectNaturalLoopSuccessors(Graph, MemberSet);
+    if (R.Kind != RegionKind::Root && Successors.size() > 1) {
+      continue;
+    }
     BlockId WhileFollowBlock =
         findGraphWhileSuccessor(Cfg, Graph, MemberSet, HeadId);
     BlockId DoWhileFollowBlock =
@@ -2177,7 +2180,7 @@ bool PhoenixStructurer::refineCyclic(const StructuredCFG &Cfg,
                                      const RegionTree &Regions, const Region &R,
                                      MutableRegionGraph &Graph,
                                      StructuredTree &Tree) const {
-  if (reduceGraphNaturalLoopOnce(Cfg, Graph, Tree)) {
+  if (reduceGraphNaturalLoopOnce(Cfg, R, Graph, Tree)) {
     return true;
   }
   return reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree);

@@ -467,6 +467,28 @@ void testRefineCyclicKeepsDanglingNonFollowExit() {
   assert(Graph.virtualEdges().empty());
 }
 
+void testRefineCyclicRejectsChildRegionMultipleSuccessors() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(branchBlock(2, {3, 5}));
+  Cfg.addBlock(branchBlock(3, {1, 6}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {}));
+
+  Region Loop;
+  Loop.Kind = RegionKind::NaturalLoop;
+  Loop.Head = 1;
+  Loop.Blocks = {1, 2, 3, 5, 6};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Loop);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(!Structurer.refineCyclic(Cfg, Regions, Loop, Graph, Tree));
+  assert(Graph.virtualEdges().empty());
+}
+
 void testRefineCyclicPrefersMostCommonExitAsFollow() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -614,6 +636,7 @@ int main() {
   testRefineCyclicPrefersDoWhileWhenLatchConditionWouldBecomeBreak();
   testRefineCyclicVirtualizesNonFollowExits();
   testRefineCyclicKeepsDanglingNonFollowExit();
+  testRefineCyclicRejectsChildRegionMultipleSuccessors();
   testRefineCyclicPrefersMostCommonExitAsFollow();
   testSAILROrderPrefersLeastSiblingEdges();
   testSAILROrderPrefersMostPostDominators();
