@@ -2,7 +2,6 @@ include(AddLLVM)
 add_library(notdec-backend-c SHARED STATIC
     ASTManager.cpp
     StructuralAnalysis.cpp
-    Phoenix.cpp
     CFG.cpp
     Goto.cpp
     StructuredGoto.cpp

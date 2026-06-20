@@ -72,7 +72,6 @@
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
 #include "notdec-llvm2c/Goto.h"
 #include "notdec-llvm2c/Interface.h"
-#include "notdec-llvm2c/Phoenix.h"
 #include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/StructuredGoto.h"
 #include "notdec-llvm2c/Utils.h"
@@ -2127,14 +2126,8 @@ void SAFuncContext::run() {
   if (getOpts().algo == SA_Goto) {
     StructuredGoto SA(*this);
     SA.execute();
-  } else if (getOpts().algo == SA_Phoenix) {
-    StructuredGoto SA(*this, "phoenix");
-    SA.execute();
   } else if (getOpts().algo == SA_StructuredGoto) {
     StructuredGoto SA(*this);
-    SA.execute();
-  } else if (getOpts().algo == SA_StructuredPhoenix) {
-    StructuredGoto SA(*this, "phoenix");
     SA.execute();
   } else if (getOpts().algo == SA_StructuredSAILR) {
     StructuredGoto SA(*this, "sailr");

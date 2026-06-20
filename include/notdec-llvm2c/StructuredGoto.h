@@ -7,9 +7,9 @@
 
 namespace notdec::llvm2c {
 
-// Trial adapter for the shared structuring layer. It keeps C-specific Clang AST
+// Adapter for the shared structuring layer. It keeps C-specific Clang AST
 // lowering in the old CFGBuilder path, converts that CFG to StructuredCFG, runs
-// GotoStructurer, then renders the tree back to the old C CFG.
+// the selected shared structurer, then renders the tree back to the old C CFG.
 class StructuredGoto : IStructuralAnalysis {
   std::string_view StructurerName;
 
