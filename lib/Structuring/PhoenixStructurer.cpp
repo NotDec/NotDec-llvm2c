@@ -1677,6 +1677,56 @@ bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
   return Changed;
 }
 
+bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
+                                  const Region &LoopRegion,
+                                  const std::set<GraphNodeId> &Members,
+                                  GraphNodeId HeadId,
+                                  MutableRegionGraph &Graph,
+                                  StructuredTree &Tree) {
+  std::vector<GraphNodeId> ContinueSources;
+  for (GraphNodeId Id : Members) {
+    if (Id != HeadId && Graph.hasEdge(Id, HeadId)) {
+      ContinueSources.push_back(Id);
+    }
+  }
+  if (ContinueSources.size() <= 1) {
+    return false;
+  }
+
+  std::sort(ContinueSources.begin(), ContinueSources.end(),
+            [&](GraphNodeId A, GraphNodeId B) {
+              const MutableRegionNode *ANode = Graph.getNode(A);
+              const MutableRegionNode *BNode = Graph.getNode(B);
+              BlockId ABlock = (ANode == nullptr || ANode->Blocks.empty())
+                                   ? InvalidBlockId
+                                   : ANode->Blocks.front();
+              BlockId BBlock = (BNode == nullptr || BNode->Blocks.empty())
+                                   ? InvalidBlockId
+                                   : BNode->Blocks.front();
+              return ABlock < BBlock;
+            });
+  ContinueSources.pop_back();
+
+  bool Changed = false;
+  for (GraphNodeId SourceId : ContinueSources) {
+    const MutableRegionNode *Source = Graph.getNode(SourceId);
+    const MutableRegionNode *Head = Graph.getNode(HeadId);
+    if (Source == nullptr || Head == nullptr || Head->Blocks.empty()) {
+      continue;
+    }
+    VirtualEdge Edge{SourceId, HeadId, Source->TailBlock, Head->Blocks.front(),
+                     VirtualEdgeKind::Continue};
+    NodeId Replacement =
+        buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion, Tree);
+    if (Replacement != InvalidNodeId) {
+      Graph.setStructuredRoot(SourceId, Replacement);
+    }
+    Graph.virtualizeEdge(SourceId, HeadId, Edge.Kind);
+    Changed = true;
+  }
+  return Changed;
+}
+
 bool makeGraphWhileLoop(const StructuredCFG &Cfg,
                         const MutableRegionGraph &Graph,
                         const std::vector<GraphNodeId> &Members,
@@ -1835,6 +1885,8 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
       virtualizeNonFollowLoopExits(Cfg, LoopRegion, MemberSet, FollowBlock,
                                    Graph, Tree);
     }
+    virtualizeExtraContinueEdges(Cfg, LoopRegion, MemberSet, HeadId, Graph,
+                                 Tree);
 
     StructuredNode LoopNode;
     if (!makeGraphWhileLoop(Cfg, Graph, Members, MemberSet, LoopRegion, HeadId,

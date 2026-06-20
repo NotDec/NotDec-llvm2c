@@ -291,6 +291,31 @@ void testRefineCyclicMergesMultipleLatches() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicVirtualizesExtraContinues() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 5}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {1}));
+  Cfg.addBlock(block(5, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4, 5};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
+  assert(Graph.virtualEdges().size() == 1);
+  assert(Graph.virtualEdges().front().Kind == VirtualEdgeKind::Continue);
+  assert(Graph.virtualEdges().front().ToBlock == 1);
+}
+
 void testRefineCyclicVirtualizesNonFollowExits() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -477,6 +502,7 @@ int main() {
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();
+  testRefineCyclicVirtualizesExtraContinues();
   testRefineCyclicVirtualizesNonFollowExits();
   testRefineCyclicPrefersMostCommonExitAsFollow();
   testSAILROrderPrefersLeastSiblingEdges();
