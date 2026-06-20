@@ -1,4 +1,5 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
+#include "notdec-backends/Structuring/GotoStructurer.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
@@ -97,6 +98,11 @@ public:
 private:
   bool PassRootNaturalLoopChild;
   bool ChildHasStructuredControl;
+};
+
+class GotoRegionTester : public GotoStructurer {
+public:
+  using GotoStructurer::structureRegion;
 };
 
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
@@ -278,6 +284,37 @@ void testRecursiveStructurerFiltersUnstructuredChildResult() {
   assert(Tree.root() != InvalidNodeId);
   assert(Structurer.SeenRegions.size() == 2);
   assert(Structurer.ChildCounts[1] == 0);
+}
+
+void testGotoRegionSkipsChildBlocks() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  RegionTree Regions;
+  Region Loop;
+  Loop.Kind = RegionKind::NaturalLoop;
+  Loop.Head = 1;
+  Loop.Blocks = {1};
+  RegionId LoopId = Regions.addRegion(Loop);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1};
+  Root.Children = {LoopId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  GotoRegionTester Structurer;
+  StructuredTree Tree;
+  std::map<RegionId, NodeId> EmptyChildren;
+  NodeId LoopRoot = Structurer.structureRegion(Cfg, Regions, Loop,
+                                               EmptyChildren, Tree);
+  NodeId RootRoot = Structurer.structureRegion(Cfg, Regions, Root,
+                                               {{LoopId, LoopRoot}}, Tree);
+  const StructuredNode *RootNode = Tree.getNode(RootRoot);
+  assert(RootNode != nullptr);
+  assert(RootNode->Children.size() >= 1);
 }
 
 void testMergedNaturalLoopKeepsAllLatchPaths() {
@@ -763,6 +800,7 @@ int main() {
   testStructurerRegistryNames();
   testRecursiveStructurerUsesChildPassPolicy();
   testRecursiveStructurerFiltersUnstructuredChildResult();
+  testGotoRegionSkipsChildBlocks();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
   testRefineCyclicMergesMultipleLatches();

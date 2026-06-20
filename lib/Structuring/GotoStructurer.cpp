@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 
 namespace notdec::backend::structuring {
 
@@ -109,20 +110,23 @@ NodeId GotoStructurer::structureRegion(
     const StructuredCFG &Cfg, const RegionTree &Regions, const Region &R,
     const std::map<RegionId, NodeId> &StructuredChildren,
     StructuredTree &Tree) {
-  (void)Regions;
   StructuredNode Root;
   Root.Kind = StructuredNodeKind::Sequence;
 
+  std::set<BlockId> ChildBlocks;
   for (RegionId ChildId : R.Children) {
     auto It = StructuredChildren.find(ChildId);
+    const Region *Child = Regions.getRegion(ChildId);
+    if (Child != nullptr) {
+      ChildBlocks.insert(Child->Blocks.begin(), Child->Blocks.end());
+    }
     if (It != StructuredChildren.end()) {
       Root.Children.push_back(It->second);
     }
   }
 
   for (BlockId Id : R.Blocks) {
-    if (std::find(R.Children.begin(), R.Children.end(), Id) !=
-        R.Children.end()) {
+    if (ChildBlocks.count(Id) != 0) {
       continue;
     }
     const CFGBlock *BlockPtr = Cfg.getBlock(Id);
