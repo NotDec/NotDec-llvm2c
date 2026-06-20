@@ -2126,6 +2126,9 @@ void SAFuncContext::run() {
   if (getOpts().algo == SA_Goto) {
     StructuredGoto SA(*this);
     SA.execute();
+  } else if (getOpts().algo == SA_StructuredPhoenix) {
+    StructuredGoto SA(*this, "phoenix");
+    SA.execute();
   } else if (getOpts().algo == SA_StructuredGoto) {
     StructuredGoto SA(*this);
     SA.execute();

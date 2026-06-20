@@ -16,6 +16,7 @@ namespace notdec::llvm2c {
 
 enum StructuralAlgorithms {
   SA_Goto,
+  SA_StructuredPhoenix,
   SA_StructuredGoto,
   SA_StructuredSAILR
 };
