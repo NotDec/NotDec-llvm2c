@@ -1123,6 +1123,47 @@ std::vector<VirtualEdge> PhoenixStructurer::orderVirtualizableEdges(
   return Edges;
 }
 
+bool PhoenixStructurer::analyzeAcyclic(const StructuredCFG &Cfg,
+                                       MutableRegionGraph &Graph,
+                                       StructuredTree &Tree) const {
+  if (reduceSequenceOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
+  if (reduceIfOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
+  return reduceSwitchOnce(Cfg, Graph, Tree);
+}
+
+bool PhoenixStructurer::analyzeCyclic(const StructuredCFG &Cfg,
+                                      MutableRegionGraph &Graph,
+                                      StructuredTree &Tree) const {
+  if (reduceLinearWhileOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
+  if (reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree)) {
+    return true;
+  }
+  return reduceSelfLoopOnce(Cfg, Graph, Tree);
+}
+
+bool PhoenixStructurer::refineCyclic(const StructuredCFG &Cfg,
+                                     const RegionTree &Regions,
+                                     const Region &R,
+                                     MutableRegionGraph &Graph,
+                                     StructuredTree &Tree) const {
+  return reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree);
+}
+
+bool PhoenixStructurer::lastResortRefinement(const StructuredCFG &Cfg,
+                                             const Region &R,
+                                             MutableRegionGraph &Graph) const {
+  if (Graph.activeNodes().size() <= 1) {
+    return false;
+  }
+  return virtualizeOneEdge(Cfg, R, Graph);
+}
+
 bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
                                           const Region &R,
                                           MutableRegionGraph &Graph) const {
@@ -1165,27 +1206,14 @@ NodeId PhoenixStructurer::structureRegion(
   Changed = preprocessRegionGraph(Cfg, R, Graph);
   do {
     Changed = false;
-    Changed = reduceLinearWhileOnce(Cfg, Graph, Tree);
-    if (!Changed) {
-      Changed = reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree);
-    }
-    if (!Changed) {
-      Changed = reduceSelfLoopOnce(Cfg, Graph, Tree);
-    }
-    if (!Changed) {
-      Changed = reduceSequenceOnce(Cfg, Graph, Tree);
-    }
-    if (!Changed) {
-      Changed = reduceIfOnce(Cfg, Graph, Tree);
-    }
-    if (!Changed) {
-      Changed = reduceSwitchOnce(Cfg, Graph, Tree);
-    }
-    if (!Changed) {
-      Changed = reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree);
-    }
-    if (!Changed && Graph.activeNodes().size() > 1) {
-      Changed = virtualizeOneEdge(Cfg, R, Graph);
+    if (analyzeAcyclic(Cfg, Graph, Tree)) {
+      Changed = true;
+    } else if (analyzeCyclic(Cfg, Graph, Tree)) {
+      Changed = true;
+    } else if (refineCyclic(Cfg, Regions, R, Graph, Tree)) {
+      Changed = true;
+    } else if (lastResortRefinement(Cfg, R, Graph)) {
+      Changed = true;
     }
     ++Iterations;
   } while (Changed && Iterations < 1000);

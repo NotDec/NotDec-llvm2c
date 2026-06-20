@@ -26,6 +26,21 @@ public:
                          StructuredTree &Tree) override;
 
 protected:
+  // Angr's Phoenix keeps these stages separate: acyclic schemas, cyclic
+  // schemas, cyclic refinement, and last-resort edge virtualization. Keep the
+  // same boundary here so SAILR and future algorithms can override one stage
+  // without replacing the whole reducer loop.
+  virtual bool analyzeAcyclic(const StructuredCFG &Cfg,
+                              MutableRegionGraph &Graph,
+                              StructuredTree &Tree) const;
+  virtual bool analyzeCyclic(const StructuredCFG &Cfg,
+                             MutableRegionGraph &Graph,
+                             StructuredTree &Tree) const;
+  virtual bool refineCyclic(const StructuredCFG &Cfg, const RegionTree &Regions,
+                            const Region &R, MutableRegionGraph &Graph,
+                            StructuredTree &Tree) const;
+  virtual bool lastResortRefinement(const StructuredCFG &Cfg, const Region &R,
+                                    MutableRegionGraph &Graph) const;
   virtual bool preprocessRegionGraph(const StructuredCFG &Cfg, const Region &R,
                                      MutableRegionGraph &Graph) const {
     (void)Cfg;
