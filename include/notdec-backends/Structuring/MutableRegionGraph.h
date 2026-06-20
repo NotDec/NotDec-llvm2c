@@ -4,6 +4,7 @@
 #include "notdec-backends/Structuring/RegionOverlay.h"
 #include "notdec-backends/Structuring/Region.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -81,6 +82,9 @@ public:
   std::vector<GraphNodeId> activeNodes() const;
   bool hasCycle() const;
   bool hasEdge(GraphNodeId From, GraphNodeId To) const;
+  std::size_t checkpoint();
+  void rollback(std::size_t Checkpoint);
+  void commit(std::size_t Checkpoint);
   void addEdge(GraphNodeId From, GraphNodeId To);
   void removeEdge(GraphNodeId From, GraphNodeId To);
   void setStructuredRoot(GraphNodeId Id, NodeId StructuredRoot);
@@ -102,6 +106,9 @@ private:
 
   std::vector<MutableRegionNode> Nodes;
   std::vector<VirtualEdge> VirtualizedEdges;
+  std::vector<std::pair<std::vector<MutableRegionNode>,
+                        std::vector<VirtualEdge>>>
+      Checkpoints;
 };
 
 } // namespace notdec::backend::structuring

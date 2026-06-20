@@ -2241,10 +2241,18 @@ bool PhoenixStructurer::refineCyclic(const StructuredCFG &Cfg,
                                      const RegionTree &Regions, const Region &R,
                                      MutableRegionGraph &Graph,
                                      StructuredTree &Tree) const {
+  std::size_t Checkpoint = Graph.checkpoint();
   if (reduceGraphNaturalLoopOnce(Cfg, R, Graph, Tree)) {
+    Graph.commit(Checkpoint);
     return true;
   }
-  return reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree);
+  if (reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree)) {
+    Graph.commit(Checkpoint);
+    return true;
+  }
+  Graph.rollback(Checkpoint);
+  Graph.commit(Checkpoint);
+  return false;
 }
 
 bool PhoenixStructurer::lastResortRefinement(const StructuredCFG &Cfg,

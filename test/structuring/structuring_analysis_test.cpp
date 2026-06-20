@@ -125,6 +125,33 @@ void testAcyclicDroppedEdges() {
   assert(Edge.ToBlock == 1);
 }
 
+void testMutableRegionGraphCheckpointRestoresMutations() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  std::size_t Checkpoint = Graph.checkpoint();
+  Graph.virtualizeEdge(Graph.getNodeForBlock(0), Graph.getNodeForBlock(1),
+                       VirtualEdgeKind::Goto);
+  Graph.collapseNodes({Graph.getNodeForBlock(1), Graph.getNodeForBlock(2)}, 1,
+                      42);
+  assert(Graph.virtualEdges().size() == 1);
+  assert(Graph.activeNodes().size() == 2);
+
+  Graph.rollback(Checkpoint);
+  Graph.commit(Checkpoint);
+  assert(Graph.virtualEdges().empty());
+  assert(Graph.activeNodes().size() == 3);
+  assert(Graph.hasEdge(Graph.getNodeForBlock(0), Graph.getNodeForBlock(1)));
+}
+
 void testEdgeVirtualizationHints() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 2}));
@@ -860,6 +887,7 @@ void testSAILROrderPrefersReturnTargetTieBreak() {
 
 int main() {
   testAcyclicDroppedEdges();
+  testMutableRegionGraphCheckpointRestoresMutations();
   testEdgeVirtualizationHints();
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();

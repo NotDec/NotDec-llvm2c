@@ -564,6 +564,26 @@ bool MutableRegionGraph::hasEdge(GraphNodeId From, GraphNodeId To) const {
   return contains(FromNode->Succs, To);
 }
 
+std::size_t MutableRegionGraph::checkpoint() {
+  Checkpoints.push_back({Nodes, VirtualizedEdges});
+  return Checkpoints.size() - 1;
+}
+
+void MutableRegionGraph::rollback(std::size_t Checkpoint) {
+  if (Checkpoint >= Checkpoints.size()) {
+    return;
+  }
+  Nodes = Checkpoints[Checkpoint].first;
+  VirtualizedEdges = Checkpoints[Checkpoint].second;
+}
+
+void MutableRegionGraph::commit(std::size_t Checkpoint) {
+  if (Checkpoint >= Checkpoints.size()) {
+    return;
+  }
+  Checkpoints.erase(Checkpoints.begin() + Checkpoint, Checkpoints.end());
+}
+
 void MutableRegionGraph::addEdge(GraphNodeId From, GraphNodeId To) {
   MutableRegionNode *FromNode = getNode(From);
   MutableRegionNode *ToNode = getNode(To);
