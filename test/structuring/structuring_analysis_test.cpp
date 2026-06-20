@@ -1,6 +1,7 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
+#include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cassert>
@@ -33,6 +34,12 @@ protected:
 private:
   GraphNodeId From;
   GraphNodeId To;
+};
+
+class TestSAILRStructurer : public SAILRStructurer {
+public:
+  using SAILRStructurer::SAILRStructurer;
+  using SAILRStructurer::orderVirtualizableEdges;
 };
 
 CFGBlock block(BlockId Id, std::vector<BlockId> Successors) {
@@ -194,6 +201,64 @@ void testMergedNaturalLoopKeepsAllLatchPaths() {
   assert(Loop->Follow == 5);
 }
 
+void testSAILROrderPrefersLeastSiblingEdges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {3, 4}));
+  Cfg.addBlock(block(3, {}));
+  Cfg.addBlock(block(4, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  std::vector<VirtualEdge> Edges = {
+      {1, 3, 1, 3, VirtualEdgeKind::Goto},
+      {2, 4, 2, 4, VirtualEdgeKind::Goto},
+  };
+
+  TestSAILRStructurer Structurer;
+  std::vector<VirtualEdge> Ordered =
+      Structurer.orderVirtualizableEdges(Cfg, Graph, Analysis, Edges);
+  assert(!Ordered.empty());
+  assert(Ordered.front().FromBlock == 1);
+  assert(Ordered.front().ToBlock == 3);
+}
+
+void testSAILROrderPrefersReturnTargetTieBreak() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {3, 4}));
+  Cfg.addBlock(block(2, {3, 4}));
+  Cfg.addBlock(block(3, {}));
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4, 5};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  std::vector<VirtualEdge> Edges = {
+      {1, 3, 1, 3, VirtualEdgeKind::Goto},
+      {1, 4, 1, 4, VirtualEdgeKind::Goto},
+  };
+
+  TestSAILRStructurer Structurer(/*PostDomMaxEdges=*/0,
+                                 /*PostDomMaxGraphSize=*/0);
+  std::vector<VirtualEdge> Ordered =
+      Structurer.orderVirtualizableEdges(Cfg, Graph, Analysis, Edges);
+  assert(!Ordered.empty());
+  assert(Ordered.front().FromBlock == 1);
+  assert(Ordered.front().ToBlock == 3);
+}
+
 } // namespace
 
 int main() {
@@ -203,5 +268,7 @@ int main() {
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
   testMergedNaturalLoopKeepsAllLatchPaths();
+  testSAILROrderPrefersLeastSiblingEdges();
+  testSAILROrderPrefersReturnTargetTieBreak();
   return 0;
 }
