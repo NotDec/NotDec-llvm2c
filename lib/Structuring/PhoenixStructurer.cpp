@@ -1562,11 +1562,77 @@ collectNaturalLoopSuccessors(const MutableRegionGraph &Graph,
   return Successors;
 }
 
-BlockId chooseNaturalLoopSuccessor(const std::vector<BlockId> &Successors) {
+BlockId chooseNaturalLoopSuccessor(const MutableRegionGraph &Graph,
+                                   const std::set<GraphNodeId> &Members,
+                                   const std::vector<BlockId> &Successors) {
   if (Successors.empty()) {
     return InvalidBlockId;
   }
-  return *std::min_element(Successors.begin(), Successors.end());
+
+  std::map<BlockId, unsigned> EdgeCounts;
+  for (BlockId Successor : Successors) {
+    EdgeCounts[Successor] = 0;
+  }
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr) {
+      continue;
+    }
+    for (GraphNodeId SuccId : Node->Succs) {
+      if (Members.count(SuccId)) {
+        continue;
+      }
+      const MutableRegionNode *Succ = Graph.getNode(SuccId);
+      if (Succ != nullptr && !Succ->Blocks.empty()) {
+        ++EdgeCounts[Succ->Blocks.front()];
+      }
+    }
+    for (BlockId Succ : Node->ExternalSuccs) {
+      ++EdgeCounts[Succ];
+    }
+  }
+
+  return *std::min_element(
+      Successors.begin(), Successors.end(), [&](BlockId A, BlockId B) {
+        unsigned ACount = EdgeCounts[A];
+        unsigned BCount = EdgeCounts[B];
+        if (ACount != BCount) {
+          return ACount > BCount;
+        }
+        return A < B;
+      });
+}
+
+BlockId findGraphWhileSuccessor(const StructuredCFG &Cfg,
+                                const MutableRegionGraph &Graph,
+                                const std::set<GraphNodeId> &MemberSet,
+                                GraphNodeId HeadId) {
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  if (Head == nullptr || Head->Blocks.empty()) {
+    return InvalidBlockId;
+  }
+
+  const CFGBlock *HeadBlock = Cfg.getBlock(Head->Blocks.back());
+  if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Branch ||
+      !HeadBlock->Statements.empty() || HeadBlock->Successors.size() != 2) {
+    return InvalidBlockId;
+  }
+  for (BlockId PrefixBlock : std::vector<BlockId>(Head->Blocks.begin(),
+                                                  Head->Blocks.end() - 1)) {
+    const CFGBlock *Block = Cfg.getBlock(PrefixBlock);
+    if (Block == nullptr || !Block->Statements.empty()) {
+      return InvalidBlockId;
+    }
+  }
+
+  GraphNodeId TrueId = Graph.getNodeForBlock(HeadBlock->Successors[0]);
+  GraphNodeId FalseId = Graph.getNodeForBlock(HeadBlock->Successors[1]);
+  bool TrueInLoop = MemberSet.count(TrueId) != 0;
+  bool FalseInLoop = MemberSet.count(FalseId) != 0;
+  if (TrueInLoop == FalseInLoop) {
+    return InvalidBlockId;
+  }
+  return TrueInLoop ? HeadBlock->Successors[1] : HeadBlock->Successors[0];
 }
 
 bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
@@ -1729,7 +1795,11 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg,
 
     std::vector<BlockId> Successors =
         collectNaturalLoopSuccessors(Graph, MemberSet);
-    BlockId FollowBlock = chooseNaturalLoopSuccessor(Successors);
+    BlockId FollowBlock =
+        findGraphWhileSuccessor(Cfg, Graph, MemberSet, HeadId);
+    if (FollowBlock == InvalidBlockId) {
+      FollowBlock = chooseNaturalLoopSuccessor(Graph, MemberSet, Successors);
+    }
 
     Region LoopRegion;
     LoopRegion.Kind = RegionKind::NaturalLoop;
