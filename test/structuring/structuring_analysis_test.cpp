@@ -870,6 +870,42 @@ void testOverlaySharedEdgeMutationsUpdateViews() {
   assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({1}));
 }
 
+void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  std::size_t Checkpoint = Manager.checkpoint();
+
+  RootOverlay->addBlockMember(3);
+  assert(Manager.ownerOf(3) == RootId);
+  assert(Manager.members(RootId).back().Kind == OverlayMemberKind::Block);
+  assert(Manager.members(RootId).back().Block == 3);
+  RootOverlay->addEdge(0, 3);
+  assert(Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false).size() ==
+         1);
+
+  RootOverlay->removeBlockMember(3);
+  assert(Manager.ownerOf(3) == InvalidRegionId);
+  assert(Manager.sharedSuccessors(0).empty());
+  assert(Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false).empty());
+
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.ownerOf(3) == InvalidRegionId);
+  assert(Manager.members(RootId).size() == 1);
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1593,6 +1629,7 @@ int main() {
   testOverlayFullViewAddsLoopSuccessorEdges();
   testOverlayViewOnlyMutationsAffectQuotientEdges();
   testOverlaySharedEdgeMutationsUpdateViews();
+  testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();

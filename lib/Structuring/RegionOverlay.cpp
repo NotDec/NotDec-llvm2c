@@ -37,6 +37,17 @@ bool sameEdge(const OverlayViewEdge &Lhs, const OverlayViewEdge &Rhs) {
          Lhs.ExternalSuccessor == Rhs.ExternalSuccessor;
 }
 
+bool memberReferencesBlock(const OverlayMember &Member, BlockId Block) {
+  return Member.Kind == OverlayMemberKind::Block && Member.Block == Block;
+}
+
+bool edgeReferencesBlock(const OverlayViewEdge &Edge, BlockId Block) {
+  return (Edge.sourcesMember() && memberReferencesBlock(Edge.From, Block)) ||
+         (!Edge.sourcesMember() && Edge.ExternalSource == Block) ||
+         (Edge.targetsMember() && memberReferencesBlock(Edge.To, Block)) ||
+         (!Edge.targetsMember() && Edge.ExternalSuccessor == Block);
+}
+
 void appendUniqueEdge(std::vector<OverlayViewEdge> &Edges,
                       const OverlayViewEdge &Edge) {
   auto It = std::find_if(Edges.begin(), Edges.end(),
@@ -299,6 +310,39 @@ void OverlayManager::clearHiddenEdge(BlockId From, BlockId To) {
   }
 }
 
+void OverlayManager::clearEdgeStateForBlock(BlockId Block) {
+  SharedSuccessors.erase(Block);
+  for (auto &Entry : SharedSuccessors) {
+    std::vector<BlockId> &Succs = Entry.second;
+    Succs.erase(std::remove(Succs.begin(), Succs.end(), Block), Succs.end());
+  }
+
+  for (auto &Entry : HiddenEdges) {
+    std::vector<OverlayHiddenEdge> &Edges = Entry.second;
+    Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
+                               [&](const OverlayHiddenEdge &Edge) {
+                                 return Edge.From == Block || Edge.To == Block;
+                               }),
+                Edges.end());
+  }
+  for (auto &Entry : HiddenFullEdges) {
+    std::vector<OverlayViewEdge> &Edges = Entry.second;
+    Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
+                               [&](const OverlayViewEdge &Edge) {
+                                 return edgeReferencesBlock(Edge, Block);
+                               }),
+                Edges.end());
+  }
+  for (auto &Entry : ExtraFullEdges) {
+    std::vector<OverlayViewEdge> &Edges = Entry.second;
+    Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
+                               [&](const OverlayViewEdge &Edge) {
+                                 return edgeReferencesBlock(Edge, Block);
+                               }),
+                Edges.end());
+  }
+}
+
 std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
   std::vector<BlockId> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
@@ -412,6 +456,34 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
     }
   }
   return Result;
+}
+
+void OverlayManager::addBlockMember(RegionId Id, BlockId Block) {
+  std::vector<OverlayMember> &ViewMembers = Members[Id];
+  auto It = std::find_if(ViewMembers.begin(), ViewMembers.end(),
+                         [&](const OverlayMember &Member) {
+                           return memberReferencesBlock(Member, Block);
+                         });
+  if (It == ViewMembers.end()) {
+    ViewMembers.push_back(OverlayMember::block(Block));
+  }
+  BlockOwners[Block] = Id;
+  SharedSuccessors[Block];
+}
+
+void OverlayManager::removeBlockMember(BlockId Block) {
+  RegionId Owner = ownerOf(Block);
+  if (Owner != InvalidRegionId) {
+    std::vector<OverlayMember> &ViewMembers = Members[Owner];
+    ViewMembers.erase(std::remove_if(ViewMembers.begin(), ViewMembers.end(),
+                                     [&](const OverlayMember &Member) {
+                                       return memberReferencesBlock(Member,
+                                                                    Block);
+                                     }),
+                      ViewMembers.end());
+  }
+  BlockOwners.erase(Block);
+  clearEdgeStateForBlock(Block);
 }
 
 void OverlayManager::addEdge(BlockId From, BlockId To) {
@@ -673,6 +745,18 @@ SuccessorSnapshot RegionOverlay::snapshotSuccessors() const {
     Snapshot.Successors = successors();
   }
   return Snapshot;
+}
+
+void RegionOverlay::addBlockMember(BlockId Block) {
+  if (Manager != nullptr) {
+    Manager->addBlockMember(Id, Block);
+  }
+}
+
+void RegionOverlay::removeBlockMember(BlockId Block) {
+  if (Manager != nullptr) {
+    Manager->removeBlockMember(Block);
+  }
 }
 
 void RegionOverlay::addEdge(BlockId From, BlockId To) {
