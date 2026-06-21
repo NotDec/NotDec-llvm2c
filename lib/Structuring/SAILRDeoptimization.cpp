@@ -801,20 +801,7 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
         continue;
       }
 
-      std::vector<BlockId> UpdatedPreds;
-      bool Changed = false;
-      for (BlockId Pred : DropPreds) {
-        if (!Graph.hasEdge(Pred, DropId)) {
-          continue;
-        }
-        if (!Graph.replaceEdge(Pred, DropId, Keep->Id)) {
-          continue;
-        }
-        UpdatedPreds.push_back(Pred);
-        Changed = true;
-      }
-
-      if (!Changed || UpdatedPreds.size() != DropPreds.size()) {
+      if (!Graph.redirectPredecessors(DropId, Keep->Id, DropPreds)) {
         continue;
       }
 

@@ -1166,6 +1166,38 @@ void testDuplicationReverterMergesExactDuplicateBlocks() {
   assert(hasSinglePayload(NewBlock1->Statements, 7));
 }
 
+void testDuplicationReverterRedirectsSwitchPredecessorCases() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {9});
+  Switch.Cases.push_back({{}, 2});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Keep = block(1, {4});
+  Keep.Statements.push_back({7});
+  Cfg.addBlock(std::move(Keep));
+
+  CFGBlock Drop = block(2, {4});
+  Drop.Statements.push_back({7});
+  Cfg.addBlock(std::move(Drop));
+
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(9, {}));
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *SwitchBlock = Cfg.getBlock(0);
+  assert(SwitchBlock != nullptr);
+  assert(SwitchBlock->Successors == std::vector<BlockId>{9});
+  assert(SwitchBlock->Cases.size() == 1);
+  assert(SwitchBlock->Cases.front().Target == 1);
+}
+
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -4474,6 +4506,7 @@ int main() {
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
+  testDuplicationReverterRedirectsSwitchPredecessorCases();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCopiesConnectedPredsOnce();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
