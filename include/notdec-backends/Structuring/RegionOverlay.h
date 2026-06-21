@@ -30,6 +30,32 @@ enum class OverlayMemberKind {
   Structured,
 };
 
+enum class OverlayNodeKind {
+  Block,
+  Region,
+  Structured,
+};
+
+// Stable identity for a node visible in an overlay graph view. Angr view nodes
+// can be real graph nodes or child RegionOverlay objects. NotDec keeps the same
+// split explicit so the shared graph can later move beyond raw BlockId without
+// losing the current block-based renderer path.
+struct OverlayNodeKey {
+  OverlayNodeKind Kind = OverlayNodeKind::Block;
+  BlockId Block = InvalidBlockId;
+  RegionId Region = InvalidRegionId;
+  NodeId StructuredRoot = InvalidNodeId;
+
+  static OverlayNodeKey block(BlockId Id);
+  static OverlayNodeKey region(RegionId Id);
+  static OverlayNodeKey structured(NodeId Id,
+                                   RegionId SourceRegion = InvalidRegionId);
+
+  bool isBlock() const { return Kind == OverlayNodeKind::Block; }
+  bool isRegion() const { return Kind == OverlayNodeKind::Region; }
+  bool isStructured() const { return Kind == OverlayNodeKind::Structured; }
+};
+
 // One member visible in a RegionOverlay. Angr stores either graph nodes or child
 // RegionOverlay objects in the same member set. NotDec keeps stable ids here so
 // the existing BlockId/NodeId based reducers can migrate in small steps.
@@ -94,6 +120,7 @@ public:
   RegionId parentOf(RegionId Id) const;
   RegionId ownerOf(BlockId Id) const;
   const std::vector<OverlayMember> &members(RegionId Id) const;
+  OverlayNodeKey nodeKey(const OverlayMember &Member) const;
   BlockId representativeBlock(const OverlayMember &Member) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;

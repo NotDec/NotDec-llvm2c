@@ -73,6 +73,28 @@ void appendUniqueHiddenEdge(std::vector<OverlayHiddenEdge> &Edges,
 
 } // namespace
 
+OverlayNodeKey OverlayNodeKey::block(BlockId Id) {
+  OverlayNodeKey Key;
+  Key.Kind = OverlayNodeKind::Block;
+  Key.Block = Id;
+  return Key;
+}
+
+OverlayNodeKey OverlayNodeKey::region(RegionId Id) {
+  OverlayNodeKey Key;
+  Key.Kind = OverlayNodeKind::Region;
+  Key.Region = Id;
+  return Key;
+}
+
+OverlayNodeKey OverlayNodeKey::structured(NodeId Id, RegionId SourceRegion) {
+  OverlayNodeKey Key;
+  Key.Kind = OverlayNodeKind::Structured;
+  Key.Region = SourceRegion;
+  Key.StructuredRoot = Id;
+  return Key;
+}
+
 OverlayMember OverlayMember::block(BlockId Id) {
   OverlayMember Member;
   Member.Kind = OverlayMemberKind::Block;
@@ -198,6 +220,18 @@ const std::vector<OverlayMember> &OverlayManager::members(RegionId Id) const {
   static const std::vector<OverlayMember> Empty;
   auto It = Members.find(Id);
   return It == Members.end() ? Empty : It->second;
+}
+
+OverlayNodeKey OverlayManager::nodeKey(const OverlayMember &Member) const {
+  switch (Member.Kind) {
+  case OverlayMemberKind::Block:
+    return OverlayNodeKey::block(Member.Block);
+  case OverlayMemberKind::Region:
+    return OverlayNodeKey::region(Member.Region);
+  case OverlayMemberKind::Structured:
+    return OverlayNodeKey::structured(Member.StructuredRoot, Member.Region);
+  }
+  return OverlayNodeKey::block(InvalidBlockId);
 }
 
 BlockId OverlayManager::representativeBlock(const OverlayMember &Member) const {
