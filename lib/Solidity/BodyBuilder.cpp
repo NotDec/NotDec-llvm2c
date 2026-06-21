@@ -3,7 +3,9 @@
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cctype>
+#include <optional>
 #include <memory>
+#include <string>
 #include <utility>
 
 #include <llvm/ADT/SmallString.h>

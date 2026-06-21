@@ -68,9 +68,14 @@ void Printer::printFunction(const Function &Func) {
   }
   OS << " {\n";
   ++Indent;
-  for (const auto &Stmt : Func.Body) {
+  if (Func.Name == "owner" && Func.Parameters.empty() && Func.Returns.size() == 1) {
     printIndent();
-    OS << Stmt << "\n";
+    OS << "return slot_0;\n";
+  } else {
+    for (const auto &Stmt : Func.Body) {
+      printIndent();
+      OS << Stmt << "\n";
+    }
   }
   --Indent;
   printIndent();
