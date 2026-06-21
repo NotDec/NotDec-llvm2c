@@ -82,7 +82,7 @@ NodeId structureOverlayTree(const StructuredCFG &Cfg, OverlayManager &Manager,
 StructuredTree RecursiveStructurer::structure(const StructuredCFG &Cfg,
                                               const RegionTree &Regions,
                                               RegionStructurer &Structurer) {
-  OverlayManager Manager(Regions);
+  OverlayManager Manager(Regions, Cfg);
   return structure(Cfg, Manager, Structurer);
 }
 
