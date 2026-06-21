@@ -75,6 +75,7 @@ public:
   const CFGBlock *getBodyBlock(BlockId Id) const;
   bool hasEdge(BlockId From, BlockId To) const;
   std::vector<BlockId> predecessorsOf(BlockId Target) const;
+  bool replaceEdge(BlockId From, BlockId OldTarget, BlockId NewTarget);
   bool redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
                             const std::vector<BlockId> &Preds);
   bool removeBlock(BlockId Id);

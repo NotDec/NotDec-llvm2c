@@ -102,6 +102,16 @@ std::vector<BlockId> StructuredCFG::predecessorsOf(BlockId Target) const {
   return Preds;
 }
 
+bool StructuredCFG::replaceEdge(BlockId From, BlockId OldTarget,
+                                BlockId NewTarget) {
+  CFGBlock *Block = getBlock(From);
+  if (Block == nullptr || !hasTarget(*Block, OldTarget)) {
+    return false;
+  }
+  replaceTarget(*Block, OldTarget, NewTarget);
+  return true;
+}
+
 bool StructuredCFG::redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
                                          const std::vector<BlockId> &Preds) {
   for (BlockId Pred : Preds) {
@@ -112,8 +122,7 @@ bool StructuredCFG::redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
   }
 
   for (BlockId Pred : Preds) {
-    CFGBlock *PredBlock = getBlock(Pred);
-    replaceTarget(*PredBlock, OldTarget, NewTarget);
+    replaceEdge(Pred, OldTarget, NewTarget);
   }
   return true;
 }

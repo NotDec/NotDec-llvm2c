@@ -61,23 +61,6 @@ bool sameBlockSet(std::vector<BlockId> A, std::vector<BlockId> B) {
   return A == B;
 }
 
-bool replaceSuccessor(CFGBlock &Block, BlockId OldTarget, BlockId NewTarget) {
-  bool Changed = false;
-  for (BlockId &Succ : Block.Successors) {
-    if (Succ == OldTarget) {
-      Succ = NewTarget;
-      Changed = true;
-    }
-  }
-  for (SwitchCase &Case : Block.Cases) {
-    if (Case.Target == OldTarget) {
-      Case.Target = NewTarget;
-      Changed = true;
-    }
-  }
-  return Changed;
-}
-
 struct ReturnRegion {
   BlockId Head = InvalidBlockId;
   std::vector<BlockId> Blocks;
@@ -405,8 +388,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
         continue;
       }
 
-      CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !Graph.hasEdge(Pred, EntryId)) {
+      if (!Graph.hasEdge(Pred, EntryId)) {
         continue;
       }
 
@@ -414,9 +396,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       if (Copy == InvalidBlockId) {
         continue;
       }
-      PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr ||
-          !replaceSuccessor(*PredBlock, EntryId, Copy)) {
+      if (!Graph.replaceEdge(Pred, EntryId, Copy)) {
         Graph.removeBlock(Copy);
         continue;
       }
@@ -483,8 +463,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     std::vector<BlockId> DefaultSuccessors = DefaultBlock->Successors;
 
     for (BlockId Pred : PredsToUpdate) {
-      CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !Graph.hasEdge(Pred, DefaultTarget)) {
+      if (!Graph.hasEdge(Pred, DefaultTarget)) {
         continue;
       }
 
@@ -492,8 +471,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
       if (Copy == InvalidBlockId) {
         continue;
       }
-      PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !replaceSuccessor(*PredBlock, DefaultTarget, Copy)) {
+      if (!Graph.replaceEdge(Pred, DefaultTarget, Copy)) {
         Graph.removeBlock(Copy);
         continue;
       }
@@ -552,11 +530,10 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
       std::vector<BlockId> UpdatedPreds;
       bool Changed = false;
       for (BlockId Pred : DropPreds) {
-        CFGBlock *PredBlock = Graph.getBlock(Pred);
-        if (PredBlock == nullptr || !Graph.hasEdge(Pred, DropId)) {
+        if (!Graph.hasEdge(Pred, DropId)) {
           continue;
         }
-        if (!replaceSuccessor(*PredBlock, DropId, Keep->Id)) {
+        if (!Graph.replaceEdge(Pred, DropId, Keep->Id)) {
           continue;
         }
         UpdatedPreds.push_back(Pred);
@@ -700,8 +677,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     std::vector<BlockId> Copies;
     std::vector<BlockId> UpdatedPreds;
     for (BlockId Pred : PredsToUpdate) {
-      CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !Graph.hasEdge(Pred, Target)) {
+      if (!Graph.hasEdge(Pred, Target)) {
         continue;
       }
 
@@ -709,12 +685,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
       if (Copy == InvalidBlockId) {
         continue;
       }
-      PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr) {
-        Graph.removeBlock(Copy);
-        continue;
-      }
-      if (!replaceSuccessor(*PredBlock, Target, Copy)) {
+      if (!Graph.replaceEdge(Pred, Target, Copy)) {
         Graph.removeBlock(Copy);
         continue;
       }
