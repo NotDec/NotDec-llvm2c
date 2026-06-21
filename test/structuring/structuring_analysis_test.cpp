@@ -1178,6 +1178,50 @@ void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
   assert(hasSinglePayload(Copy->Statements, 21));
 }
 
+void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch0 = switchBlock(0, {9});
+  Switch0.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch0));
+
+  CFGBlock Entry = block(1, {4});
+  Entry.Statements.push_back({23});
+  Cfg.addBlock(std::move(Entry));
+
+  CFGBlock Switch2 = switchBlock(2, {8});
+  Switch2.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch2));
+
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(8, {}));
+  Cfg.addBlock(block(9, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *Switch0Block = Cfg.getBlock(0);
+  const CFGBlock *Switch2Block = Cfg.getBlock(2);
+  const CFGBlock *EntryBlock = Cfg.getBlock(1);
+  assert(Switch0Block != nullptr && Switch2Block != nullptr &&
+         EntryBlock != nullptr);
+  assert(Switch0Block->Cases.size() == 1);
+  assert(Switch2Block->Cases.size() == 1);
+  assert(Switch0Block->Cases.front().Target == 1);
+  assert(Switch2Block->Cases.front().Target != 1);
+  assert(hasSinglePayload(EntryBlock->Statements, 23));
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch2Block->Cases.front().Target);
+  assert(Copy != nullptr);
+  assert(Copy->Successors == std::vector<BlockId>{4});
+  assert(Copy->BodyBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 23));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -3722,6 +3766,7 @@ int main() {
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
+  testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();

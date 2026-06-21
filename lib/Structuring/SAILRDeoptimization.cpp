@@ -10,8 +10,14 @@ namespace notdec::backend::structuring {
 namespace {
 
 bool hasSuccessor(const CFGBlock &Block, BlockId Target) {
-  return std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
-         Block.Successors.end();
+  if (std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
+      Block.Successors.end()) {
+    return true;
+  }
+  return std::find_if(Block.Cases.begin(), Block.Cases.end(),
+                      [Target](const SwitchCase &Case) {
+                        return Case.Target == Target;
+                      }) != Block.Cases.end();
 }
 
 bool containsBlock(const std::vector<BlockId> &Blocks, BlockId Id) {
