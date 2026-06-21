@@ -10,13 +10,13 @@ namespace notdec::backend::structuring {
 // whose first reusable part is virtual edge ordering.
 class SAILRStructurer : public PhoenixStructurer {
 public:
-  SAILRStructurer(unsigned PostDomMaxEdges = 10,
+  SAILRStructurer(bool ImprovePhoenix = true, unsigned PostDomMaxEdges = 10,
                   unsigned PostDomMaxGraphSize = 50)
-      : PostDomMaxEdges(PostDomMaxEdges),
+      : ImprovePhoenix(ImprovePhoenix), PostDomMaxEdges(PostDomMaxEdges),
         PostDomMaxGraphSize(PostDomMaxGraphSize) {}
 
 protected:
-  bool useImprovedCyclicSchemas() const override { return true; }
+  bool useImprovedCyclicSchemas() const override { return ImprovePhoenix; }
   std::vector<VirtualEdge>
   orderVirtualizableEdges(const StructuredCFG &Cfg,
                           const MutableRegionGraph &Graph,
@@ -26,6 +26,7 @@ protected:
 private:
   // Match Angr's default SAILR postdominator heuristic limits. Keep them on the
   // algorithm object so future backend options do not need to touch the helper.
+  bool ImprovePhoenix;
   unsigned PostDomMaxEdges;
   unsigned PostDomMaxGraphSize;
 };

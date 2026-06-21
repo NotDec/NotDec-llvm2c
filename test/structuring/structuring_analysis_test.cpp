@@ -45,6 +45,7 @@ class TestSAILRStructurer : public SAILRStructurer {
 public:
   using SAILRStructurer::SAILRStructurer;
   using SAILRStructurer::orderVirtualizableEdges;
+  using SAILRStructurer::useImprovedCyclicSchemas;
 };
 
 class TestPhoenixStructurer : public PhoenixStructurer {
@@ -976,6 +977,13 @@ void testSAILROrderPrefersReturnTargetTieBreak() {
   assert(Ordered.front().ToBlock == 3);
 }
 
+void testSAILRImprovePhoenixFlagFollowsConstructor() {
+  TestSAILRStructurer Enabled;
+  TestSAILRStructurer Disabled(/*ImprovePhoenix=*/false);
+  assert(Enabled.useImprovedCyclicSchemas());
+  assert(!Disabled.useImprovedCyclicSchemas());
+}
+
 } // namespace
 
 int main() {
@@ -1005,5 +1013,6 @@ int main() {
   testSAILROrderPrefersLeastSiblingEdges();
   testSAILROrderPrefersMostPostDominators();
   testSAILROrderPrefersReturnTargetTieBreak();
+  testSAILRImprovePhoenixFlagFollowsConstructor();
   return 0;
 }
