@@ -58,6 +58,20 @@ struct OverlayViewEdge {
   bool targetsMember() const { return ExternalSuccessor == InvalidBlockId; }
 };
 
+struct OverlayEdgeEndpoint {
+  OverlayMember Member;
+  BlockId ExternalBlock = InvalidBlockId;
+
+  static OverlayEdgeEndpoint member(OverlayMember Member);
+  static OverlayEdgeEndpoint external(BlockId Block);
+  bool isMember() const { return ExternalBlock == InvalidBlockId; }
+};
+
+struct OverlayHiddenEdge {
+  BlockId From = InvalidBlockId;
+  BlockId To = InvalidBlockId;
+};
+
 // Angr's OverlayManager owns one mutable graph and makes every RegionOverlay a
 // view over that graph. NotDec is still one step short of that: the manager
 // owns the region tree plus finalized child results, and MutableRegionGraph
@@ -84,6 +98,13 @@ public:
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;
   std::vector<OverlayViewEdge> quotientEdges(RegionId Id,
                                              bool IncludeSuccessors) const;
+  void hideEdge(RegionId Id, BlockId From, BlockId To);
+  void hideEdgeToSuccessor(RegionId Id, BlockId Successor);
+  void removeEdgeWithSuccessorsOnly(RegionId Id,
+                                    const OverlayEdgeEndpoint &From,
+                                    const OverlayEdgeEndpoint &To);
+  void addExtraFullEdge(RegionId Id, const OverlayEdgeEndpoint &From,
+                        const OverlayEdgeEndpoint &To);
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
@@ -104,11 +125,22 @@ private:
     std::map<BlockId, RegionId> BlockOwners;
     std::map<RegionId, RegionId> ParentRegions;
     std::map<BlockId, std::vector<BlockId>> SharedSuccessors;
+    std::map<RegionId, std::vector<OverlayHiddenEdge>> HiddenEdges;
+    std::map<RegionId, std::vector<OverlayViewEdge>> HiddenFullEdges;
+    std::map<RegionId, std::vector<OverlayViewEdge>> ExtraFullEdges;
   };
 
   void initializeOverlayState();
   void initializeSharedGraph(const StructuredCFG &Cfg);
   const OverlayMember *memberForBlock(RegionId ViewId, BlockId Block) const;
+  std::vector<BlockId> underlyingBlocks(const OverlayMember &Member) const;
+  std::optional<OverlayMember> memberForEndpoint(
+      RegionId ViewId, const OverlayEdgeEndpoint &Endpoint) const;
+  std::optional<OverlayViewEdge> viewEdgeForEndpoints(
+      RegionId ViewId, const OverlayEdgeEndpoint &From,
+      const OverlayEdgeEndpoint &To) const;
+  bool isHiddenEdge(RegionId Id, BlockId From, BlockId To) const;
+  bool isHiddenFullEdge(RegionId Id, const OverlayViewEdge &Edge) const;
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
 
@@ -118,6 +150,9 @@ private:
   std::map<RegionId, std::vector<OverlayMember>> Members;
   std::map<BlockId, RegionId> BlockOwners;
   std::map<BlockId, std::vector<BlockId>> SharedSuccessors;
+  std::map<RegionId, std::vector<OverlayHiddenEdge>> HiddenEdges;
+  std::map<RegionId, std::vector<OverlayViewEdge>> HiddenFullEdges;
+  std::map<RegionId, std::vector<OverlayViewEdge>> ExtraFullEdges;
   std::map<RegionId, NodeId> StructuredRoots;
   std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
   std::vector<CheckpointState> StructuredRootCheckpoints;

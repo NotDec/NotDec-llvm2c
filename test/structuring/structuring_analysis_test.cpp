@@ -778,6 +778,61 @@ void testOverlayFullViewAddsLoopSuccessorEdges() {
   assert(Graph.hasEdge(FirstSuccId, SecondSuccId));
 }
 
+void testOverlayViewOnlyMutationsAffectQuotientEdges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Loop;
+  Loop.Kind = RegionKind::NaturalLoop;
+  Loop.Head = 0;
+  Loop.Blocks = {0};
+  RegionId LoopId = Regions.addRegion(Loop);
+  Regions.setRoot(LoopId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  std::size_t Checkpoint = Manager.checkpoint();
+  Manager.hideEdgeToSuccessor(LoopId, 1);
+  assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({2}));
+
+  OverlayEdgeEndpoint Head =
+      OverlayEdgeEndpoint::member(OverlayMember::block(0));
+  OverlayEdgeEndpoint SecondSucc = OverlayEdgeEndpoint::external(2);
+  Manager.removeEdgeWithSuccessorsOnly(LoopId, Head, SecondSucc);
+  std::vector<OverlayViewEdge> MemberOnlyEdges =
+      Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/false);
+  assert(MemberOnlyEdges.empty());
+  std::vector<OverlayViewEdge> FullEdges =
+      Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
+  bool HasHeadToSecondSucc =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Edge.From.Kind == OverlayMemberKind::Block &&
+                            Edge.From.Block == 0 && !Edge.targetsMember() &&
+                            Edge.ExternalSuccessor == 2;
+                   }) != FullEdges.end();
+  assert(!HasHeadToSecondSucc);
+
+  OverlayEdgeEndpoint FirstSucc = OverlayEdgeEndpoint::external(1);
+  Manager.addExtraFullEdge(LoopId, FirstSucc, SecondSucc);
+  FullEdges = Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
+  bool HasExtraEdge =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [](const OverlayViewEdge &Edge) {
+                     return !Edge.sourcesMember() && Edge.ExternalSource == 1 &&
+                            !Edge.targetsMember() &&
+                            Edge.ExternalSuccessor == 2;
+                   }) != FullEdges.end();
+  assert(HasExtraEdge);
+
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({1, 2}));
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1499,6 +1554,7 @@ int main() {
   testOverlayManagerQuotientKeepsBlockSelfLoop();
   testOverlayGraphBuildsEdgesFromQuotientView();
   testOverlayFullViewAddsLoopSuccessorEdges();
+  testOverlayViewOnlyMutationsAffectQuotientEdges();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();

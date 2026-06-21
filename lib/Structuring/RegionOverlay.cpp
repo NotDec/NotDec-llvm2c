@@ -48,6 +48,18 @@ void appendUniqueEdge(std::vector<OverlayViewEdge> &Edges,
   }
 }
 
+void appendUniqueHiddenEdge(std::vector<OverlayHiddenEdge> &Edges,
+                            OverlayHiddenEdge Edge) {
+  auto It = std::find_if(Edges.begin(), Edges.end(),
+                         [&](const OverlayHiddenEdge &Existing) {
+                           return Existing.From == Edge.From &&
+                                  Existing.To == Edge.To;
+                         });
+  if (It == Edges.end()) {
+    Edges.push_back(Edge);
+  }
+}
+
 } // namespace
 
 OverlayMember OverlayMember::block(BlockId Id) {
@@ -70,6 +82,18 @@ OverlayMember OverlayMember::structured(NodeId Id, RegionId SourceRegion) {
   Member.Region = SourceRegion;
   Member.StructuredRoot = Id;
   return Member;
+}
+
+OverlayEdgeEndpoint OverlayEdgeEndpoint::member(OverlayMember Member) {
+  OverlayEdgeEndpoint Endpoint;
+  Endpoint.Member = Member;
+  return Endpoint;
+}
+
+OverlayEdgeEndpoint OverlayEdgeEndpoint::external(BlockId Block) {
+  OverlayEdgeEndpoint Endpoint;
+  Endpoint.ExternalBlock = Block;
+  return Endpoint;
 }
 
 OverlayManager::OverlayManager(RegionTree Regions) : Regions(std::move(Regions)) {
@@ -191,6 +215,79 @@ const OverlayMember *OverlayManager::memberForBlock(RegionId ViewId,
   return nullptr;
 }
 
+std::vector<BlockId>
+OverlayManager::underlyingBlocks(const OverlayMember &Member) const {
+  if (Member.Kind == OverlayMemberKind::Block) {
+    return {Member.Block};
+  }
+  const Region *MemberRegion = getRegionData(Member.Region);
+  return MemberRegion == nullptr ? std::vector<BlockId>{}
+                                 : MemberRegion->Blocks;
+}
+
+std::optional<OverlayMember> OverlayManager::memberForEndpoint(
+    RegionId ViewId, const OverlayEdgeEndpoint &Endpoint) const {
+  if (Endpoint.isMember()) {
+    return Endpoint.Member;
+  }
+  const OverlayMember *Member = memberForBlock(ViewId, Endpoint.ExternalBlock);
+  if (Member == nullptr) {
+    return std::nullopt;
+  }
+  return *Member;
+}
+
+std::optional<OverlayViewEdge> OverlayManager::viewEdgeForEndpoints(
+    RegionId ViewId, const OverlayEdgeEndpoint &From,
+    const OverlayEdgeEndpoint &To) const {
+  OverlayViewEdge Edge;
+  if (From.isMember()) {
+    Edge.From = From.Member;
+  } else {
+    const OverlayMember *Member = memberForBlock(ViewId, From.ExternalBlock);
+    if (Member != nullptr) {
+      Edge.From = *Member;
+    } else {
+      Edge.ExternalSource = From.ExternalBlock;
+    }
+  }
+
+  if (To.isMember()) {
+    Edge.To = To.Member;
+  } else {
+    const OverlayMember *Member = memberForBlock(ViewId, To.ExternalBlock);
+    if (Member != nullptr) {
+      Edge.To = *Member;
+    } else {
+      Edge.ExternalSuccessor = To.ExternalBlock;
+    }
+  }
+  return Edge;
+}
+
+bool OverlayManager::isHiddenEdge(RegionId Id, BlockId From, BlockId To) const {
+  auto It = HiddenEdges.find(Id);
+  if (It == HiddenEdges.end()) {
+    return false;
+  }
+  return std::find_if(It->second.begin(), It->second.end(),
+                      [&](const OverlayHiddenEdge &Edge) {
+                        return Edge.From == From && Edge.To == To;
+                      }) != It->second.end();
+}
+
+bool OverlayManager::isHiddenFullEdge(RegionId Id,
+                                      const OverlayViewEdge &Edge) const {
+  auto It = HiddenFullEdges.find(Id);
+  if (It == HiddenFullEdges.end()) {
+    return false;
+  }
+  return std::find_if(It->second.begin(), It->second.end(),
+                      [&](const OverlayViewEdge &Existing) {
+                        return sameEdge(Existing, Edge);
+                      }) != It->second.end();
+}
+
 std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
   std::vector<BlockId> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
@@ -207,6 +304,9 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
 
     for (BlockId Block : Blocks) {
       for (BlockId Succ : sharedSuccessors(Block)) {
+        if (isHiddenEdge(Id, Block, Succ)) {
+          continue;
+        }
         if (memberForBlock(Id, Succ) == &Member) {
           continue;
         }
@@ -237,19 +337,27 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
 
     for (BlockId Block : Blocks) {
       for (BlockId Succ : sharedSuccessors(Block)) {
+        if (isHiddenEdge(Id, Block, Succ)) {
+          continue;
+        }
         const OverlayMember *SuccMember = memberForBlock(Id, Succ);
         if (SuccMember != nullptr) {
           if (sameMember(Member, *SuccMember) &&
               Member.Kind != OverlayMemberKind::Block) {
             continue;
           }
-          appendUniqueEdge(Result,
-                           {Member, InvalidBlockId, *SuccMember,
-                            InvalidBlockId});
+          OverlayViewEdge Edge = {Member, InvalidBlockId, *SuccMember,
+                                  InvalidBlockId};
+          if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+            appendUniqueEdge(Result, Edge);
+          }
           continue;
         }
         if (IncludeSuccessors) {
-          appendUniqueEdge(Result, {Member, InvalidBlockId, {}, Succ});
+          OverlayViewEdge Edge = {Member, InvalidBlockId, {}, Succ};
+          if (!isHiddenFullEdge(Id, Edge)) {
+            appendUniqueEdge(Result, Edge);
+          }
         }
       }
     }
@@ -265,21 +373,71 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
       break;
     }
   }
-  if (!IncludeSuccessors || !InLoop) {
+  if (!IncludeSuccessors) {
     return Result;
   }
 
-  std::vector<BlockId> Succs = visibleSuccessors(Id);
-  for (BlockId Succ : Succs) {
-    for (BlockId SuccSucc : sharedSuccessors(Succ)) {
-      if (std::find(Succs.begin(), Succs.end(), SuccSucc) == Succs.end() ||
-          Succ == SuccSucc) {
-        continue;
+  if (InLoop) {
+    std::vector<BlockId> Succs = visibleSuccessors(Id);
+    for (BlockId Succ : Succs) {
+      for (BlockId SuccSucc : sharedSuccessors(Succ)) {
+        if (std::find(Succs.begin(), Succs.end(), SuccSucc) == Succs.end() ||
+            Succ == SuccSucc) {
+          continue;
+        }
+        OverlayViewEdge Edge = {{}, Succ, {}, SuccSucc};
+        if (!isHiddenFullEdge(Id, Edge)) {
+          appendUniqueEdge(Result, Edge);
+        }
       }
-      appendUniqueEdge(Result, {{}, Succ, {}, SuccSucc});
+    }
+  }
+  auto ExtraIt = ExtraFullEdges.find(Id);
+  if (ExtraIt != ExtraFullEdges.end()) {
+    for (const OverlayViewEdge &Edge : ExtraIt->second) {
+      if (!isHiddenFullEdge(Id, Edge)) {
+        appendUniqueEdge(Result, Edge);
+      }
     }
   }
   return Result;
+}
+
+void OverlayManager::hideEdge(RegionId Id, BlockId From, BlockId To) {
+  appendUniqueHiddenEdge(HiddenEdges[Id], {From, To});
+}
+
+void OverlayManager::hideEdgeToSuccessor(RegionId Id, BlockId Successor) {
+  const std::vector<OverlayMember> &ViewMembers = members(Id);
+  for (const OverlayMember &Member : ViewMembers) {
+    for (BlockId Block : underlyingBlocks(Member)) {
+      for (BlockId Succ : sharedSuccessors(Block)) {
+        if (Succ == Successor) {
+          hideEdge(Id, Block, Succ);
+        }
+      }
+    }
+  }
+}
+
+void OverlayManager::removeEdgeWithSuccessorsOnly(
+    RegionId Id, const OverlayEdgeEndpoint &From,
+    const OverlayEdgeEndpoint &To) {
+  std::optional<OverlayViewEdge> Edge = viewEdgeForEndpoints(Id, From, To);
+  if (!Edge) {
+    return;
+  }
+  appendUniqueEdge(HiddenFullEdges[Id], *Edge);
+}
+
+void OverlayManager::addExtraFullEdge(RegionId Id,
+                                      const OverlayEdgeEndpoint &From,
+                                      const OverlayEdgeEndpoint &To) {
+  std::optional<OverlayViewEdge> Edge = viewEdgeForEndpoints(Id, From, To);
+  if (!Edge) {
+    return;
+  }
+  appendUniqueEdge(ExtraFullEdges[Id], *Edge);
 }
 
 void OverlayManager::finalizeRegionMembers(RegionId Id, NodeId RootId) {
@@ -377,7 +535,8 @@ OverlayManager::finalizedChildren(RegionId Id) const {
 std::size_t OverlayManager::checkpoint() {
   StructuredRootCheckpoints.push_back(
       {StructuredRoots, SuccessorSnapshots, Members, BlockOwners,
-       ParentRegions, SharedSuccessors});
+       ParentRegions, SharedSuccessors, HiddenEdges, HiddenFullEdges,
+       ExtraFullEdges});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -392,6 +551,9 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
   BlockOwners = StructuredRootCheckpoints[Checkpoint].BlockOwners;
   ParentRegions = StructuredRootCheckpoints[Checkpoint].ParentRegions;
   SharedSuccessors = StructuredRootCheckpoints[Checkpoint].SharedSuccessors;
+  HiddenEdges = StructuredRootCheckpoints[Checkpoint].HiddenEdges;
+  HiddenFullEdges = StructuredRootCheckpoints[Checkpoint].HiddenFullEdges;
+  ExtraFullEdges = StructuredRootCheckpoints[Checkpoint].ExtraFullEdges;
 }
 
 void OverlayManager::commit(std::size_t Checkpoint) {
