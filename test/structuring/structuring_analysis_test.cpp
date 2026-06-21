@@ -463,6 +463,7 @@ void testOverlayManagerFinalizeAndDissolveUpdateMembers() {
       Manager.members(RootId);
   assert(FinalizedRootMembers.size() == 3);
   assert(FinalizedRootMembers[0].Kind == OverlayMemberKind::Structured);
+  assert(FinalizedRootMembers[0].Region == ChildId);
   assert(FinalizedRootMembers[0].StructuredRoot == 42);
   Manager.rollback(Checkpoint);
   Manager.commit(Checkpoint);
@@ -551,6 +552,44 @@ void testFinalizedChildSnapshotAddsParentVisibleSuccessor() {
   assert(!FollowNode->ExternalPlaceholder);
   assert(ChildNode->hasExternalSuccessor(1));
   assert(Graph.hasEdge(ChildNodeId, FollowNodeId));
+}
+
+void testOverlayGraphUsesStructuredMemberSourceRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
+  assert(ChildOverlay != nullptr);
+  ChildOverlay->finalize(42, SuccessorSnapshot{{2}});
+  assert(Manager.members(RootId)[0].Kind == OverlayMemberKind::Structured);
+  assert(Manager.members(RootId)[0].Region == ChildId);
+
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  GraphNodeId ChildNodeId = Graph.getNodeForBlock(1);
+  const MutableRegionNode *ChildNode = Graph.getNode(ChildNodeId);
+  assert(ChildNode != nullptr);
+  assert(ChildNode->StructuredRoot == 42);
+  assert(ChildNode->Blocks == std::vector<BlockId>({1}));
+  assert(ChildNode->hasExternalSuccessor(2));
 }
 
 void testFinalizedChildSnapshotSkipsParentLoopHead() {
@@ -1162,6 +1201,7 @@ int main() {
   testOverlayManagerFinalizeAndDissolveUpdateMembers();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
+  testOverlayGraphUsesStructuredMemberSourceRegion();
   testFinalizedChildSnapshotSkipsParentLoopHead();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();

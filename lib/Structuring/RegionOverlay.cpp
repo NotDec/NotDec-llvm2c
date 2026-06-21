@@ -20,9 +20,10 @@ OverlayMember OverlayMember::region(RegionId Id) {
   return Member;
 }
 
-OverlayMember OverlayMember::structured(NodeId Id) {
+OverlayMember OverlayMember::structured(NodeId Id, RegionId SourceRegion) {
   OverlayMember Member;
   Member.Kind = OverlayMemberKind::Structured;
+  Member.Region = SourceRegion;
   Member.StructuredRoot = Id;
   return Member;
 }
@@ -117,7 +118,7 @@ void OverlayManager::finalizeRegionMembers(RegionId Id, NodeId RootId) {
   std::vector<OverlayMember> &ParentMembers = Members[ParentId];
   for (OverlayMember &Member : ParentMembers) {
     if (Member.Kind == OverlayMemberKind::Region && Member.Region == Id) {
-      Member = OverlayMember::structured(RootId);
+      Member = OverlayMember::structured(RootId, Id);
       break;
     }
   }

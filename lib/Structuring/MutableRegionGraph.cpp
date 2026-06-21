@@ -443,30 +443,50 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     return Id;
   };
 
-  for (const FinalizedChildRegion &Child :
-       Overlay.manager()->finalizedChildren(Overlay.id())) {
-    const Region *ChildRegion = Child.RegionData;
+  for (const OverlayMember &Member :
+       Overlay.manager()->members(Overlay.id())) {
+    if (Member.Kind == OverlayMemberKind::Block) {
+      if (containsBlock(R->Blocks, Member.Block)) {
+        BlockToNode[Member.Block] = Graph.addNode(Member.Block);
+      }
+      continue;
+    }
+
+    if (Member.Kind != OverlayMemberKind::Structured) {
+      continue;
+    }
+
+    const Region *ChildRegion = Overlay.manager()->getRegionData(Member.Region);
+    if (ChildRegion == nullptr) {
+      continue;
+    }
 
     // Angr's finalize() replaces a reduced child region with its result node
-    // in the parent overlay view. NotDec does not yet mutate one shared graph,
-    // so the parent graph rebuild models that view with one grouped node plus
-    // the successor snapshot captured before the child reducer ran.
+    // in the parent overlay view. The overlay member table now records that
+    // replacement; the graph builder turns it into one grouped reducer node.
     GraphNodeId NodeId =
-        Graph.addNode(ChildRegion->Head, Child.StructuredRoot);
+        Graph.addNode(ChildRegion->Head, Member.StructuredRoot);
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
       Node->Blocks = ChildRegion->Blocks;
-      for (BlockId Succ : Child.Snapshot.Successors) {
-        if (containsBlock(ChildRegion->Blocks, Succ)) {
+      auto SnapshotIt = Overlay.manager()->finalizedChildren(Overlay.id());
+      for (const FinalizedChildRegion &Child : SnapshotIt) {
+        if (Child.RegionData == nullptr ||
+            Child.RegionData->Id != ChildRegion->Id) {
           continue;
         }
-        // Angr's finalize() does not reconnect a child continue edge to the
-        // enclosing loop head; exposing it here would add a fake parent edge.
-        if (R->Kind == RegionKind::NaturalLoop && Succ == R->Head) {
-          continue;
+        for (BlockId Succ : Child.Snapshot.Successors) {
+          if (containsBlock(ChildRegion->Blocks, Succ)) {
+            continue;
+          }
+          // Angr's finalize() does not reconnect a child continue edge to the
+          // enclosing loop head; exposing it here would add a fake parent edge.
+          if (R->Kind == RegionKind::NaturalLoop && Succ == R->Head) {
+            continue;
+          }
+          appendUniqueBlock(Node->ExternalSuccs, Succ);
+          PendingSnapshotSuccs.push_back({NodeId, Succ});
         }
-        appendUniqueBlock(Node->ExternalSuccs, Succ);
-        PendingSnapshotSuccs.push_back({NodeId, Succ});
       }
     }
     for (BlockId Block : ChildRegion->Blocks) {

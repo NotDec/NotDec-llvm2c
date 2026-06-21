@@ -41,7 +41,8 @@ struct OverlayMember {
 
   static OverlayMember block(BlockId Id);
   static OverlayMember region(RegionId Id);
-  static OverlayMember structured(NodeId Id);
+  static OverlayMember structured(NodeId Id,
+                                  RegionId SourceRegion = InvalidRegionId);
 };
 
 // Angr's OverlayManager owns one mutable graph and makes every RegionOverlay a
