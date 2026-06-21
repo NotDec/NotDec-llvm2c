@@ -900,22 +900,16 @@ void OverlayManager::hideEdge(RegionId Id, BlockId From, BlockId To) {
 }
 
 void OverlayManager::hideEdgeToSuccessor(RegionId Id, BlockId Successor) {
+  hideEdgeToNodeSuccessor(Id, OverlayNodeKey::block(Successor));
+}
+
+void OverlayManager::hideEdgeToNodeSuccessor(
+    RegionId Id, const OverlayNodeKey &Successor) {
   const std::vector<OverlayMember> &ViewMembers = members(Id);
   for (const OverlayMember &Member : ViewMembers) {
-    if (Member.Kind != OverlayMemberKind::Region) {
-      OverlayNodeKey From = nodeKey(Member);
+    for (const OverlayNodeKey &From : memberNodeKeys(Member)) {
       for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
-        if (Succ.isBlock() && Succ.Block == Successor) {
-          hideNodeEdge(Id, From, Succ);
-        }
-      }
-      continue;
-    }
-
-    for (BlockId Block : underlyingBlocks(Member)) {
-      OverlayNodeKey From = OverlayNodeKey::block(Block);
-      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
-        if (Succ.isBlock() && Succ.Block == Successor) {
+        if (Succ == Successor) {
           hideNodeEdge(Id, From, Succ);
         }
       }
@@ -941,6 +935,39 @@ void OverlayManager::addExtraFullEdge(RegionId Id,
     return;
   }
   appendUniqueEdge(ExtraFullEdges[Id], *Edge);
+}
+
+void OverlayManager::absorbSuccessorInto(
+    RegionId Id, const OverlayEdgeEndpoint &Successor,
+    const OverlayEdgeEndpoint &NewNode) {
+  auto EndpointNode = [&](const OverlayEdgeEndpoint &Endpoint) {
+    return Endpoint.isMember() ? nodeKey(Endpoint.Member) : Endpoint.node();
+  };
+  auto EdgeSourceNode = [&](const OverlayViewEdge &Edge) {
+    return Edge.sourcesMember() ? nodeKey(Edge.From) : Edge.sourceNode();
+  };
+  auto EdgeTargetNode = [&](const OverlayViewEdge &Edge) {
+    return Edge.targetsMember() ? nodeKey(Edge.To) : Edge.targetNode();
+  };
+  auto EdgeTargetEndpoint = [&](const OverlayViewEdge &Edge) {
+    return Edge.targetsMember() ? OverlayEdgeEndpoint::member(Edge.To)
+                                : OverlayEdgeEndpoint::external(
+                                      EdgeTargetNode(Edge));
+  };
+
+  OverlayNodeKey SuccessorNode = EndpointNode(Successor);
+  OverlayNodeKey NewNodeKey = EndpointNode(NewNode);
+  for (const OverlayViewEdge &Edge :
+       quotientEdges(Id, /*IncludeSuccessors=*/true)) {
+    if (!(EdgeSourceNode(Edge) == SuccessorNode)) {
+      continue;
+    }
+    if (EdgeTargetNode(Edge) == NewNodeKey) {
+      continue;
+    }
+    addExtraFullEdge(Id, NewNode, EdgeTargetEndpoint(Edge));
+  }
+  hideEdgeToNodeSuccessor(Id, SuccessorNode);
 }
 
 void OverlayManager::finalizeRegionMembers(RegionId Id, NodeId RootId) {
@@ -1398,6 +1425,13 @@ void RegionOverlay::addExtraFullEdge(const OverlayEdgeEndpoint &From,
                                      const OverlayEdgeEndpoint &To) {
   if (Manager != nullptr) {
     Manager->addExtraFullEdge(Id, From, To);
+  }
+}
+
+void RegionOverlay::absorbSuccessorInto(
+    const OverlayEdgeEndpoint &Successor, const OverlayEdgeEndpoint &NewNode) {
+  if (Manager != nullptr) {
+    Manager->absorbSuccessorInto(Id, Successor, NewNode);
   }
 }
 

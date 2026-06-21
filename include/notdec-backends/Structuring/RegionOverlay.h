@@ -166,11 +166,14 @@ public:
                     const OverlayNodeKey &To);
   void hideEdge(RegionId Id, BlockId From, BlockId To);
   void hideEdgeToSuccessor(RegionId Id, BlockId Successor);
+  void hideEdgeToNodeSuccessor(RegionId Id, const OverlayNodeKey &Successor);
   void removeEdgeWithSuccessorsOnly(RegionId Id,
                                     const OverlayEdgeEndpoint &From,
                                     const OverlayEdgeEndpoint &To);
   void addExtraFullEdge(RegionId Id, const OverlayEdgeEndpoint &From,
                         const OverlayEdgeEndpoint &To);
+  void absorbSuccessorInto(RegionId Id, const OverlayEdgeEndpoint &Successor,
+                           const OverlayEdgeEndpoint &NewNode);
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
@@ -273,6 +276,8 @@ public:
                                     const OverlayEdgeEndpoint &To);
   void addExtraFullEdge(const OverlayEdgeEndpoint &From,
                         const OverlayEdgeEndpoint &To);
+  void absorbSuccessorInto(const OverlayEdgeEndpoint &Successor,
+                           const OverlayEdgeEndpoint &NewNode);
   void finalize(NodeId RootId, const SuccessorSnapshot &Snapshot = {});
   void collapseTo(NodeId RootId);
   void replaceNodes(const std::vector<OverlayNodeKey> &OldNodes,
