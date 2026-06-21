@@ -87,6 +87,21 @@ const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
   return getBlock(bodyBlock(Id));
 }
 
+bool StructuredCFG::hasEdge(BlockId From, BlockId To) const {
+  const CFGBlock *Block = getBlock(From);
+  return Block != nullptr && hasTarget(*Block, To);
+}
+
+std::vector<BlockId> StructuredCFG::predecessorsOf(BlockId Target) const {
+  std::vector<BlockId> Preds;
+  for (const CFGBlock &Block : Blocks) {
+    if (hasTarget(Block, Target)) {
+      Preds.push_back(Block.Id);
+    }
+  }
+  return Preds;
+}
+
 bool StructuredCFG::redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
                                          const std::vector<BlockId> &Preds) {
   for (BlockId Pred : Preds) {

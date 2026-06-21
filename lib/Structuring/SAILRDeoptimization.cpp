@@ -9,17 +9,6 @@
 namespace notdec::backend::structuring {
 namespace {
 
-bool hasSuccessor(const CFGBlock &Block, BlockId Target) {
-  if (std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
-      Block.Successors.end()) {
-    return true;
-  }
-  return std::find_if(Block.Cases.begin(), Block.Cases.end(),
-                      [Target](const SwitchCase &Case) {
-                        return Case.Target == Target;
-                      }) != Block.Cases.end();
-}
-
 bool containsBlock(const std::vector<BlockId> &Blocks, BlockId Id) {
   return std::find(Blocks.begin(), Blocks.end(), Id) != Blocks.end();
 }
@@ -63,13 +52,7 @@ bool sameBlockShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
 
 std::vector<BlockId> predecessorsOf(const StructuredCFG &Graph,
                                     BlockId Target) {
-  std::vector<BlockId> Preds;
-  for (const CFGBlock &Block : Graph.blocks()) {
-    if (hasSuccessor(Block, Target)) {
-      Preds.push_back(Block.Id);
-    }
-  }
-  return Preds;
+  return Graph.predecessorsOf(Target);
 }
 
 bool sameBlockSet(std::vector<BlockId> A, std::vector<BlockId> B) {
@@ -272,7 +255,8 @@ bool switchReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (Block.Terminator != TerminatorKind::Switch) {
     return false;
   }
-  if (hasSuccessor(Block, Target)) {
+  if (std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
+      Block.Successors.end()) {
     return true;
   }
   for (const SwitchCase &Case : Block.Cases) {
@@ -422,7 +406,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       }
 
       CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !hasSuccessor(*PredBlock, EntryId)) {
+      if (PredBlock == nullptr || !Graph.hasEdge(Pred, EntryId)) {
         continue;
       }
 
@@ -500,7 +484,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
 
     for (BlockId Pred : PredsToUpdate) {
       CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !hasSuccessor(*PredBlock, DefaultTarget)) {
+      if (PredBlock == nullptr || !Graph.hasEdge(Pred, DefaultTarget)) {
         continue;
       }
 
@@ -553,7 +537,7 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
       if (Drop == nullptr || !sameBlockShape(*Keep, *Drop)) {
         continue;
       }
-      if (hasSuccessor(*Keep, DropId) || hasSuccessor(*Drop, Keep->Id)) {
+      if (Graph.hasEdge(Keep->Id, DropId) || Graph.hasEdge(DropId, Keep->Id)) {
         continue;
       }
       if (!disjointPredecessorSets(Graph, Keep->Id, DropId)) {
@@ -569,7 +553,7 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
       bool Changed = false;
       for (BlockId Pred : DropPreds) {
         CFGBlock *PredBlock = Graph.getBlock(Pred);
-        if (PredBlock == nullptr || !hasSuccessor(*PredBlock, DropId)) {
+        if (PredBlock == nullptr || !Graph.hasEdge(Pred, DropId)) {
           continue;
         }
         if (!replaceSuccessor(*PredBlock, DropId, Keep->Id)) {
@@ -681,7 +665,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     }
 
     BlockId Target = Gotos.front().Target;
-    if (!hasSuccessor(Block, Target)) {
+    if (!Graph.hasEdge(Block.Id, Target)) {
       continue;
     }
 
@@ -717,7 +701,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     std::vector<BlockId> UpdatedPreds;
     for (BlockId Pred : PredsToUpdate) {
       CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || !hasSuccessor(*PredBlock, Target)) {
+      if (PredBlock == nullptr || !Graph.hasEdge(Pred, Target)) {
         continue;
       }
 
