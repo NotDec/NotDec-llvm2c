@@ -334,7 +334,7 @@ RegionTree RegionIdentifier::identifyRoot(const StructuredCFG &Cfg) {
 }
 
 OverlayManager RegionIdentifier::identifyOverlay(const StructuredCFG &Cfg) {
-  return OverlayManager(identifyRoot(Cfg));
+  return OverlayManager(identifyRoot(Cfg), Cfg);
 }
 
 } // namespace notdec::backend::structuring

@@ -35,6 +35,11 @@ OverlayManager::OverlayManager(RegionTree Regions) : Regions(std::move(Regions))
   initializeOverlayState();
 }
 
+OverlayManager::OverlayManager(RegionTree Regions, const StructuredCFG &Cfg)
+    : OverlayManager(std::move(Regions)) {
+  initializeSharedGraph(Cfg);
+}
+
 void OverlayManager::initializeOverlayState() {
   ParentRegions.clear();
   Members.clear();
@@ -64,6 +69,13 @@ void OverlayManager::initializeOverlayState() {
       Members[R.Id].push_back(OverlayMember::block(Block));
       BlockOwners[Block] = R.Id;
     }
+  }
+}
+
+void OverlayManager::initializeSharedGraph(const StructuredCFG &Cfg) {
+  SharedSuccessors.clear();
+  for (const CFGBlock &Block : Cfg.blocks()) {
+    SharedSuccessors[Block.Id] = Block.Successors;
   }
 }
 
@@ -107,6 +119,12 @@ const std::vector<OverlayMember> &OverlayManager::members(RegionId Id) const {
   static const std::vector<OverlayMember> Empty;
   auto It = Members.find(Id);
   return It == Members.end() ? Empty : It->second;
+}
+
+const std::vector<BlockId> &OverlayManager::sharedSuccessors(BlockId Id) const {
+  static const std::vector<BlockId> Empty;
+  auto It = SharedSuccessors.find(Id);
+  return It == SharedSuccessors.end() ? Empty : It->second;
 }
 
 void OverlayManager::finalizeRegionMembers(RegionId Id, NodeId RootId) {
@@ -204,7 +222,7 @@ OverlayManager::finalizedChildren(RegionId Id) const {
 std::size_t OverlayManager::checkpoint() {
   StructuredRootCheckpoints.push_back(
       {StructuredRoots, SuccessorSnapshots, Members, BlockOwners,
-       ParentRegions});
+       ParentRegions, SharedSuccessors});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -218,6 +236,7 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
   Members = StructuredRootCheckpoints[Checkpoint].Members;
   BlockOwners = StructuredRootCheckpoints[Checkpoint].BlockOwners;
   ParentRegions = StructuredRootCheckpoints[Checkpoint].ParentRegions;
+  SharedSuccessors = StructuredRootCheckpoints[Checkpoint].SharedSuccessors;
 }
 
 void OverlayManager::commit(std::size_t Checkpoint) {

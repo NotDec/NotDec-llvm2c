@@ -53,6 +53,7 @@ struct OverlayMember {
 class OverlayManager {
 public:
   explicit OverlayManager(RegionTree Regions);
+  OverlayManager(RegionTree Regions, const StructuredCFG &Cfg);
 
   RegionOverlay *root();
   const RegionOverlay *root() const;
@@ -66,6 +67,7 @@ public:
   RegionId parentOf(RegionId Id) const;
   RegionId ownerOf(BlockId Id) const;
   const std::vector<OverlayMember> &members(RegionId Id) const;
+  const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
@@ -85,9 +87,11 @@ private:
     std::map<RegionId, std::vector<OverlayMember>> Members;
     std::map<BlockId, RegionId> BlockOwners;
     std::map<RegionId, RegionId> ParentRegions;
+    std::map<BlockId, std::vector<BlockId>> SharedSuccessors;
   };
 
   void initializeOverlayState();
+  void initializeSharedGraph(const StructuredCFG &Cfg);
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
 
@@ -96,6 +100,7 @@ private:
   std::map<RegionId, RegionId> ParentRegions;
   std::map<RegionId, std::vector<OverlayMember>> Members;
   std::map<BlockId, RegionId> BlockOwners;
+  std::map<BlockId, std::vector<BlockId>> SharedSuccessors;
   std::map<RegionId, NodeId> StructuredRoots;
   std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
   std::vector<CheckpointState> StructuredRootCheckpoints;
