@@ -330,15 +330,12 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
     }
   }
 
-  for (BlockId Pred : Preds) {
-    CFGBlock *PredBlock = Graph.getBlock(Pred);
-    if (PredBlock == nullptr ||
-        !replaceSuccessor(*PredBlock, Region.Head, CopyByOriginal[Region.Head])) {
-      for (BlockId Copy : Copies) {
-        Graph.removeBlock(Copy);
-      }
-      return false;
+  if (!Graph.redirectPredecessors(Region.Head, CopyByOriginal[Region.Head],
+                                  Preds)) {
+    for (BlockId Copy : Copies) {
+      Graph.removeBlock(Copy);
     }
+    return false;
   }
 
   OutCopies.insert(OutCopies.end(), Copies.begin(), Copies.end());

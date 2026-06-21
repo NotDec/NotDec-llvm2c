@@ -3,6 +3,31 @@
 #include <algorithm>
 
 namespace notdec::backend::structuring {
+namespace {
+
+bool hasTarget(const CFGBlock &Block, BlockId Target) {
+  return std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
+             Block.Successors.end() ||
+         std::find_if(Block.Cases.begin(), Block.Cases.end(),
+                      [Target](const SwitchCase &Case) {
+                        return Case.Target == Target;
+                      }) != Block.Cases.end();
+}
+
+void replaceTarget(CFGBlock &Block, BlockId OldTarget, BlockId NewTarget) {
+  for (BlockId &Succ : Block.Successors) {
+    if (Succ == OldTarget) {
+      Succ = NewTarget;
+    }
+  }
+  for (SwitchCase &Case : Block.Cases) {
+    if (Case.Target == OldTarget) {
+      Case.Target = NewTarget;
+    }
+  }
+}
+
+} // namespace
 
 BlockId StructuredCFG::addBlock(CFGBlock Block) {
   if (Block.Id == InvalidBlockId) {
@@ -60,6 +85,22 @@ BlockId StructuredCFG::bodyBlock(BlockId Id) const {
 
 const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
   return getBlock(bodyBlock(Id));
+}
+
+bool StructuredCFG::redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
+                                         const std::vector<BlockId> &Preds) {
+  for (BlockId Pred : Preds) {
+    const CFGBlock *PredBlock = getBlock(Pred);
+    if (PredBlock == nullptr || !hasTarget(*PredBlock, OldTarget)) {
+      return false;
+    }
+  }
+
+  for (BlockId Pred : Preds) {
+    CFGBlock *PredBlock = getBlock(Pred);
+    replaceTarget(*PredBlock, OldTarget, NewTarget);
+  }
+  return true;
 }
 
 bool StructuredCFG::removeBlock(BlockId Id) {

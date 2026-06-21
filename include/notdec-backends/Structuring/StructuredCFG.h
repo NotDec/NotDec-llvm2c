@@ -73,6 +73,8 @@ public:
   CFGBlock *getBlock(BlockId Id);
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
+  bool redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
+                            const std::vector<BlockId> &Preds);
   bool removeBlock(BlockId Id);
 
 private:

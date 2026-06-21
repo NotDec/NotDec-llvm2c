@@ -750,6 +750,40 @@ void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
   assert(hasSinglePayload(Copy->Statements, 7));
 }
 
+void testStructuredCFGRedirectPredecessorsIsAtomic() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(3, {}));
+  Cfg.addBlock(block(4, {}));
+
+  assert(!Cfg.redirectPredecessors(2, 4, {0, 1}));
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors == std::vector<BlockId>{2});
+  assert(Block1->Successors == std::vector<BlockId>{3});
+
+  assert(Cfg.redirectPredecessors(2, 4, {0}));
+  assert(Block0->Successors == std::vector<BlockId>{4});
+}
+
+void testStructuredCFGRedirectPredecessorsUpdatesSwitchCases() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {}));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(3, {}));
+
+  assert(Cfg.redirectPredecessors(2, 3, {0}));
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Successors == std::vector<BlockId>({1, 3}));
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target == 3);
+}
+
 void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -3593,6 +3627,8 @@ int main() {
   testStructuredCFGDuplicatesBlockBodySource();
   testGotoStructurerRendersVirtualBlockBodySource();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
+  testStructuredCFGRedirectPredecessorsIsAtomic();
+  testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
