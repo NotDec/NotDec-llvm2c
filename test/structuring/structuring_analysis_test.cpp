@@ -2076,6 +2076,67 @@ void testRefineCyclicVirtualizesExtraContinues() {
   assert(Graph.virtualEdges().front().ToBlock == 1);
 }
 
+void testRefineCyclicOverlayVirtualizesExtraContinues() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 5}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {1}));
+  Cfg.addBlock(block(5, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4, 5};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Manager.regionTree(), *RootOverlay->region(),
+                                 Graph, Tree, RootOverlay));
+  assert(Graph.virtualEdges().size() == 1);
+  assert(Graph.virtualEdges().front().Kind == VirtualEdgeKind::Continue);
+  assert(Graph.virtualEdges().front().FromBlock == 4);
+  assert(Graph.virtualEdges().front().ToBlock == 1);
+
+  const std::vector<OverlayMember> &Members = Manager.members(RootId);
+  auto LoopIt =
+      std::find_if(Members.begin(), Members.end(), [](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured;
+      });
+  assert(LoopIt != Members.end());
+  OverlayNodeKey LoopNode = Manager.nodeKey(*LoopIt);
+
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true,
+                            /*IncludeMarkedEdges=*/true);
+  bool HasFollowEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        OverlayNodeKey Target =
+            Edge.targetsMember() ? Manager.nodeKey(Edge.To) : Edge.targetNode();
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == LoopNode &&
+               Target == OverlayNodeKey::block(5);
+      }) != Edges.end();
+  bool HasHeadEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        OverlayNodeKey Target =
+            Edge.targetsMember() ? Manager.nodeKey(Edge.To) : Edge.targetNode();
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == LoopNode &&
+               Target == OverlayNodeKey::block(1);
+      }) != Edges.end();
+  assert(HasFollowEdge);
+  assert(!HasHeadEdge);
+}
+
 void testRefineCyclicSkipsSwitchSourceContinueRewrite() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2602,6 +2663,7 @@ int main() {
   testRefineCyclicDropsOverlayRefinementMarksAfterCollapse();
   testRefineCyclicMergesMultipleLatches();
   testRefineCyclicVirtualizesExtraContinues();
+  testRefineCyclicOverlayVirtualizesExtraContinues();
   testRefineCyclicSkipsSwitchSourceContinueRewrite();
   testRefineCyclicBuildsDoWhileFromLatchCondition();
   testRefineCyclicPrefersDoWhileWhenLatchConditionWouldBecomeBreak();

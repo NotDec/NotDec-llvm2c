@@ -1568,7 +1568,8 @@ void detachOverlayVirtualEdge(RegionOverlay *Overlay,
 bool installVirtualizedEdge(const StructuredCFG &Cfg, const Region &R,
                             MutableRegionGraph &Graph, StructuredTree &Tree,
                             RegionOverlay *Overlay,
-                            const VirtualEdge &Edge) {
+                            const VirtualEdge &Edge,
+                            bool RewriteSource = true) {
   if (!Graph.hasEdge(Edge.From, Edge.To)) {
     return false;
   }
@@ -1581,7 +1582,7 @@ bool installVirtualizedEdge(const StructuredCFG &Cfg, const Region &R,
       overlayNodesForGraphNode(Target, Edge.ToBlock);
 
   NodeId Replacement = InvalidNodeId;
-  if (Source != nullptr) {
+  if (RewriteSource && Source != nullptr) {
     Replacement = buildVirtualizedSource(Cfg, *Source, Edge, R, Tree);
     if (Replacement != InvalidNodeId) {
       Graph.setStructuredRoot(Edge.From, Replacement);
@@ -2354,7 +2355,8 @@ bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
                                   GraphNodeId HeadId,
                                   const MutableRegionGraphAnalysis &Analysis,
                                   MutableRegionGraph &Graph,
-                                  StructuredTree &Tree) {
+                                  StructuredTree &Tree,
+                                  RegionOverlay *Overlay) {
   std::vector<GraphNodeId> ContinueSources;
   for (GraphNodeId Id : Members) {
     if (Id != HeadId && Graph.hasEdge(Id, HeadId)) {
@@ -2397,15 +2399,9 @@ bool virtualizeExtraContinueEdges(const StructuredCFG &Cfg,
     }
     VirtualEdge Edge{SourceId, HeadId, Source->TailBlock, Head->Blocks.front(),
                      VirtualEdgeKind::Continue};
-    if (!sourceContainsStructuredSwitch(*Source, Tree)) {
-      NodeId Replacement =
-          buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion, Tree);
-      if (Replacement != InvalidNodeId) {
-        Graph.setStructuredRoot(SourceId, Replacement);
-      }
-    }
-    Graph.virtualizeEdge(SourceId, HeadId, Edge.Kind);
-    Changed = true;
+    Changed |= installVirtualizedEdge(
+        Cfg, LoopRegion, Graph, Tree, Overlay, Edge,
+        /*RewriteSource=*/!sourceContainsStructuredSwitch(*Source, Tree));
   }
   return Changed;
 }
@@ -2641,7 +2637,7 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
                                    Graph, Tree, Overlay);
     }
     virtualizeExtraContinueEdges(Cfg, LoopRegion, MemberSet, HeadId, Analysis,
-                                 Graph, Tree);
+                                 Graph, Tree, Overlay);
 
     StructuredNode LoopNode;
     bool CanTryDoWhile = PreferDoWhile || Successors.size() <= 1;
