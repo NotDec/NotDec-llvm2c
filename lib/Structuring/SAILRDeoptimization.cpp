@@ -658,6 +658,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     StructuredCFG &Graph, const StructuringEvaluation &Current) {
   (void)Current;
 
+  std::map<BlockId, std::vector<BlockId>> SwitchPredsByDefault;
   std::map<BlockId, BlockId> KeepPredForDefault;
   std::map<BlockId, LinearRegion> DefaultRegions;
 
@@ -666,6 +667,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     if (DefaultTarget == InvalidBlockId) {
       continue;
     }
+    SwitchPredsByDefault[DefaultTarget].push_back(Block.Id);
 
     const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
     if (DefaultBlock == nullptr ||
@@ -688,7 +690,41 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
   }
 
   bool Changed = false;
+  std::set<BlockId> RewrittenDefaults;
+  for (const auto &[DefaultTarget, SwitchPreds] : SwitchPredsByDefault) {
+    if (SwitchPreds.size() <= 1) {
+      continue;
+    }
+
+    bool RewroteDefault = false;
+    for (BlockId SwitchPred : SwitchPreds) {
+      if (!Graph.hasEdge(SwitchPred, DefaultTarget)) {
+        continue;
+      }
+
+      BlockId Forwarder = Graph.createSyntheticBlock({DefaultTarget});
+      if (Forwarder == InvalidBlockId ||
+          !Graph.replaceEdge(SwitchPred, DefaultTarget, Forwarder)) {
+        if (Forwarder != InvalidBlockId) {
+          Graph.removeBlock(Forwarder);
+        }
+        continue;
+      }
+
+      RewroteDefault = true;
+      Changed = true;
+    }
+
+    if (RewroteDefault) {
+      RewrittenDefaults.insert(DefaultTarget);
+    }
+  }
+
   for (const auto &[DefaultTarget, KeepPred] : KeepPredForDefault) {
+    if (RewrittenDefaults.count(DefaultTarget) != 0) {
+      continue;
+    }
+
     std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
     std::vector<BlockId> PredsToUpdate;
     for (BlockId Pred : Preds) {

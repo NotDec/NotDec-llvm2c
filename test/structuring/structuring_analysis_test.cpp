@@ -923,6 +923,20 @@ void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
   assert(Cfg.getBlock(0) != nullptr);
 }
 
+void testStructuredCFGCreateSyntheticBlock() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(10, {}));
+
+  BlockId Synthetic = Cfg.createSyntheticBlock({10});
+  const CFGBlock *Block = Cfg.getBlock(Synthetic);
+  assert(Block != nullptr);
+  assert(Block->Id == Synthetic);
+  assert(Block->BodyBlock == Synthetic);
+  assert(Block->Statements.empty());
+  assert(Block->Terminator == TerminatorKind::Fallthrough);
+  assert(Block->Successors == std::vector<BlockId>{10});
+}
+
 void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -1415,6 +1429,54 @@ void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   assert(Copy->Successors == std::vector<BlockId>{4});
   assert(Copy->BodyBlock == 1);
   assert(hasSinglePayload(Copy->Statements, 11));
+}
+
+void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+  Cfg.addBlock(switchBlock(3, {1, 4}));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({21});
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock Case0 = block(2, {5});
+  Case0.Statements.push_back({22});
+  Cfg.addBlock(std::move(Case0));
+
+  CFGBlock Case1 = block(4, {5});
+  Case1.Statements.push_back({23});
+  Cfg.addBlock(std::move(Case1));
+
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch1 = Cfg.getBlock(3);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch1 != nullptr && DefaultBlock != nullptr);
+  assert(Switch0->Successors.front() != 1);
+  assert(Switch1->Successors.front() != 1);
+  assert(Switch0->Successors.front() != Switch1->Successors.front());
+  assert(DefaultBlock->Successors == std::vector<BlockId>{5});
+  assert(hasSinglePayload(DefaultBlock->Statements, 21));
+
+  const CFGBlock *Forwarder0 = Cfg.getBlock(Switch0->Successors.front());
+  const CFGBlock *Forwarder1 = Cfg.getBlock(Switch1->Successors.front());
+  assert(Forwarder0 != nullptr && Forwarder1 != nullptr);
+  assert(Forwarder0->BodyBlock == Forwarder0->Id);
+  assert(Forwarder1->BodyBlock == Forwarder1->Id);
+  assert(Forwarder0->Statements.empty());
+  assert(Forwarder1->Statements.empty());
+  assert(Forwarder0->Terminator == TerminatorKind::Fallthrough);
+  assert(Forwarder1->Terminator == TerminatorKind::Fallthrough);
+  assert(Forwarder0->Successors == std::vector<BlockId>{1});
+  assert(Forwarder1->Successors == std::vector<BlockId>{1});
 }
 
 void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
@@ -4283,6 +4345,7 @@ int main() {
   testStructuredCFGSuccessorsOfDeduplicatesCaseTargets();
   testStructuredCFGDuplicateRegionRewritesInternalEdges();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
+  testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
@@ -4297,6 +4360,7 @@ int main() {
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
+  testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();

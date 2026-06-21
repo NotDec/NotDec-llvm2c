@@ -51,6 +51,15 @@ BlockId StructuredCFG::addBlock(CFGBlock Block) {
   return Id;
 }
 
+BlockId StructuredCFG::createSyntheticBlock(std::vector<BlockId> Successors) {
+  CFGBlock Block;
+  Block.Id = nextBlockId();
+  Block.BodyBlock = Block.Id;
+  Block.Terminator = TerminatorKind::Fallthrough;
+  Block.Successors = std::move(Successors);
+  return addBlock(std::move(Block));
+}
+
 BlockId StructuredCFG::duplicateBlock(BlockId Source,
                                       std::vector<BlockId> Successors) {
   const CFGBlock *SourceBlock = getBlock(Source);

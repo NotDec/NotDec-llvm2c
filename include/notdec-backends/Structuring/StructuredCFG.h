@@ -73,6 +73,7 @@ struct DuplicatedRegion {
 class StructuredCFG {
 public:
   BlockId addBlock(CFGBlock Block);
+  BlockId createSyntheticBlock(std::vector<BlockId> Successors);
   BlockId duplicateBlock(BlockId Source, std::vector<BlockId> Successors);
   std::optional<DuplicatedRegion>
   duplicateRegion(const std::vector<BlockId> &RegionBlocks);
