@@ -460,6 +460,33 @@ bool OverlayManager::isHiddenFullEdge(RegionId Id,
                       }) != It->second.end();
 }
 
+bool OverlayManager::isMarkedEdge(RegionId Id, const OverlayNodeKey &From,
+                                  const OverlayNodeKey &To) const {
+  auto It = EdgeMarks.find(Id);
+  if (It == EdgeMarks.end()) {
+    return false;
+  }
+  for (const auto &Entry : It->second) {
+    const std::vector<OverlayHiddenEdge> &Edges = Entry.second;
+    if (std::find_if(Edges.begin(), Edges.end(),
+                     [&](const OverlayHiddenEdge &Edge) {
+                       return Edge.From == From && Edge.To == To;
+                     }) != Edges.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool OverlayManager::isMarkedViewEdge(RegionId Id,
+                                      const OverlayViewEdge &Edge) const {
+  OverlayNodeKey From =
+      Edge.sourcesMember() ? nodeKey(Edge.From) : Edge.sourceNode();
+  OverlayNodeKey To =
+      Edge.targetsMember() ? nodeKey(Edge.To) : Edge.targetNode();
+  return isMarkedEdge(Id, From, To);
+}
+
 void OverlayManager::rebuildBlockSuccessorCompatibility() {
   SharedSuccessors.clear();
   for (const auto &Entry : SharedNodeSuccessors) {
@@ -527,6 +554,19 @@ void OverlayManager::clearEdgeStateForBlock(BlockId Block) {
                                  return edgeReferencesBlock(Edge, Block);
                                }),
                 Edges.end());
+  }
+  for (auto &Entry : EdgeMarks) {
+    for (auto &MarkEntry : Entry.second) {
+      std::vector<OverlayHiddenEdge> &Edges = MarkEntry.second;
+      Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
+                                 [&](const OverlayHiddenEdge &Edge) {
+                                   return (Edge.From.isBlock() &&
+                                           Edge.From.Block == Block) ||
+                                          (Edge.To.isBlock() &&
+                                           Edge.To.Block == Block);
+                                 }),
+                  Edges.end());
+    }
   }
 }
 
@@ -639,6 +679,18 @@ void OverlayManager::remapBookkeeping(
                             NewNode);
     }
   }
+  for (auto &Entry : EdgeMarks) {
+    for (auto &MarkEntry : Entry.second) {
+      for (OverlayHiddenEdge &Edge : MarkEntry.second) {
+        if (IsOldNode(Edge.From)) {
+          Edge.From = NewNode;
+        }
+        if (IsOldNode(Edge.To)) {
+          Edge.To = NewNode;
+        }
+      }
+    }
+  }
   (void)Id;
 }
 
@@ -651,6 +703,9 @@ OverlayManager::visibleNodeSuccessors(RegionId Id) const {
       OverlayNodeKey From = nodeKey(Member);
       for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
         if (isHiddenEdge(Id, From, Succ)) {
+          continue;
+        }
+        if (isMarkedEdge(Id, From, Succ)) {
           continue;
         }
         if (memberForNodeKey(Id, Succ) != nullptr) {
@@ -672,6 +727,9 @@ OverlayManager::visibleNodeSuccessors(RegionId Id) const {
       for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
         if (isHiddenEdge(Id, OverlayNodeKey::block(Block),
                          Succ)) {
+          continue;
+        }
+        if (isMarkedEdge(Id, OverlayNodeKey::block(Block), Succ)) {
           continue;
         }
         if (memberForNodeKey(Id, Succ) != nullptr) {
@@ -709,14 +767,15 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
         }
         OverlayViewEdge Edge = {Member, InvalidBlockId, *SuccMember,
                                 InvalidBlockId};
-        if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+        if ((!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) &&
+            !isMarkedViewEdge(Id, Edge)) {
           appendUniqueEdge(Result, Edge);
         }
         return;
       }
       if (IncludeSuccessors) {
         OverlayViewEdge Edge = {Member, InvalidBlockId, {}, Succ.Block};
-        if (!isHiddenFullEdge(Id, Edge)) {
+        if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
           appendUniqueEdge(Result, Edge);
         }
       }
@@ -729,7 +788,8 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
                            });
     if (It != ViewMembers.end()) {
       OverlayViewEdge Edge = {Member, InvalidBlockId, *It, InvalidBlockId};
-      if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+      if ((!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) &&
+          !isMarkedViewEdge(Id, Edge)) {
         appendUniqueEdge(Result, Edge);
       }
       return;
@@ -739,7 +799,7 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
       OverlayViewEdge Edge = {Member, InvalidBlockId, {}, InvalidBlockId};
       Edge.HasExternalSuccessorNode = true;
       Edge.ExternalSuccessorNode = Succ;
-      if (!isHiddenFullEdge(Id, Edge)) {
+      if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
         appendUniqueEdge(Result, Edge);
       }
     }
@@ -776,14 +836,15 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
           }
           OverlayViewEdge Edge = {Member, InvalidBlockId, *SuccMember,
                                   InvalidBlockId};
-          if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+          if ((!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) &&
+              !isMarkedViewEdge(Id, Edge)) {
             appendUniqueEdge(Result, Edge);
           }
           continue;
         }
         if (IncludeSuccessors) {
           OverlayViewEdge Edge = {Member, InvalidBlockId, {}, Succ};
-          if (!isHiddenFullEdge(Id, Edge)) {
+          if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
             appendUniqueEdge(Result, Edge);
           }
         }
@@ -814,7 +875,7 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
           continue;
         }
         OverlayViewEdge Edge = {{}, Succ, {}, SuccSucc};
-        if (!isHiddenFullEdge(Id, Edge)) {
+        if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
           appendUniqueEdge(Result, Edge);
         }
       }
@@ -823,7 +884,7 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
   auto ExtraIt = ExtraFullEdges.find(Id);
   if (ExtraIt != ExtraFullEdges.end()) {
     for (const OverlayViewEdge &Edge : ExtraIt->second) {
-      if (!isHiddenFullEdge(Id, Edge)) {
+      if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
         appendUniqueEdge(Result, Edge);
       }
     }
@@ -935,6 +996,43 @@ void OverlayManager::addExtraFullEdge(RegionId Id,
     return;
   }
   appendUniqueEdge(ExtraFullEdges[Id], *Edge);
+}
+
+void OverlayManager::markNodeEdge(RegionId Id, const OverlayNodeKey &From,
+                                  const OverlayNodeKey &To,
+                                  const std::string &Key) {
+  appendUniqueHiddenEdge(EdgeMarks[Id][Key], {From, To});
+}
+
+void OverlayManager::markEdge(RegionId Id, const OverlayEdgeEndpoint &From,
+                              const OverlayEdgeEndpoint &To,
+                              const std::string &Key) {
+  std::optional<OverlayViewEdge> Edge = viewEdgeForEndpoints(Id, From, To);
+  if (!Edge) {
+    return;
+  }
+  markNodeEdge(Id, Edge->sourcesMember() ? nodeKey(Edge->From)
+                                         : Edge->sourceNode(),
+               Edge->targetsMember() ? nodeKey(Edge->To) : Edge->targetNode(),
+               Key);
+}
+
+void OverlayManager::dropEdgeMarksFrom(RegionId Id, const OverlayNodeKey &From,
+                                       const std::string &Key) {
+  auto It = EdgeMarks.find(Id);
+  if (It == EdgeMarks.end()) {
+    return;
+  }
+  auto MarkIt = It->second.find(Key);
+  if (MarkIt == It->second.end()) {
+    return;
+  }
+  std::vector<OverlayHiddenEdge> &Edges = MarkIt->second;
+  Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
+                             [&](const OverlayHiddenEdge &Edge) {
+                               return Edge.From == From;
+                             }),
+              Edges.end());
 }
 
 void OverlayManager::absorbSuccessorInto(
@@ -1066,7 +1164,7 @@ std::size_t OverlayManager::checkpoint() {
   StructuredRootCheckpoints.push_back(
       {StructuredRoots, SuccessorSnapshots, Members, BlockOwners,
        ParentRegions, SharedNodeSuccessors, SharedSuccessors, HiddenEdges,
-       HiddenFullEdges, ExtraFullEdges});
+       HiddenFullEdges, ExtraFullEdges, EdgeMarks});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -1086,6 +1184,7 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
   HiddenEdges = StructuredRootCheckpoints[Checkpoint].HiddenEdges;
   HiddenFullEdges = StructuredRootCheckpoints[Checkpoint].HiddenFullEdges;
   ExtraFullEdges = StructuredRootCheckpoints[Checkpoint].ExtraFullEdges;
+  EdgeMarks = StructuredRootCheckpoints[Checkpoint].EdgeMarks;
 }
 
 void OverlayManager::commit(std::size_t Checkpoint) {
@@ -1411,6 +1510,21 @@ void RegionOverlay::hideEdge(BlockId From, BlockId To) {
 void RegionOverlay::hideEdgeToSuccessor(BlockId Successor) {
   if (Manager != nullptr) {
     Manager->hideEdgeToSuccessor(Id, Successor);
+  }
+}
+
+void RegionOverlay::markEdge(const OverlayEdgeEndpoint &From,
+                             const OverlayEdgeEndpoint &To,
+                             const std::string &Key) {
+  if (Manager != nullptr) {
+    Manager->markEdge(Id, From, To, Key);
+  }
+}
+
+void RegionOverlay::dropEdgeMarksFrom(const OverlayNodeKey &From,
+                                      const std::string &Key) {
+  if (Manager != nullptr) {
+    Manager->dropEdgeMarksFrom(Id, From, Key);
   }
 }
 

@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 namespace notdec::backend::structuring {
@@ -167,6 +168,12 @@ public:
   void hideEdge(RegionId Id, BlockId From, BlockId To);
   void hideEdgeToSuccessor(RegionId Id, BlockId Successor);
   void hideEdgeToNodeSuccessor(RegionId Id, const OverlayNodeKey &Successor);
+  void markNodeEdge(RegionId Id, const OverlayNodeKey &From,
+                    const OverlayNodeKey &To, const std::string &Key);
+  void markEdge(RegionId Id, const OverlayEdgeEndpoint &From,
+                const OverlayEdgeEndpoint &To, const std::string &Key);
+  void dropEdgeMarksFrom(RegionId Id, const OverlayNodeKey &From,
+                         const std::string &Key);
   void removeEdgeWithSuccessorsOnly(RegionId Id,
                                     const OverlayEdgeEndpoint &From,
                                     const OverlayEdgeEndpoint &To);
@@ -201,6 +208,8 @@ private:
     std::map<RegionId, std::vector<OverlayHiddenEdge>> HiddenEdges;
     std::map<RegionId, std::vector<OverlayViewEdge>> HiddenFullEdges;
     std::map<RegionId, std::vector<OverlayViewEdge>> ExtraFullEdges;
+    std::map<RegionId, std::map<std::string, std::vector<OverlayHiddenEdge>>>
+        EdgeMarks;
   };
 
   void initializeOverlayState();
@@ -217,6 +226,9 @@ private:
   bool isHiddenEdge(RegionId Id, const OverlayNodeKey &From,
                     const OverlayNodeKey &To) const;
   bool isHiddenFullEdge(RegionId Id, const OverlayViewEdge &Edge) const;
+  bool isMarkedEdge(RegionId Id, const OverlayNodeKey &From,
+                    const OverlayNodeKey &To) const;
+  bool isMarkedViewEdge(RegionId Id, const OverlayViewEdge &Edge) const;
   void rebuildBlockSuccessorCompatibility();
   void clearHiddenEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
   void clearEdgeStateForBlock(BlockId Block);
@@ -241,6 +253,8 @@ private:
   std::map<RegionId, std::vector<OverlayHiddenEdge>> HiddenEdges;
   std::map<RegionId, std::vector<OverlayViewEdge>> HiddenFullEdges;
   std::map<RegionId, std::vector<OverlayViewEdge>> ExtraFullEdges;
+  std::map<RegionId, std::map<std::string, std::vector<OverlayHiddenEdge>>>
+      EdgeMarks;
   std::map<RegionId, NodeId> StructuredRoots;
   std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
   std::vector<CheckpointState> StructuredRootCheckpoints;
@@ -272,6 +286,9 @@ public:
   void detachEdge(BlockId From, BlockId To);
   void hideEdge(BlockId From, BlockId To);
   void hideEdgeToSuccessor(BlockId Successor);
+  void markEdge(const OverlayEdgeEndpoint &From, const OverlayEdgeEndpoint &To,
+                const std::string &Key);
+  void dropEdgeMarksFrom(const OverlayNodeKey &From, const std::string &Key);
   void removeEdgeWithSuccessorsOnly(const OverlayEdgeEndpoint &From,
                                     const OverlayEdgeEndpoint &To);
   void addExtraFullEdge(const OverlayEdgeEndpoint &From,

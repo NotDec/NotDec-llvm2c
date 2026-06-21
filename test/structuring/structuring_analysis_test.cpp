@@ -1131,6 +1131,94 @@ void testOverlayAbsorbSuccessorIntoStructuredMember() {
   assert(!StillShowsOriginalSuccessor);
 }
 
+void testOverlayEdgeMarksFilterAndRemap() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  std::size_t Checkpoint = Manager.checkpoint();
+
+  RootOverlay->markEdge(OverlayEdgeEndpoint::member(OverlayMember::block(0)),
+                        OverlayEdgeEndpoint::member(OverlayMember::block(1)),
+                        "cyclic_refinement_outgoing");
+  assert(Manager.visibleSuccessors(RootId).empty());
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  bool HasMarkedEdge =
+      std::find_if(Edges.begin(), Edges.end(), [](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Edge.From.Kind == OverlayMemberKind::Block &&
+               Edge.From.Block == 0 && Edge.targetsMember() &&
+               Edge.To.Kind == OverlayMemberKind::Block && Edge.To.Block == 1;
+      }) != Edges.end();
+  assert(!HasMarkedEdge);
+
+  RootOverlay->dropEdgeMarksFrom(OverlayNodeKey::block(0),
+                                 "cyclic_refinement_outgoing");
+  Edges = Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  HasMarkedEdge =
+      std::find_if(Edges.begin(), Edges.end(), [](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Edge.From.Kind == OverlayMemberKind::Block &&
+               Edge.From.Block == 0 && Edge.targetsMember() &&
+               Edge.To.Kind == OverlayMemberKind::Block && Edge.To.Block == 1;
+      }) != Edges.end();
+  assert(HasMarkedEdge);
+
+  RootOverlay->markEdge(OverlayEdgeEndpoint::member(OverlayMember::block(1)),
+                        OverlayEdgeEndpoint::member(OverlayMember::block(2)),
+                        "cyclic_refinement_outgoing");
+  RootOverlay->replaceNodes({OverlayNodeKey::block(1)}, 88);
+  const std::vector<OverlayMember> &RootMembers = Manager.members(RootId);
+  auto StructuredIt = std::find_if(
+      RootMembers.begin(), RootMembers.end(), [](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured &&
+               Member.StructuredRoot == 88;
+      });
+  assert(StructuredIt != RootMembers.end());
+  OverlayNodeKey Structured = Manager.nodeKey(*StructuredIt);
+  Edges = Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  bool HasRemappedMarkedEdge =
+      std::find_if(Edges.begin(), Edges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) == Structured &&
+                            Edge.targetsMember() &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != Edges.end();
+  assert(!HasRemappedMarkedEdge);
+
+  RootOverlay->dropEdgeMarksFrom(Structured, "cyclic_refinement_outgoing");
+  Edges = Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  HasRemappedMarkedEdge =
+      std::find_if(Edges.begin(), Edges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) == Structured &&
+                            Edge.targetsMember() &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != Edges.end();
+  assert(HasRemappedMarkedEdge);
+
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.members(RootId).size() == 3);
+  assert(Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false).size() ==
+         2);
+}
+
 void testPhoenixOverlayPathSyncsReducerCollapseToOverlay() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2040,6 +2128,7 @@ int main() {
   testOverlayCollapseRegionRewiresSharedGraph();
   testOverlayReplaceNodesRewiresSharedGraphAndBookkeeping();
   testOverlayAbsorbSuccessorIntoStructuredMember();
+  testOverlayEdgeMarksFilterAndRemap();
   testPhoenixOverlayPathSyncsReducerCollapseToOverlay();
   testPhoenixOverlayPathSyncsRepeatedReducerCollapses();
   testPhoenixOverlayLastResortDetachesVirtualizedEdge();
