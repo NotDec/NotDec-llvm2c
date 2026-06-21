@@ -371,6 +371,44 @@ bool appendTerminalForkRegion(const StructuredCFG &Graph, LinearRegion &Region,
   return true;
 }
 
+LinearRegion findLinearRegionFromHead(const StructuredCFG &Graph, BlockId Head) {
+  LinearRegion Region;
+  const CFGBlock *HeadBlock = Graph.getBlock(Head);
+  if (HeadBlock == nullptr) {
+    return Region;
+  }
+
+  Region.Head = Head;
+  Region.Blocks.push_back(Head);
+
+  std::set<BlockId> Seen;
+  Seen.insert(Head);
+  while (true) {
+    const CFGBlock *TailBlock = Graph.getBlock(Region.Blocks.back());
+    if (TailBlock == nullptr || TailBlock->Successors.size() != 1) {
+      break;
+    }
+
+    BlockId Succ = TailBlock->Successors.front();
+    if (Seen.count(Succ) != 0) {
+      break;
+    }
+
+    const CFGBlock *SuccBlock = Graph.getBlock(Succ);
+    if (SuccBlock == nullptr || predecessorsOf(Graph, Succ).size() != 1) {
+      break;
+    }
+    if (SuccBlock->Terminator == TerminatorKind::Switch) {
+      break;
+    }
+
+    Region.Blocks.push_back(Succ);
+    Seen.insert(Succ);
+  }
+
+  return Region;
+}
+
 LinearRegion findLinearCopyRegion(const StructuredCFG &Graph, BlockId Head) {
   LinearRegion Region;
   const CFGBlock *HeadBlock = Graph.getBlock(Head);
@@ -607,7 +645,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
   (void)Current;
 
   std::map<BlockId, BlockId> KeepPredForDefault;
-  std::map<BlockId, std::vector<BlockId>> ToUpdate;
+  std::map<BlockId, LinearRegion> DefaultRegions;
 
   for (const CFGBlock &Block : Graph.blocks()) {
     BlockId DefaultTarget = defaultSwitchSuccessor(Graph, Block);
@@ -626,7 +664,13 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
       continue;
     }
 
+    LinearRegion Region = findLinearRegionFromHead(Graph, DefaultTarget);
+    if (Region.Head == InvalidBlockId) {
+      continue;
+    }
+
     KeepPredForDefault.emplace(DefaultTarget, Block.Id);
+    DefaultRegions.emplace(DefaultTarget, std::move(Region));
   }
 
   bool Changed = false;
@@ -642,27 +686,20 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
       continue;
     }
 
-    const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
-    if (DefaultBlock == nullptr ||
-        Graph.successorsOf(DefaultTarget).size() != 1) {
+    auto RegionIt = DefaultRegions.find(DefaultTarget);
+    if (RegionIt == DefaultRegions.end()) {
       continue;
     }
-    std::vector<BlockId> DefaultSuccessors = Graph.successorsOf(DefaultTarget);
 
-    for (BlockId Pred : PredsToUpdate) {
-      if (!Graph.hasEdge(Pred, DefaultTarget)) {
+    const LinearRegion &Region = RegionIt->second;
+
+    std::vector<BlockId> Copies;
+    std::vector<std::vector<BlockId>> PredComponents =
+        connectedPredecessorComponents(Graph, PredsToUpdate);
+    for (const std::vector<BlockId> &Component : PredComponents) {
+      if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
         continue;
       }
-
-      BlockId Copy = Graph.duplicateBlock(DefaultTarget, DefaultSuccessors);
-      if (Copy == InvalidBlockId) {
-        continue;
-      }
-      if (!Graph.replaceEdge(Pred, DefaultTarget, Copy)) {
-        Graph.removeBlock(Copy);
-        continue;
-      }
-
       Changed = true;
     }
   }

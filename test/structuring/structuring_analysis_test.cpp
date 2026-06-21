@@ -1387,6 +1387,62 @@ void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   assert(hasSinglePayload(Copy->Statements, 11));
 }
 
+void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock Default = block(1, {4});
+  Default.Statements.push_back({31});
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock Tail = block(4, {5});
+  Tail.Statements.push_back({32});
+  Cfg.addBlock(std::move(Tail));
+
+  CFGBlock Ret = block(5, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({33});
+  Cfg.addBlock(std::move(Ret));
+
+  CFGBlock Case = block(2, {5});
+  Case.Statements.push_back({34});
+  Cfg.addBlock(std::move(Case));
+
+  Cfg.addBlock(block(3, {1}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(4) != nullptr);
+  assert(Cfg.getBlock(5) != nullptr);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  const CFGBlock *CopyPred = Cfg.getBlock(3);
+  assert(Switch != nullptr && DefaultBlock != nullptr && CopyPred != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(DefaultBlock->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(DefaultBlock->Statements, 31));
+
+  BlockId CopyId = CopyPred->Successors.front();
+  assert(CopyId != 1);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Successors.size() == 1);
+  assert(hasSinglePayload(Copy->Statements, 31));
+
+  const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->Successors == std::vector<BlockId>{5});
+  assert(CopyTail->BodyBlock == 4);
+  assert(hasSinglePayload(CopyTail->Statements, 32));
+  assert(hasSinglePayload(Cfg.getBlock(5)->Statements, 33));
+}
+
 void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 3}));
@@ -4166,6 +4222,7 @@ int main() {
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
+  testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
