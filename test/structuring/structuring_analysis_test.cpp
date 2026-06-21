@@ -68,6 +68,12 @@ public:
   using DuplicationReverter::runOnGraph;
 };
 
+class TestSwitchDefaultCaseDuplicator : public SwitchDefaultCaseDuplicator {
+public:
+  using SwitchDefaultCaseDuplicator::SwitchDefaultCaseDuplicator;
+  using SwitchDefaultCaseDuplicator::runOnGraph;
+};
+
 class OrderCaptureStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::virtualizeOneEdge;
@@ -868,6 +874,44 @@ void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   assert(CopyRet1->BodyBlock == CopyRet1->Id);
   assert(hasSinglePayload(CopyRet0->Statements, 9));
   assert(hasSinglePayload(CopyRet1->Statements, 9));
+}
+
+void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock Default = block(1, {4});
+  Default.Statements.push_back({11});
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock Case = block(2, {4});
+  Case.Statements.push_back({12});
+  Cfg.addBlock(std::move(Case));
+
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  const CFGBlock *CopyPred = Cfg.getBlock(3);
+  assert(Switch != nullptr && DefaultBlock != nullptr && CopyPred != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(DefaultBlock->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(DefaultBlock->Statements, 11));
+
+  BlockId CopyId = CopyPred->Successors.front();
+  assert(CopyId != 1);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Successors == std::vector<BlockId>{4});
+  assert(Copy->BodyBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 11));
 }
 
 void testControlFlowStructureCounterCollectsSharedQuality() {
@@ -3407,6 +3451,7 @@ int main() {
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
+  testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();

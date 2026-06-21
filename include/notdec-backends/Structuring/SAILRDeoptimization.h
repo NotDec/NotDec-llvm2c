@@ -35,6 +35,19 @@ protected:
                   const StructuringEvaluation &Current) override;
 };
 
+class SwitchDefaultCaseDuplicator : public StructuringOptimizationPass {
+public:
+  static StructuringOptimizationOptions defaultOptions();
+
+  explicit SwitchDefaultCaseDuplicator(
+      StructuringOptimizationOptions Options = defaultOptions())
+      : StructuringOptimizationPass(Options) {}
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override;
+};
+
 class CrossJumpReverter : public StructuringOptimizationPass {
 public:
   static StructuringOptimizationOptions defaultOptions();
