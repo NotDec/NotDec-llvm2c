@@ -923,6 +923,69 @@ void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
   assert(hasSinglePayload(Copy->Statements, 13));
 }
 
+void testReturnDuplicatorLowCopiesTerminalForkRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+
+  CFGBlock Ret = block(3, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({17});
+  Cfg.addBlock(std::move(Ret));
+
+  CFGBlock Trap = block(4, {});
+  Trap.Terminator = TerminatorKind::Unreachable;
+  Trap.Statements.push_back({19});
+  Cfg.addBlock(std::move(Trap));
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(2) == nullptr);
+  assert(Result.Output.getBlock(3) == nullptr);
+  assert(Result.Output.getBlock(4) == nullptr);
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  const CFGBlock *Block1 = Result.Output.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors.size() == 1);
+  assert(Block0->Successors.front() != Block1->Successors.front());
+
+  const CFGBlock *CopyHead0 = Result.Output.getBlock(Block0->Successors.front());
+  const CFGBlock *CopyHead1 = Result.Output.getBlock(Block1->Successors.front());
+  assert(CopyHead0 != nullptr && CopyHead1 != nullptr);
+  assert(CopyHead0->Terminator == TerminatorKind::Branch);
+  assert(CopyHead1->Terminator == TerminatorKind::Branch);
+  assert(CopyHead0->Successors.size() == 2);
+  assert(CopyHead1->Successors.size() == 2);
+
+  const CFGBlock *CopyRet0 = Result.Output.getBlock(CopyHead0->Successors[0]);
+  const CFGBlock *CopyTrap0 = Result.Output.getBlock(CopyHead0->Successors[1]);
+  const CFGBlock *CopyRet1 = Result.Output.getBlock(CopyHead1->Successors[0]);
+  const CFGBlock *CopyTrap1 = Result.Output.getBlock(CopyHead1->Successors[1]);
+  assert(CopyRet0 != nullptr && CopyTrap0 != nullptr);
+  assert(CopyRet1 != nullptr && CopyTrap1 != nullptr);
+  assert(CopyRet0->Terminator == TerminatorKind::Return);
+  assert(CopyRet1->Terminator == TerminatorKind::Return);
+  assert(CopyTrap0->Terminator == TerminatorKind::Unreachable);
+  assert(CopyTrap1->Terminator == TerminatorKind::Unreachable);
+  assert(hasSinglePayload(CopyRet0->Statements, 17));
+  assert(hasSinglePayload(CopyRet1->Statements, 17));
+  assert(hasSinglePayload(CopyTrap0->Statements, 19));
+  assert(hasSinglePayload(CopyTrap1->Statements, 19));
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -3534,6 +3597,7 @@ int main() {
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
+  testReturnDuplicatorLowCopiesTerminalForkRegion();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testControlFlowStructureCounterCollectsSharedQuality();
