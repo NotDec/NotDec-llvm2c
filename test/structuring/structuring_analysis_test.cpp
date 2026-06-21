@@ -8,6 +8,7 @@
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-backends/Structuring/StructuringEvaluator.h"
+#include "notdec-backends/Structuring/StructuringOptimizationPass.h"
 #include "notdec-backends/Structuring/StructuringQuality.h"
 
 #include <algorithm>
@@ -190,6 +191,74 @@ public:
   }
 
   BlockId Target = InvalidBlockId;
+};
+
+class CFGEdgeGotoRegionStructurer : public RegionStructurer {
+public:
+  NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
+                         StructuredTree &Tree) override {
+    StructuredNode Root;
+    Root.Kind = StructuredNodeKind::Sequence;
+
+    for (BlockId Id : R.Blocks) {
+      const CFGBlock *Block = Cfg.getBlock(Id);
+      if (Block == nullptr) {
+        continue;
+      }
+
+      StructuredNode Label;
+      Label.Kind = StructuredNodeKind::Label;
+      Label.Block = Id;
+      Root.Children.push_back(Tree.addNode(std::move(Label)));
+
+      for (BlockId Succ : Block->Successors) {
+        StructuredNode Goto;
+        Goto.Kind = StructuredNodeKind::Goto;
+        Goto.Target = Succ;
+        Root.Children.push_back(Tree.addNode(std::move(Goto)));
+      }
+    }
+
+    return Tree.addNode(std::move(Root));
+  }
+};
+
+class RemoveFirstSuccessorPass : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    for (CFGBlock &Block : Graph.blocks()) {
+      if (!Block.Successors.empty()) {
+        Block.Successors.clear();
+        Block.Terminator = TerminatorKind::Return;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+class AddFirstSuccessorPass : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    for (CFGBlock &Block : Graph.blocks()) {
+      if (Block.Id == 0 && Block.Successors.empty()) {
+        Block.Successors.push_back(1);
+        Block.Terminator = TerminatorKind::Fallthrough;
+        return true;
+      }
+    }
+    return false;
+  }
 };
 
 class GotoRegionTester : public GotoStructurer {
@@ -572,6 +641,37 @@ void testRelativeQualityRejectsMoreGotoTargets() {
   Current.OrderedLabels = {10, 20};
 
   assert(!improvesRelativeStructuringQuality(Initial, Current));
+}
+
+void testStructuringOptimizationPassAcceptsImprovedGraph() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  RemoveFirstSuccessorPass Pass;
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors.empty());
+  assert(Result.Evaluation.Gotos.empty());
+}
+
+void testStructuringOptimizationPassRejectsNewGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  CFGEdgeGotoRegionStructurer Structurer;
+  AddFirstSuccessorPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -2941,6 +3041,8 @@ int main() {
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
+  testStructuringOptimizationPassAcceptsImprovedGraph();
+  testStructuringOptimizationPassRejectsNewGotos();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();
