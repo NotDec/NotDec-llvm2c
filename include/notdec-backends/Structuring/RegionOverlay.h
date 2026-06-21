@@ -153,10 +153,13 @@ public:
   const std::vector<OverlayNodeKey> &
   sharedNodeSuccessors(const OverlayNodeKey &Id) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
-  std::vector<OverlayNodeKey> visibleNodeSuccessors(RegionId Id) const;
-  std::vector<BlockId> visibleSuccessors(RegionId Id) const;
-  std::vector<OverlayViewEdge> quotientEdges(RegionId Id,
-                                             bool IncludeSuccessors) const;
+  std::vector<OverlayNodeKey>
+  visibleNodeSuccessors(RegionId Id, bool IncludeMarkedEdges = false) const;
+  std::vector<BlockId> visibleSuccessors(RegionId Id,
+                                         bool IncludeMarkedEdges = false) const;
+  std::vector<OverlayViewEdge>
+  quotientEdges(RegionId Id, bool IncludeSuccessors,
+                bool IncludeMarkedEdges = false) const;
   void addBlockMember(RegionId Id, BlockId Block);
   void removeBlockMember(BlockId Block);
   void addNodeEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);

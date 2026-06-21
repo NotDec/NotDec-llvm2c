@@ -1207,6 +1207,8 @@ void testOverlayEdgeMarksFilterAndRemap() {
                         OverlayEdgeEndpoint::member(OverlayMember::block(1)),
                         "cyclic_refinement_outgoing");
   assert(Manager.visibleSuccessors(RootId).empty());
+  assert(Manager.visibleSuccessors(RootId, /*IncludeMarkedEdges=*/true)
+             .empty());
   std::vector<OverlayViewEdge> Edges =
       Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
   bool HasMarkedEdge =
@@ -1216,6 +1218,15 @@ void testOverlayEdgeMarksFilterAndRemap() {
                Edge.To.Kind == OverlayMemberKind::Block && Edge.To.Block == 1;
       }) != Edges.end();
   assert(!HasMarkedEdge);
+  Edges = Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false,
+                                /*IncludeMarkedEdges=*/true);
+  HasMarkedEdge =
+      std::find_if(Edges.begin(), Edges.end(), [](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Edge.From.Kind == OverlayMemberKind::Block &&
+               Edge.From.Block == 0 && Edge.targetsMember() &&
+               Edge.To.Kind == OverlayMemberKind::Block && Edge.To.Block == 1;
+      }) != Edges.end();
+  assert(HasMarkedEdge);
 
   RootOverlay->dropEdgeMarksFrom(OverlayNodeKey::block(0),
                                  "cyclic_refinement_outgoing");
@@ -1231,6 +1242,18 @@ void testOverlayEdgeMarksFilterAndRemap() {
   RootOverlay->markEdge(OverlayEdgeEndpoint::member(OverlayMember::block(1)),
                         OverlayEdgeEndpoint::member(OverlayMember::block(2)),
                         "cyclic_refinement_outgoing");
+  std::vector<OverlayViewEdge> RawFullEdges = Manager.quotientEdges(
+      RootId, /*IncludeSuccessors=*/true, /*IncludeMarkedEdges=*/true);
+  bool RawFullHasMarkedEdge =
+      std::find_if(RawFullEdges.begin(), RawFullEdges.end(),
+                   [](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Edge.From.Kind == OverlayMemberKind::Block &&
+                            Edge.From.Block == 1 && Edge.targetsMember() &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != RawFullEdges.end();
+  assert(RawFullHasMarkedEdge);
   RootOverlay->replaceNodes({OverlayNodeKey::block(1)}, 88);
   const std::vector<OverlayMember> &RootMembers = Manager.members(RootId);
   auto StructuredIt = std::find_if(
@@ -1251,6 +1274,18 @@ void testOverlayEdgeMarksFilterAndRemap() {
                             Edge.To.Block == 2;
                    }) != Edges.end();
   assert(!HasRemappedMarkedEdge);
+  Edges = Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false,
+                                /*IncludeMarkedEdges=*/true);
+  HasRemappedMarkedEdge =
+      std::find_if(Edges.begin(), Edges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) == Structured &&
+                            Edge.targetsMember() &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != Edges.end();
+  assert(HasRemappedMarkedEdge);
 
   RootOverlay->dropEdgeMarksFrom(Structured, "cyclic_refinement_outgoing");
   Edges = Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);

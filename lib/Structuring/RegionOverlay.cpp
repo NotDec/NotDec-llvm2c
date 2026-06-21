@@ -695,7 +695,8 @@ void OverlayManager::remapBookkeeping(
 }
 
 std::vector<OverlayNodeKey>
-OverlayManager::visibleNodeSuccessors(RegionId Id) const {
+OverlayManager::visibleNodeSuccessors(RegionId Id,
+                                      bool IncludeMarkedEdges) const {
   std::vector<OverlayNodeKey> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
   for (const OverlayMember &Member : ViewMembers) {
@@ -705,7 +706,7 @@ OverlayManager::visibleNodeSuccessors(RegionId Id) const {
         if (isHiddenEdge(Id, From, Succ)) {
           continue;
         }
-        if (isMarkedEdge(Id, From, Succ)) {
+        if (!IncludeMarkedEdges && isMarkedEdge(Id, From, Succ)) {
           continue;
         }
         if (memberForNodeKey(Id, Succ) != nullptr) {
@@ -729,7 +730,8 @@ OverlayManager::visibleNodeSuccessors(RegionId Id) const {
                          Succ)) {
           continue;
         }
-        if (isMarkedEdge(Id, OverlayNodeKey::block(Block), Succ)) {
+        if (!IncludeMarkedEdges &&
+            isMarkedEdge(Id, OverlayNodeKey::block(Block), Succ)) {
           continue;
         }
         if (memberForNodeKey(Id, Succ) != nullptr) {
@@ -742,9 +744,11 @@ OverlayManager::visibleNodeSuccessors(RegionId Id) const {
   return Result;
 }
 
-std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
+std::vector<BlockId>
+OverlayManager::visibleSuccessors(RegionId Id, bool IncludeMarkedEdges) const {
   std::vector<BlockId> Result;
-  for (const OverlayNodeKey &Succ : visibleNodeSuccessors(Id)) {
+  for (const OverlayNodeKey &Succ :
+       visibleNodeSuccessors(Id, IncludeMarkedEdges)) {
     if (Succ.isBlock()) {
       appendUniqueBlock(Result, Succ.Block);
     }
@@ -753,7 +757,8 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
 }
 
 std::vector<OverlayViewEdge>
-OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
+OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors,
+                              bool IncludeMarkedEdges) const {
   std::vector<OverlayViewEdge> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
   auto appendSuccessorEdge = [&](const OverlayMember &Member,
@@ -768,14 +773,15 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
         OverlayViewEdge Edge = {Member, InvalidBlockId, *SuccMember,
                                 InvalidBlockId};
         if ((!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) &&
-            !isMarkedViewEdge(Id, Edge)) {
+            (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
           appendUniqueEdge(Result, Edge);
         }
         return;
       }
       if (IncludeSuccessors) {
         OverlayViewEdge Edge = {Member, InvalidBlockId, {}, Succ.Block};
-        if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
+        if (!isHiddenFullEdge(Id, Edge) &&
+            (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
           appendUniqueEdge(Result, Edge);
         }
       }
@@ -789,7 +795,7 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
     if (It != ViewMembers.end()) {
       OverlayViewEdge Edge = {Member, InvalidBlockId, *It, InvalidBlockId};
       if ((!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) &&
-          !isMarkedViewEdge(Id, Edge)) {
+          (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
         appendUniqueEdge(Result, Edge);
       }
       return;
@@ -799,7 +805,8 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
       OverlayViewEdge Edge = {Member, InvalidBlockId, {}, InvalidBlockId};
       Edge.HasExternalSuccessorNode = true;
       Edge.ExternalSuccessorNode = Succ;
-      if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
+      if (!isHiddenFullEdge(Id, Edge) &&
+          (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
         appendUniqueEdge(Result, Edge);
       }
     }
@@ -837,14 +844,15 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
           OverlayViewEdge Edge = {Member, InvalidBlockId, *SuccMember,
                                   InvalidBlockId};
           if ((!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) &&
-              !isMarkedViewEdge(Id, Edge)) {
+              (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
             appendUniqueEdge(Result, Edge);
           }
           continue;
         }
         if (IncludeSuccessors) {
           OverlayViewEdge Edge = {Member, InvalidBlockId, {}, Succ};
-          if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
+          if (!isHiddenFullEdge(Id, Edge) &&
+              (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
             appendUniqueEdge(Result, Edge);
           }
         }
@@ -867,7 +875,7 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
   }
 
   if (InLoop) {
-    std::vector<BlockId> Succs = visibleSuccessors(Id);
+    std::vector<BlockId> Succs = visibleSuccessors(Id, IncludeMarkedEdges);
     for (BlockId Succ : Succs) {
       for (BlockId SuccSucc : sharedSuccessors(Succ)) {
         if (std::find(Succs.begin(), Succs.end(), SuccSucc) == Succs.end() ||
@@ -875,7 +883,8 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
           continue;
         }
         OverlayViewEdge Edge = {{}, Succ, {}, SuccSucc};
-        if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
+        if (!isHiddenFullEdge(Id, Edge) &&
+            (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
           appendUniqueEdge(Result, Edge);
         }
       }
@@ -884,7 +893,8 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
   auto ExtraIt = ExtraFullEdges.find(Id);
   if (ExtraIt != ExtraFullEdges.end()) {
     for (const OverlayViewEdge &Edge : ExtraIt->second) {
-      if (!isHiddenFullEdge(Id, Edge) && !isMarkedViewEdge(Id, Edge)) {
+      if (!isHiddenFullEdge(Id, Edge) &&
+          (IncludeMarkedEdges || !isMarkedViewEdge(Id, Edge))) {
         appendUniqueEdge(Result, Edge);
       }
     }
