@@ -1074,6 +1074,67 @@ void testReturnDuplicatorLowUsesParentGotoSource() {
   assert(hasSinglePayload(OriginalRet->Statements, 15));
 }
 
+void testReturnDuplicatorLowSkipsBranchParentGotoSource() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 5}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {4}));
+  Cfg.addBlock(block(5, {}));
+
+  CFGBlock Ret = block(4, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({16});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode BranchParent;
+  BranchParent.Kind = StructuredNodeKind::BasicBlock;
+  BranchParent.Block = 0;
+  Root.Children.push_back(Tree.addNode(std::move(BranchParent)));
+
+  StructuredNode BranchGoto;
+  BranchGoto.Kind = StructuredNodeKind::Goto;
+  BranchGoto.Target = 4;
+  Root.Children.push_back(Tree.addNode(std::move(BranchGoto)));
+
+  StructuredNode DirectSource;
+  DirectSource.Kind = StructuredNodeKind::BasicBlock;
+  DirectSource.Block = 2;
+  Root.Children.push_back(Tree.addNode(std::move(DirectSource)));
+
+  StructuredNode DirectGoto;
+  DirectGoto.Kind = StructuredNodeKind::Goto;
+  DirectGoto.Target = 4;
+  Root.Children.push_back(Tree.addNode(std::move(DirectGoto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  const CFGBlock *Block2 = Cfg.getBlock(2);
+  const CFGBlock *OriginalRet = Cfg.getBlock(4);
+  assert(Block1 != nullptr && Block2 != nullptr && OriginalRet != nullptr);
+  assert(Block1->Successors == std::vector<BlockId>{4});
+  assert(Block2->Successors.size() == 1);
+  assert(Block2->Successors.front() != 4);
+
+  const CFGBlock *Copy = Cfg.getBlock(Block2->Successors.front());
+  assert(Copy != nullptr);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(Copy->BodyBlock == 4);
+  assert(hasSinglePayload(Copy->Statements, 16));
+  assert(hasSinglePayload(OriginalRet->Statements, 16));
+}
+
 void testReturnDuplicatorLowCopiesTerminalForkRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -3798,6 +3859,7 @@ int main() {
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowUsesParentGotoSource();
+  testReturnDuplicatorLowSkipsBranchParentGotoSource();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();

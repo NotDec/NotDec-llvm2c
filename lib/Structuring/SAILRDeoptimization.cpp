@@ -261,6 +261,11 @@ bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
   // when an adjacent block is the real goto source. Keep the same shared CFG
   // rule here so we do not miss the narrow if-adjacent shape.
   for (BlockId Parent : predecessorsOf(Graph, Source)) {
+    const CFGBlock *ParentBlock = Graph.getBlock(Parent);
+    if (ParentBlock != nullptr &&
+        ParentBlock->Terminator == TerminatorKind::Branch) {
+      continue;
+    }
     if (Gotos.isGotoEdge(Parent, Target)) {
       return true;
     }
