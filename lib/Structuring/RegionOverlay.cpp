@@ -343,7 +343,8 @@ std::optional<OverlayViewEdge> OverlayManager::viewEdgeForEndpoints(
   return Edge;
 }
 
-bool OverlayManager::isHiddenEdge(RegionId Id, BlockId From, BlockId To) const {
+bool OverlayManager::isHiddenEdge(RegionId Id, const OverlayNodeKey &From,
+                                  const OverlayNodeKey &To) const {
   auto It = HiddenEdges.find(Id);
   if (It == HiddenEdges.end()) {
     return false;
@@ -381,7 +382,8 @@ void OverlayManager::rebuildBlockSuccessorCompatibility() {
   }
 }
 
-void OverlayManager::clearHiddenEdge(BlockId From, BlockId To) {
+void OverlayManager::clearHiddenEdge(const OverlayNodeKey &From,
+                                     const OverlayNodeKey &To) {
   for (auto &Entry : HiddenEdges) {
     std::vector<OverlayHiddenEdge> &Edges = Entry.second;
     Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
@@ -410,7 +412,10 @@ void OverlayManager::clearEdgeStateForBlock(BlockId Block) {
     std::vector<OverlayHiddenEdge> &Edges = Entry.second;
     Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
                                [&](const OverlayHiddenEdge &Edge) {
-                                 return Edge.From == Block || Edge.To == Block;
+                                 return (Edge.From.isBlock() &&
+                                         Edge.From.Block == Block) ||
+                                        (Edge.To.isBlock() &&
+                                         Edge.To.Block == Block);
                                }),
                 Edges.end());
   }
@@ -441,8 +446,7 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
         if (!Succ.isBlock()) {
           continue;
         }
-        if (Member.Kind == OverlayMemberKind::Block &&
-            isHiddenEdge(Id, Member.Block, Succ.Block)) {
+        if (isHiddenEdge(Id, nodeKey(Member), Succ)) {
           continue;
         }
         if (memberForBlock(Id, Succ.Block) == &Member) {
@@ -464,7 +468,8 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
 
     for (BlockId Block : Blocks) {
       for (BlockId Succ : sharedSuccessors(Block)) {
-        if (isHiddenEdge(Id, Block, Succ)) {
+        if (isHiddenEdge(Id, OverlayNodeKey::block(Block),
+                         OverlayNodeKey::block(Succ))) {
           continue;
         }
         if (memberForBlock(Id, Succ) == &Member) {
@@ -524,8 +529,7 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
   for (const OverlayMember &Member : ViewMembers) {
     if (Member.Kind != OverlayMemberKind::Region) {
       for (const OverlayNodeKey &Succ : sharedNodeSuccessors(nodeKey(Member))) {
-        if (Member.Kind == OverlayMemberKind::Block &&
-            Succ.isBlock() && isHiddenEdge(Id, Member.Block, Succ.Block)) {
+        if (isHiddenEdge(Id, nodeKey(Member), Succ)) {
           continue;
         }
         appendSuccessorEdge(Member, Succ);
@@ -541,7 +545,8 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
 
     for (BlockId Block : Blocks) {
       for (BlockId Succ : sharedSuccessors(Block)) {
-        if (isHiddenEdge(Id, Block, Succ)) {
+        if (isHiddenEdge(Id, OverlayNodeKey::block(Block),
+                         OverlayNodeKey::block(Succ))) {
           continue;
         }
         const OverlayMember *SuccMember = memberForBlock(Id, Succ);
@@ -643,9 +648,7 @@ void OverlayManager::addNodeEdge(const OverlayNodeKey &From,
     Succs.push_back(To);
   }
   rebuildBlockSuccessorCompatibility();
-  if (From.isBlock() && To.isBlock()) {
-    clearHiddenEdge(From.Block, To.Block);
-  }
+  clearHiddenEdge(From, To);
 }
 
 void OverlayManager::detachNodeEdge(const OverlayNodeKey &From,
@@ -657,32 +660,44 @@ void OverlayManager::detachNodeEdge(const OverlayNodeKey &From,
   std::vector<OverlayNodeKey> &Succs = It->second;
   Succs.erase(std::remove(Succs.begin(), Succs.end(), To), Succs.end());
   rebuildBlockSuccessorCompatibility();
-  if (From.isBlock() && To.isBlock()) {
-    clearHiddenEdge(From.Block, To.Block);
-  }
+  clearHiddenEdge(From, To);
 }
 
 void OverlayManager::addEdge(BlockId From, BlockId To) {
   addNodeEdge(OverlayNodeKey::block(From), OverlayNodeKey::block(To));
-  clearHiddenEdge(From, To);
 }
 
 void OverlayManager::detachEdge(BlockId From, BlockId To) {
   detachNodeEdge(OverlayNodeKey::block(From), OverlayNodeKey::block(To));
-  clearHiddenEdge(From, To);
+}
+
+void OverlayManager::hideNodeEdge(RegionId Id, const OverlayNodeKey &From,
+                                  const OverlayNodeKey &To) {
+  appendUniqueHiddenEdge(HiddenEdges[Id], {From, To});
 }
 
 void OverlayManager::hideEdge(RegionId Id, BlockId From, BlockId To) {
-  appendUniqueHiddenEdge(HiddenEdges[Id], {From, To});
+  hideNodeEdge(Id, OverlayNodeKey::block(From), OverlayNodeKey::block(To));
 }
 
 void OverlayManager::hideEdgeToSuccessor(RegionId Id, BlockId Successor) {
   const std::vector<OverlayMember> &ViewMembers = members(Id);
   for (const OverlayMember &Member : ViewMembers) {
+    if (Member.Kind != OverlayMemberKind::Region) {
+      OverlayNodeKey From = nodeKey(Member);
+      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
+        if (Succ.isBlock() && Succ.Block == Successor) {
+          hideNodeEdge(Id, From, Succ);
+        }
+      }
+      continue;
+    }
+
     for (BlockId Block : underlyingBlocks(Member)) {
-      for (BlockId Succ : sharedSuccessors(Block)) {
-        if (Succ == Successor) {
-          hideEdge(Id, Block, Succ);
+      OverlayNodeKey From = OverlayNodeKey::block(Block);
+      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
+        if (Succ.isBlock() && Succ.Block == Successor) {
+          hideNodeEdge(Id, From, Succ);
         }
       }
     }

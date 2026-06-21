@@ -1037,6 +1037,10 @@ void testOverlayGraphUsesStructuredMemberSourceRegion() {
   assert(Manager.visibleSuccessors(RootId).empty());
   Manager.addNodeEdge(ChildKey, OverlayNodeKey::block(3));
   assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({3}));
+  Manager.hideNodeEdge(RootId, ChildKey, OverlayNodeKey::block(3));
+  assert(Manager.visibleSuccessors(RootId).empty());
+  Manager.addNodeEdge(ChildKey, OverlayNodeKey::block(3));
+  assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({3}));
   std::vector<OverlayViewEdge> FullEdges =
       Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true);
   auto HasStructuredToFollow =

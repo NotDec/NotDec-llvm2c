@@ -96,8 +96,11 @@ struct OverlayEdgeEndpoint {
 };
 
 struct OverlayHiddenEdge {
-  BlockId From = InvalidBlockId;
-  BlockId To = InvalidBlockId;
+  // Hidden edges are keyed by overlay node identity. Angr hides edges in the
+  // current view, not just raw basic-block edges; structured child results need
+  // the same treatment once they replace child overlays in the parent view.
+  OverlayNodeKey From;
+  OverlayNodeKey To;
 };
 
 // Angr's OverlayManager owns one mutable graph and makes every RegionOverlay a
@@ -136,6 +139,8 @@ public:
   void detachNodeEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
   void addEdge(BlockId From, BlockId To);
   void detachEdge(BlockId From, BlockId To);
+  void hideNodeEdge(RegionId Id, const OverlayNodeKey &From,
+                    const OverlayNodeKey &To);
   void hideEdge(RegionId Id, BlockId From, BlockId To);
   void hideEdgeToSuccessor(RegionId Id, BlockId Successor);
   void removeEdgeWithSuccessorsOnly(RegionId Id,
@@ -178,10 +183,11 @@ private:
   std::optional<OverlayViewEdge> viewEdgeForEndpoints(
       RegionId ViewId, const OverlayEdgeEndpoint &From,
       const OverlayEdgeEndpoint &To) const;
-  bool isHiddenEdge(RegionId Id, BlockId From, BlockId To) const;
+  bool isHiddenEdge(RegionId Id, const OverlayNodeKey &From,
+                    const OverlayNodeKey &To) const;
   bool isHiddenFullEdge(RegionId Id, const OverlayViewEdge &Edge) const;
   void rebuildBlockSuccessorCompatibility();
-  void clearHiddenEdge(BlockId From, BlockId To);
+  void clearHiddenEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
   void clearEdgeStateForBlock(BlockId Block);
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
