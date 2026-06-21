@@ -780,7 +780,11 @@ void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   Cfg.addBlock(block(0, {2}));
   Cfg.addBlock(block(1, {2}));
 
-  CFGBlock Ret = block(2, {});
+  CFGBlock Head = block(2, {3});
+  Head.Statements.push_back({5});
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Ret = block(3, {});
   Ret.Terminator = TerminatorKind::Return;
   Ret.Statements.push_back({9});
   Cfg.addBlock(std::move(Ret));
@@ -798,6 +802,7 @@ void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   assert(Result.Succeeded);
   assert(Result.Changed);
   assert(Result.Output.getBlock(2) == nullptr);
+  assert(Result.Output.getBlock(3) == nullptr);
 
   const CFGBlock *Block0 = Result.Output.getBlock(0);
   const CFGBlock *Block1 = Result.Output.getBlock(1);
@@ -807,15 +812,25 @@ void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   assert(Block1->Successors.front() != 2);
   assert(Block0->Successors.front() != Block1->Successors.front());
 
-  const CFGBlock *Copy0 = Result.Output.getBlock(Block0->Successors.front());
-  const CFGBlock *Copy1 = Result.Output.getBlock(Block1->Successors.front());
-  assert(Copy0 != nullptr && Copy1 != nullptr);
-  assert(Copy0->Terminator == TerminatorKind::Return);
-  assert(Copy1->Terminator == TerminatorKind::Return);
-  assert(Copy0->BodyBlock == Copy0->Id);
-  assert(Copy1->BodyBlock == Copy1->Id);
-  assert(hasSinglePayload(Copy0->Statements, 9));
-  assert(hasSinglePayload(Copy1->Statements, 9));
+  const CFGBlock *CopyHead0 = Result.Output.getBlock(Block0->Successors.front());
+  const CFGBlock *CopyHead1 = Result.Output.getBlock(Block1->Successors.front());
+  assert(CopyHead0 != nullptr && CopyHead1 != nullptr);
+  assert(CopyHead0->Successors.size() == 1);
+  assert(CopyHead1->Successors.size() == 1);
+  assert(CopyHead0->BodyBlock == CopyHead0->Id);
+  assert(CopyHead1->BodyBlock == CopyHead1->Id);
+  assert(hasSinglePayload(CopyHead0->Statements, 5));
+  assert(hasSinglePayload(CopyHead1->Statements, 5));
+
+  const CFGBlock *CopyRet0 = Result.Output.getBlock(CopyHead0->Successors.front());
+  const CFGBlock *CopyRet1 = Result.Output.getBlock(CopyHead1->Successors.front());
+  assert(CopyRet0 != nullptr && CopyRet1 != nullptr);
+  assert(CopyRet0->Terminator == TerminatorKind::Return);
+  assert(CopyRet1->Terminator == TerminatorKind::Return);
+  assert(CopyRet0->BodyBlock == CopyRet0->Id);
+  assert(CopyRet1->BodyBlock == CopyRet1->Id);
+  assert(hasSinglePayload(CopyRet0->Statements, 9));
+  assert(hasSinglePayload(CopyRet1->Statements, 9));
 }
 
 void testControlFlowStructureCounterCollectsSharedQuality() {
