@@ -793,14 +793,16 @@ void testOverlayViewOnlyMutationsAffectQuotientEdges() {
   Regions.setRoot(LoopId);
 
   OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *LoopOverlay = Manager.root();
+  assert(LoopOverlay != nullptr);
   std::size_t Checkpoint = Manager.checkpoint();
-  Manager.hideEdgeToSuccessor(LoopId, 1);
+  LoopOverlay->hideEdgeToSuccessor(1);
   assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({2}));
 
   OverlayEdgeEndpoint Head =
       OverlayEdgeEndpoint::member(OverlayMember::block(0));
   OverlayEdgeEndpoint SecondSucc = OverlayEdgeEndpoint::external(2);
-  Manager.removeEdgeWithSuccessorsOnly(LoopId, Head, SecondSucc);
+  LoopOverlay->removeEdgeWithSuccessorsOnly(Head, SecondSucc);
   std::vector<OverlayViewEdge> MemberOnlyEdges =
       Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/false);
   assert(MemberOnlyEdges.empty());
@@ -817,7 +819,7 @@ void testOverlayViewOnlyMutationsAffectQuotientEdges() {
   assert(!HasHeadToSecondSucc);
 
   OverlayEdgeEndpoint FirstSucc = OverlayEdgeEndpoint::external(1);
-  Manager.addExtraFullEdge(LoopId, FirstSucc, SecondSucc);
+  LoopOverlay->addExtraFullEdge(FirstSucc, SecondSucc);
   FullEdges = Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
   bool HasExtraEdge =
       std::find_if(FullEdges.begin(), FullEdges.end(),

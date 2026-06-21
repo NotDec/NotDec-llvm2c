@@ -178,6 +178,12 @@ public:
   bool isCollapsed() const;
   NodeId structuredRoot() const;
   SuccessorSnapshot snapshotSuccessors() const;
+  void hideEdge(BlockId From, BlockId To);
+  void hideEdgeToSuccessor(BlockId Successor);
+  void removeEdgeWithSuccessorsOnly(const OverlayEdgeEndpoint &From,
+                                    const OverlayEdgeEndpoint &To);
+  void addExtraFullEdge(const OverlayEdgeEndpoint &From,
+                        const OverlayEdgeEndpoint &To);
   void finalize(NodeId RootId, const SuccessorSnapshot &Snapshot = {});
   void dissolve();
 

@@ -649,6 +649,32 @@ SuccessorSnapshot RegionOverlay::snapshotSuccessors() const {
   return Snapshot;
 }
 
+void RegionOverlay::hideEdge(BlockId From, BlockId To) {
+  if (Manager != nullptr) {
+    Manager->hideEdge(Id, From, To);
+  }
+}
+
+void RegionOverlay::hideEdgeToSuccessor(BlockId Successor) {
+  if (Manager != nullptr) {
+    Manager->hideEdgeToSuccessor(Id, Successor);
+  }
+}
+
+void RegionOverlay::removeEdgeWithSuccessorsOnly(
+    const OverlayEdgeEndpoint &From, const OverlayEdgeEndpoint &To) {
+  if (Manager != nullptr) {
+    Manager->removeEdgeWithSuccessorsOnly(Id, From, To);
+  }
+}
+
+void RegionOverlay::addExtraFullEdge(const OverlayEdgeEndpoint &From,
+                                     const OverlayEdgeEndpoint &To) {
+  if (Manager != nullptr) {
+    Manager->addExtraFullEdge(Id, From, To);
+  }
+}
+
 void RegionOverlay::finalize(NodeId RootId, const SuccessorSnapshot &Snapshot) {
   (void)Snapshot;
   if (Manager == nullptr || RootId == InvalidNodeId) {
