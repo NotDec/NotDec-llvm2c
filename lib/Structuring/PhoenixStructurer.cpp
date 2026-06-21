@@ -2706,6 +2706,9 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
     const MutableRegionNode *Node = Graph.getNode(FinalActive.front());
     if (Node != nullptr && Node->StructuredRoot != InvalidNodeId) {
       NodeId RootId = wrapNaturalLoopFallback(*R, Node->StructuredRoot, Tree);
+      if (!Node->SourceNodes.empty()) {
+        Overlay.replaceNodes(Node->SourceNodes, RootId);
+      }
       cleanupStructuredGotos(Cfg, Tree, RootId);
       return RootId;
     }
