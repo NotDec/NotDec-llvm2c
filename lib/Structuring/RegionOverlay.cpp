@@ -14,6 +14,38 @@ void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
   }
 }
 
+bool sameMember(const OverlayMember &Lhs, const OverlayMember &Rhs) {
+  if (Lhs.Kind != Rhs.Kind) {
+    return false;
+  }
+  switch (Lhs.Kind) {
+  case OverlayMemberKind::Block:
+    return Lhs.Block == Rhs.Block;
+  case OverlayMemberKind::Region:
+    return Lhs.Region == Rhs.Region;
+  case OverlayMemberKind::Structured:
+    return Lhs.Region == Rhs.Region &&
+           Lhs.StructuredRoot == Rhs.StructuredRoot;
+  }
+  return false;
+}
+
+bool sameEdge(const OverlayViewEdge &Lhs, const OverlayViewEdge &Rhs) {
+  return sameMember(Lhs.From, Rhs.From) && sameMember(Lhs.To, Rhs.To) &&
+         Lhs.ExternalSuccessor == Rhs.ExternalSuccessor;
+}
+
+void appendUniqueEdge(std::vector<OverlayViewEdge> &Edges,
+                      const OverlayViewEdge &Edge) {
+  auto It = std::find_if(Edges.begin(), Edges.end(),
+                         [&](const OverlayViewEdge &Existing) {
+                           return sameEdge(Existing, Edge);
+                         });
+  if (It == Edges.end()) {
+    Edges.push_back(Edge);
+  }
+}
+
 } // namespace
 
 OverlayMember OverlayMember::block(BlockId Id) {
@@ -180,6 +212,41 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
           continue;
         }
         appendUniqueBlock(Result, Succ);
+      }
+    }
+  }
+  return Result;
+}
+
+std::vector<OverlayViewEdge>
+OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
+  std::vector<OverlayViewEdge> Result;
+  const std::vector<OverlayMember> &ViewMembers = members(Id);
+  for (const OverlayMember &Member : ViewMembers) {
+    std::vector<BlockId> Blocks;
+    if (Member.Kind == OverlayMemberKind::Block) {
+      Blocks.push_back(Member.Block);
+    } else {
+      const Region *MemberRegion = getRegionData(Member.Region);
+      if (MemberRegion != nullptr) {
+        Blocks = MemberRegion->Blocks;
+      }
+    }
+
+    for (BlockId Block : Blocks) {
+      for (BlockId Succ : sharedSuccessors(Block)) {
+        const OverlayMember *SuccMember = memberForBlock(Id, Succ);
+        if (SuccMember != nullptr) {
+          if (sameMember(Member, *SuccMember) &&
+              Member.Kind != OverlayMemberKind::Block) {
+            continue;
+          }
+          appendUniqueEdge(Result, {Member, *SuccMember, InvalidBlockId});
+          continue;
+        }
+        if (IncludeSuccessors) {
+          appendUniqueEdge(Result, {Member, {}, Succ});
+        }
       }
     }
   }

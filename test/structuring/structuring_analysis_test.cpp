@@ -7,6 +7,7 @@
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
+#include <algorithm>
 #include <cassert>
 #include <map>
 #include <memory>
@@ -554,6 +555,95 @@ void testSnapshotSuccessorsFallsBackWithoutSharedCFG() {
   assert(ChildOverlay != nullptr);
   assert(ChildOverlay->snapshotSuccessors().Successors ==
          std::vector<BlockId>({3}));
+}
+
+void testOverlayManagerDerivesQuotientEdges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {1, 3}));
+  Cfg.addBlock(block(3, {}));
+
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1, 2};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  std::vector<OverlayViewEdge> MemberEdges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  assert(MemberEdges.size() == 2);
+  auto HasRootToChild =
+      std::find_if(MemberEdges.begin(), MemberEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.From.Kind == OverlayMemberKind::Block &&
+                            Edge.From.Block == 0 &&
+                            Edge.To.Kind == OverlayMemberKind::Region &&
+                            Edge.To.Region == ChildId &&
+                            Edge.targetsMember();
+                   }) != MemberEdges.end();
+  auto HasChildToFollow =
+      std::find_if(MemberEdges.begin(), MemberEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.From.Kind == OverlayMemberKind::Region &&
+                            Edge.From.Region == ChildId &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 3 && Edge.targetsMember();
+                   }) != MemberEdges.end();
+  assert(HasRootToChild);
+  assert(HasChildToFollow);
+
+  std::vector<OverlayViewEdge> FullEdges =
+      Manager.quotientEdges(ChildId, /*IncludeSuccessors=*/true);
+  assert(FullEdges.size() == 3);
+  auto HasExternalFollow =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [](const OverlayViewEdge &Edge) {
+                     return Edge.From.Kind == OverlayMemberKind::Block &&
+                            Edge.From.Block == 2 && !Edge.targetsMember() &&
+                            Edge.ExternalSuccessor == 3;
+                   }) != FullEdges.end();
+  assert(HasExternalFollow);
+}
+
+void testOverlayManagerQuotientKeepsBlockSelfLoop() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {0, 1}));
+  Cfg.addBlock(block(1, {}));
+
+  OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
+  RegionOverlay *Root = Manager.root();
+  assert(Root != nullptr);
+  assert(Root->children().size() == 1);
+  RegionId LoopId = Root->children().front();
+
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
+  assert(Edges.size() == 2);
+  auto HasSelfLoop =
+      std::find_if(Edges.begin(), Edges.end(), [](const OverlayViewEdge &Edge) {
+        return Edge.From.Kind == OverlayMemberKind::Block &&
+               Edge.From.Block == 0 &&
+               Edge.To.Kind == OverlayMemberKind::Block && Edge.To.Block == 0 &&
+               Edge.targetsMember();
+      }) != Edges.end();
+  auto HasExternalFollow =
+      std::find_if(Edges.begin(), Edges.end(), [](const OverlayViewEdge &Edge) {
+        return Edge.From.Kind == OverlayMemberKind::Block &&
+               Edge.From.Block == 0 && !Edge.targetsMember() &&
+               Edge.ExternalSuccessor == 1;
+      }) != Edges.end();
+  assert(HasSelfLoop);
+  assert(HasExternalFollow);
 }
 
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
@@ -1272,6 +1362,8 @@ int main() {
   testOverlayManagerDerivesVisibleSuccessors();
   testOverlayVisibleSuccessorsMatchIdentifiedLoopSuccessors();
   testSnapshotSuccessorsFallsBackWithoutSharedCFG();
+  testOverlayManagerDerivesQuotientEdges();
+  testOverlayManagerQuotientKeepsBlockSelfLoop();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();

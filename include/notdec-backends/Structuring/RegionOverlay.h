@@ -45,6 +45,18 @@ struct OverlayMember {
                                   RegionId SourceRegion = InvalidRegionId);
 };
 
+// One edge in an overlay-derived region view. The source is always a visible
+// member. The target is either another visible member, or an external successor
+// block when IncludeSuccessors is requested. This mirrors Angr's quotient edge
+// view without forcing NotDec's reducers to consume it yet.
+struct OverlayViewEdge {
+  OverlayMember From;
+  OverlayMember To;
+  BlockId ExternalSuccessor = InvalidBlockId;
+
+  bool targetsMember() const { return ExternalSuccessor == InvalidBlockId; }
+};
+
 // Angr's OverlayManager owns one mutable graph and makes every RegionOverlay a
 // view over that graph. NotDec is still one step short of that: the manager
 // owns the region tree plus finalized child results, and MutableRegionGraph
@@ -69,6 +81,8 @@ public:
   const std::vector<OverlayMember> &members(RegionId Id) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;
+  std::vector<OverlayViewEdge> quotientEdges(RegionId Id,
+                                             bool IncludeSuccessors) const;
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
