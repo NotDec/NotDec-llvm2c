@@ -931,8 +931,12 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   Target.Statements.push_back({7});
   Cfg.addBlock(std::move(Target));
 
-  Cfg.addBlock(block(2, {}));
+  CFGBlock Tail = block(2, {4});
+  Tail.Statements.push_back({8});
+  Cfg.addBlock(std::move(Tail));
+
   Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {}));
 
   StructuringOptimizationOptions Options = CrossJumpReverter::defaultOptions();
   Options.MaxOptIters = 1;
@@ -946,6 +950,8 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   assert(Result.Succeeded);
   assert(Result.Changed);
   assert(Result.Output.getBlock(1) == nullptr);
+  assert(Result.Output.getBlock(2) == nullptr);
+  assert(Result.Output.getBlock(4) == nullptr);
 
   const CFGBlock *Block0 = Result.Output.getBlock(0);
   const CFGBlock *Block3 = Result.Output.getBlock(3);
@@ -958,12 +964,36 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   const CFGBlock *Copy0 = Result.Output.getBlock(Block0->Successors.front());
   const CFGBlock *Copy3 = Result.Output.getBlock(Block3->Successors.front());
   assert(Copy0 != nullptr && Copy3 != nullptr);
-  assert((Copy0->Successors == std::vector<BlockId>{2}));
-  assert((Copy3->Successors == std::vector<BlockId>{2}));
+  assert(Copy0->Successors.size() == 1);
+  assert(Copy3->Successors.size() == 1);
+  assert(Copy0->Successors.front() != 2);
+  assert(Copy3->Successors.front() != 2);
+  assert(Copy0->Successors.front() != Copy3->Successors.front());
   assert(Copy0->BodyBlock == Copy0->Id);
   assert(Copy3->BodyBlock == Copy3->Id);
   assert(hasSinglePayload(Copy0->Statements, 7));
   assert(hasSinglePayload(Copy3->Statements, 7));
+
+  const CFGBlock *TailCopy0 = Result.Output.getBlock(Copy0->Successors.front());
+  const CFGBlock *TailCopy3 = Result.Output.getBlock(Copy3->Successors.front());
+  assert(TailCopy0 != nullptr && TailCopy3 != nullptr);
+  assert(TailCopy0->Successors.size() == 1);
+  assert(TailCopy3->Successors.size() == 1);
+  assert(TailCopy0->Successors.front() != 4);
+  assert(TailCopy3->Successors.front() != 4);
+  assert(TailCopy0->Successors.front() != TailCopy3->Successors.front());
+  assert(TailCopy0->BodyBlock == TailCopy0->Id);
+  assert(TailCopy3->BodyBlock == TailCopy3->Id);
+  assert(hasSinglePayload(TailCopy0->Statements, 8));
+  assert(hasSinglePayload(TailCopy3->Statements, 8));
+
+  const CFGBlock *ExitCopy0 =
+      Result.Output.getBlock(TailCopy0->Successors.front());
+  const CFGBlock *ExitCopy3 =
+      Result.Output.getBlock(TailCopy3->Successors.front());
+  assert(ExitCopy0 != nullptr && ExitCopy3 != nullptr);
+  assert(ExitCopy0->Successors.empty());
+  assert(ExitCopy3->Successors.empty());
 }
 
 void testDuplicationReverterMergesExactDuplicateBlocks() {

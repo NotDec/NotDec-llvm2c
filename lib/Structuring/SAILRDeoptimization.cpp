@@ -1,6 +1,7 @@
 #include "notdec-backends/Structuring/SAILRDeoptimization.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -477,6 +478,19 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
   return true;
 }
 
+std::size_t statementCountInRegion(const StructuredCFG &Graph,
+                                   const LinearRegion &Region) {
+  std::size_t Count = 0;
+  for (BlockId Id : Region.Blocks) {
+    const CFGBlock *Block = Graph.getBlock(Id);
+    if (Block == nullptr) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    Count += Block->Statements.size();
+  }
+  return Count;
+}
+
 } // namespace
 
 StructuringOptimizationOptions SwitchReusedEntryRewriter::defaultOptions() {
@@ -857,7 +871,8 @@ StructuringOptimizationOptions CrossJumpReverter::defaultOptions() {
 
 bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
                                    const StructuringEvaluation &Current) {
-  std::map<BlockId, std::vector<BlockId>> ToUpdate;
+  std::map<BlockId, std::vector<BlockId>> PredsByTarget;
+  std::map<BlockId, LinearRegion> RegionsByTarget;
 
   for (const CFGBlock &Block : Graph.blocks()) {
     std::vector<StructuredGoto> Gotos = Current.Gotos.gotosInBlock(Block.Id);
@@ -870,58 +885,56 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
       continue;
     }
 
-    const CFGBlock *TargetBlock = Graph.getBlock(Target);
-    if (TargetBlock == nullptr || Graph.successorsOf(Target).size() != 1) {
+    LinearRegion Region = findLinearRegionFromHead(Graph, Target);
+    if (Region.Head == InvalidBlockId || Graph.successorsOf(Target).size() != 1) {
       continue;
     }
-    if (TargetBlock->Statements.size() > MaxDuplicatedStatements) {
+    if (statementCountInRegion(Graph, Region) > MaxDuplicatedStatements) {
       continue;
     }
 
-    ToUpdate[Target].push_back(Block.Id);
+    PredsByTarget[Target].push_back(Block.Id);
+    RegionsByTarget.emplace(Target, std::move(Region));
   }
 
   bool Changed = false;
-  for (auto &Entry : ToUpdate) {
+  for (auto &Entry : PredsByTarget) {
     BlockId Target = Entry.first;
     std::vector<BlockId> &PredsToUpdate = Entry.second;
     std::sort(PredsToUpdate.begin(), PredsToUpdate.end());
     PredsToUpdate.erase(std::unique(PredsToUpdate.begin(), PredsToUpdate.end()),
                         PredsToUpdate.end());
 
-    const CFGBlock *TargetBlock = Graph.getBlock(Target);
-    if (TargetBlock == nullptr) {
+    auto RegionIt = RegionsByTarget.find(Target);
+    if (RegionIt == RegionsByTarget.end()) {
       continue;
     }
-    std::vector<BlockId> TargetSuccessors = Graph.successorsOf(Target);
+    const LinearRegion &Region = RegionIt->second;
 
     std::vector<BlockId> CurrentPreds = predecessorsOf(Graph, Target);
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
 
-    std::vector<BlockId> Copies;
     std::vector<BlockId> UpdatedPreds;
     for (BlockId Pred : PredsToUpdate) {
       if (!Graph.hasEdge(Pred, Target)) {
         continue;
       }
 
-      BlockId Copy = Graph.duplicateBlock(Target, TargetSuccessors);
-      if (Copy == InvalidBlockId) {
-        continue;
-      }
-      if (!Graph.replaceEdge(Pred, Target, Copy)) {
-        Graph.removeBlock(Copy);
+      std::vector<BlockId> RegionCopies;
+      if (!copyLinearRegionForPredecessors(Graph, Region, {Pred},
+                                           RegionCopies)) {
         continue;
       }
 
-      Copies.push_back(Copy);
       UpdatedPreds.push_back(Pred);
       Changed = true;
     }
 
-    if (DeleteOriginal && Copies.size() == CurrentPreds.size() &&
+    if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
         sameBlockSet(CurrentPreds, UpdatedPreds)) {
-      Graph.removeBlock(Target);
+      for (BlockId Block : Region.Blocks) {
+        Graph.removeBlock(Block);
+      }
     }
   }
 
