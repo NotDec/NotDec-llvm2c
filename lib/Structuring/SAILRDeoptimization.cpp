@@ -951,18 +951,28 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
 
     std::vector<BlockId> UpdatedPreds;
-    for (BlockId Pred : PredsToUpdate) {
-      if (!Graph.hasEdge(Pred, Target)) {
+    std::vector<std::vector<BlockId>> PredComponents =
+        connectedPredecessorComponents(Graph, PredsToUpdate);
+    for (const std::vector<BlockId> &Component : PredComponents) {
+      bool AllStillReachTarget = true;
+      for (BlockId Pred : Component) {
+        if (!Graph.hasEdge(Pred, Target)) {
+          AllStillReachTarget = false;
+          break;
+        }
+      }
+      if (!AllStillReachTarget) {
         continue;
       }
 
       std::vector<BlockId> RegionCopies;
-      if (!copyLinearRegionForPredecessors(Graph, Region, {Pred},
+      if (!copyLinearRegionForPredecessors(Graph, Region, Component,
                                            RegionCopies)) {
         continue;
       }
 
-      UpdatedPreds.push_back(Pred);
+      UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(),
+                          Component.end());
       Changed = true;
     }
 

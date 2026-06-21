@@ -93,6 +93,12 @@ public:
   using ReturnDuplicatorLow::runOnGraph;
 };
 
+class TestCrossJumpReverter : public CrossJumpReverter {
+public:
+  using CrossJumpReverter::CrossJumpReverter;
+  using CrossJumpReverter::runOnGraph;
+};
+
 class OrderCaptureStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::virtualizeOneEdge;
@@ -1057,6 +1063,76 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   assert(ExitCopy0 != nullptr && ExitCopy3 != nullptr);
   assert(ExitCopy0->Successors.empty());
   assert(ExitCopy3->Successors.empty());
+}
+
+void testCrossJumpReverterCopiesConnectedPredsOnce() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {3, 1}));
+  Cfg.addBlock(block(3, {1}));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({17});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {});
+  Tail.Statements.push_back({18});
+  Cfg.addBlock(std::move(Tail));
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Source0;
+  Source0.Kind = StructuredNodeKind::BasicBlock;
+  Source0.Block = 0;
+  Root.Children.push_back(Tree.addNode(std::move(Source0)));
+
+  StructuredNode Goto0;
+  Goto0.Kind = StructuredNodeKind::Goto;
+  Goto0.Target = 1;
+  Root.Children.push_back(Tree.addNode(std::move(Goto0)));
+
+  StructuredNode Source3;
+  Source3.Kind = StructuredNodeKind::BasicBlock;
+  Source3.Block = 3;
+  Root.Children.push_back(Tree.addNode(std::move(Source3)));
+
+  StructuredNode Goto3;
+  Goto3.Kind = StructuredNodeKind::Goto;
+  Goto3.Target = 1;
+  Root.Children.push_back(Tree.addNode(std::move(Goto3)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) == nullptr);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block0 != nullptr && Block3 != nullptr);
+  assert(Block0->Successors.size() == 2);
+  assert(Block3->Successors.size() == 1);
+  assert(Block0->Successors[0] == 3);
+  assert(Block0->Successors[1] == Block3->Successors.front());
+
+  const CFGBlock *CopyHead = Cfg.getBlock(Block3->Successors.front());
+  assert(CopyHead != nullptr);
+  assert(CopyHead->Successors.size() == 1);
+  assert(CopyHead->BodyBlock == CopyHead->Id);
+  assert(hasSinglePayload(CopyHead->Statements, 17));
+
+  const CFGBlock *CopyTail = Cfg.getBlock(CopyHead->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->Successors.empty());
+  assert(CopyTail->BodyBlock == CopyTail->Id);
+  assert(hasSinglePayload(CopyTail->Statements, 18));
 }
 
 void testDuplicationReverterMergesExactDuplicateBlocks() {
@@ -4399,6 +4475,7 @@ int main() {
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
+  testCrossJumpReverterCopiesConnectedPredsOnce();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowUsesParentGotoSource();
