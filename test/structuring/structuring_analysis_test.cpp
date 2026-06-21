@@ -1478,6 +1478,49 @@ void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
   assert(hasSinglePayload(Copy->Statements, 21));
 }
 
+void testSwitchReusedEntryRewriterCopiesEntryTailRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 3}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(switchBlock(2, {1, 5}));
+  Cfg.addBlock(block(3, {6}));
+  Cfg.addBlock(block(4, {6}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {}));
+
+  CFGBlock *Entry = Cfg.getBlock(1);
+  CFGBlock *Tail = Cfg.getBlock(4);
+  assert(Entry != nullptr && Tail != nullptr);
+  Entry->Statements.push_back({22});
+  Tail->Statements.push_back({24});
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch2 = Cfg.getBlock(2);
+  const CFGBlock *EntryBlock = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch2 != nullptr && EntryBlock != nullptr);
+  assert(Switch0->Successors.front() == 1);
+  assert(Switch2->Successors.front() != 1);
+  assert(hasSinglePayload(EntryBlock->Statements, 22));
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch2->Successors.front());
+  assert(Copy != nullptr);
+  assert(Copy->Successors.size() == 1);
+  assert(Copy->BodyBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 22));
+
+  const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->Successors == std::vector<BlockId>{6});
+  assert(CopyTail->BodyBlock == 4);
+  assert(hasSinglePayload(CopyTail->Statements, 24));
+}
+
 void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   StructuredCFG Cfg;
 
@@ -1494,6 +1537,7 @@ void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   Cfg.addBlock(std::move(Switch2));
 
   Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(6, {4}));
   Cfg.addBlock(block(8, {}));
   Cfg.addBlock(block(9, {}));
 
@@ -4218,6 +4262,7 @@ int main() {
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
+  testSwitchReusedEntryRewriterCopiesEntryTailRegion();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();

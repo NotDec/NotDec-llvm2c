@@ -524,7 +524,11 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       continue;
     }
 
-    std::vector<BlockId> EntrySuccessors = Graph.successorsOf(EntryId);
+    LinearRegion Region = findLinearRegionFromHead(Graph, EntryId);
+    if (Region.Head == InvalidBlockId) {
+      continue;
+    }
+
     bool First = true;
     for (BlockId Pred : SwitchPreds) {
       if (First) {
@@ -536,12 +540,8 @@ bool SwitchReusedEntryRewriter::runOnGraph(
         continue;
       }
 
-      BlockId Copy = Graph.duplicateBlock(EntryId, EntrySuccessors);
-      if (Copy == InvalidBlockId) {
-        continue;
-      }
-      if (!Graph.replaceEdge(Pred, EntryId, Copy)) {
-        Graph.removeBlock(Copy);
+      std::vector<BlockId> Copies;
+      if (!copyLinearRegionForPredecessors(Graph, Region, {Pred}, Copies)) {
         continue;
       }
 
