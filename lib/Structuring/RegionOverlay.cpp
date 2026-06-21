@@ -137,11 +137,13 @@ OverlayMember OverlayMember::region(RegionId Id) {
   return Member;
 }
 
-OverlayMember OverlayMember::structured(NodeId Id, RegionId SourceRegion) {
+OverlayMember OverlayMember::structured(NodeId Id, RegionId SourceRegion,
+                                        BlockId RepresentativeBlock) {
   OverlayMember Member;
   Member.Kind = OverlayMemberKind::Structured;
   Member.Region = SourceRegion;
   Member.StructuredRoot = Id;
+  Member.Block = RepresentativeBlock;
   return Member;
 }
 
@@ -308,6 +310,10 @@ OverlayNodeKey OverlayManager::nodeKey(const OverlayMember &Member) const {
 
 BlockId OverlayManager::representativeBlock(const OverlayMember &Member) const {
   if (Member.Kind == OverlayMemberKind::Block) {
+    return Member.Block;
+  }
+  if (Member.Kind == OverlayMemberKind::Structured &&
+      Member.Block != InvalidBlockId) {
     return Member.Block;
   }
   const Region *MemberRegion = getRegionData(Member.Region);
@@ -542,6 +548,98 @@ OverlayManager::memberNodeKeys(const OverlayMember &Member) const {
     appendUniqueNodeKey(Result, OverlayNodeKey::block(Block));
   }
   return Result;
+}
+
+void OverlayManager::remapViewEdgeEndpoint(
+    RegionId ViewId, OverlayViewEdge &Edge, bool Source,
+    const std::vector<OverlayNodeKey> &OldNodes,
+    const OverlayNodeKey &NewNode) const {
+  auto IsOldNode = [&](const OverlayNodeKey &Key) {
+    return std::find(OldNodes.begin(), OldNodes.end(), Key) != OldNodes.end();
+  };
+
+  bool ShouldRemap = false;
+  if (Source) {
+    if (Edge.sourcesMember()) {
+      ShouldRemap = IsOldNode(nodeKey(Edge.From));
+    } else {
+      ShouldRemap = IsOldNode(Edge.sourceNode());
+    }
+  } else {
+    if (Edge.targetsMember()) {
+      ShouldRemap = IsOldNode(nodeKey(Edge.To));
+    } else {
+      ShouldRemap = IsOldNode(Edge.targetNode());
+    }
+  }
+  if (!ShouldRemap) {
+    return;
+  }
+
+  const OverlayMember *Member = memberForNodeKey(ViewId, NewNode);
+  if (Source) {
+    Edge.From = Member == nullptr ? OverlayMember{} : *Member;
+    Edge.ExternalSource = InvalidBlockId;
+    Edge.HasExternalSourceNode = false;
+    Edge.ExternalSourceNode = {};
+    if (Member == nullptr) {
+      if (NewNode.isBlock()) {
+        Edge.ExternalSource = NewNode.Block;
+      } else {
+        Edge.HasExternalSourceNode = true;
+        Edge.ExternalSourceNode = NewNode;
+      }
+    }
+  } else {
+    Edge.To = Member == nullptr ? OverlayMember{} : *Member;
+    Edge.ExternalSuccessor = InvalidBlockId;
+    Edge.HasExternalSuccessorNode = false;
+    Edge.ExternalSuccessorNode = {};
+    if (Member == nullptr) {
+      if (NewNode.isBlock()) {
+        Edge.ExternalSuccessor = NewNode.Block;
+      } else {
+        Edge.HasExternalSuccessorNode = true;
+        Edge.ExternalSuccessorNode = NewNode;
+      }
+    }
+  }
+}
+
+void OverlayManager::remapBookkeeping(
+    RegionId Id, const std::vector<OverlayNodeKey> &OldNodes,
+    const OverlayNodeKey &NewNode) {
+  auto IsOldNode = [&](const OverlayNodeKey &Key) {
+    return std::find(OldNodes.begin(), OldNodes.end(), Key) != OldNodes.end();
+  };
+
+  for (auto &Entry : HiddenEdges) {
+    for (OverlayHiddenEdge &Edge : Entry.second) {
+      if (IsOldNode(Edge.From)) {
+        Edge.From = NewNode;
+      }
+      if (IsOldNode(Edge.To)) {
+        Edge.To = NewNode;
+      }
+    }
+  }
+  for (auto &Entry : HiddenFullEdges) {
+    for (OverlayViewEdge &Edge : Entry.second) {
+      remapViewEdgeEndpoint(Entry.first, Edge, /*Source=*/true, OldNodes,
+                            NewNode);
+      remapViewEdgeEndpoint(Entry.first, Edge, /*Source=*/false, OldNodes,
+                            NewNode);
+    }
+  }
+  for (auto &Entry : ExtraFullEdges) {
+    for (OverlayViewEdge &Edge : Entry.second) {
+      remapViewEdgeEndpoint(Entry.first, Edge, /*Source=*/true, OldNodes,
+                            NewNode);
+      remapViewEdgeEndpoint(Entry.first, Edge, /*Source=*/false, OldNodes,
+                            NewNode);
+    }
+  }
+  (void)Id;
 }
 
 std::vector<OverlayNodeKey>
@@ -1094,6 +1192,91 @@ void OverlayManager::collapseRegionTo(RegionId Id, NodeId RootId) {
   }
 }
 
+void OverlayManager::replaceNodes(RegionId Id,
+                                  const std::vector<OverlayNodeKey> &OldNodes,
+                                  NodeId RootId, bool SelfLoop) {
+  if (OldNodes.empty() || RootId == InvalidNodeId) {
+    return;
+  }
+
+  BlockId Representative = InvalidBlockId;
+  std::vector<OverlayMember> &ViewMembers = Members[Id];
+  for (const OverlayMember &Member : ViewMembers) {
+    if (std::find(OldNodes.begin(), OldNodes.end(), nodeKey(Member)) !=
+        OldNodes.end()) {
+      Representative = representativeBlock(Member);
+      break;
+    }
+  }
+  if (Representative == InvalidBlockId && OldNodes.front().isBlock()) {
+    Representative = OldNodes.front().Block;
+  }
+
+  auto IsOldNode = [&](const OverlayNodeKey &Key) {
+    return std::find(OldNodes.begin(), OldNodes.end(), Key) != OldNodes.end();
+  };
+  OverlayNodeKey NewNode = OverlayNodeKey::structured(RootId, Id);
+  std::vector<OverlayNodeKey> InSources;
+  std::vector<OverlayNodeKey> OutTargets;
+  bool AddSelfLoop = false;
+
+  for (const auto &Entry : SharedNodeSuccessors) {
+    const OverlayNodeKey &From = Entry.first;
+    bool FromInside = IsOldNode(From);
+    for (const OverlayNodeKey &To : Entry.second) {
+      bool ToInside = IsOldNode(To);
+      if (!FromInside && ToInside) {
+        appendUniqueNodeKey(InSources, From);
+      } else if (FromInside && !ToInside) {
+        appendUniqueNodeKey(OutTargets, To);
+      } else if (FromInside && ToInside && SelfLoop) {
+        if ((From == To) ||
+            (OldNodes.size() == 2 && From == OldNodes[1] &&
+             To == OldNodes[0])) {
+          AddSelfLoop = true;
+        }
+      }
+    }
+  }
+
+  for (const OverlayNodeKey &Old : OldNodes) {
+    SharedNodeSuccessors.erase(Old);
+  }
+  for (auto &Entry : SharedNodeSuccessors) {
+    std::vector<OverlayNodeKey> &Succs = Entry.second;
+    Succs.erase(std::remove_if(Succs.begin(), Succs.end(),
+                               [&](const OverlayNodeKey &Succ) {
+                                 return IsOldNode(Succ);
+                               }),
+                Succs.end());
+  }
+  SharedNodeSuccessors[NewNode];
+  rebuildBlockSuccessorCompatibility();
+
+  for (const OverlayNodeKey &From : InSources) {
+    addNodeEdge(From, NewNode);
+  }
+  for (const OverlayNodeKey &To : OutTargets) {
+    addNodeEdge(NewNode, To);
+  }
+  if (AddSelfLoop) {
+    addNodeEdge(NewNode, NewNode);
+  }
+
+  ViewMembers.erase(std::remove_if(ViewMembers.begin(), ViewMembers.end(),
+                                   [&](const OverlayMember &Member) {
+                                     return IsOldNode(nodeKey(Member));
+                                   }),
+                    ViewMembers.end());
+  ViewMembers.push_back(OverlayMember::structured(RootId, Id, Representative));
+  for (const OverlayNodeKey &Old : OldNodes) {
+    if (Old.isBlock()) {
+      BlockOwners.erase(Old.Block);
+    }
+  }
+  remapBookkeeping(Id, OldNodes, NewNode);
+}
+
 RegionOverlay::RegionOverlay(OverlayManager *Manager, RegionId Id)
     : Manager(Manager), Id(Id) {}
 
@@ -1230,6 +1413,14 @@ void RegionOverlay::collapseTo(NodeId RootId) {
     return;
   }
   Manager->collapseRegionTo(Id, RootId);
+}
+
+void RegionOverlay::replaceNodes(const std::vector<OverlayNodeKey> &OldNodes,
+                                 NodeId RootId, bool SelfLoop) {
+  if (Manager == nullptr || RootId == InvalidNodeId) {
+    return;
+  }
+  Manager->replaceNodes(Id, OldNodes, RootId, SelfLoop);
 }
 
 void RegionOverlay::dissolve() {

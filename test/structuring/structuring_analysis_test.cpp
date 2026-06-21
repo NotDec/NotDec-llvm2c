@@ -996,6 +996,81 @@ void testOverlayCollapseRegionRewiresSharedGraph() {
   assert(Manager.members(RootId).front().Kind == OverlayMemberKind::Region);
 }
 
+void testOverlayReplaceNodesRewiresSharedGraphAndBookkeeping() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(3, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  std::size_t Checkpoint = Manager.checkpoint();
+
+  RootOverlay->hideEdge(1, 2);
+  RootOverlay->addExtraFullEdge(OverlayEdgeEndpoint::external(3),
+                                OverlayEdgeEndpoint::member(
+                                    OverlayMember::block(1)));
+  RootOverlay->replaceNodes({OverlayNodeKey::block(1)}, 88);
+
+  const std::vector<OverlayMember> &RootMembers = Manager.members(RootId);
+  auto StructuredIt = std::find_if(
+      RootMembers.begin(), RootMembers.end(), [](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured &&
+               Member.StructuredRoot == 88;
+      });
+  assert(StructuredIt != RootMembers.end());
+  OverlayNodeKey Result = Manager.nodeKey(*StructuredIt);
+  assert(Manager.representativeBlock(*StructuredIt) == 1);
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(0)) ==
+         std::vector<OverlayNodeKey>({Result}));
+  assert(Manager.sharedNodeSuccessors(Result) ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(2)}));
+  assert(Manager.ownerOf(1) == InvalidRegionId);
+
+  std::vector<OverlayViewEdge> MemberEdges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  bool HasHiddenStructuredEdge =
+      std::find_if(MemberEdges.begin(), MemberEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) == Result &&
+                            Edge.targetsMember() &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != MemberEdges.end();
+  assert(!HasHiddenStructuredEdge);
+
+  std::vector<OverlayViewEdge> FullEdges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true);
+  bool HasRemappedExtraEdge =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return !Edge.sourcesMember() &&
+                            Edge.sourceNode() == OverlayNodeKey::block(3) &&
+                            Edge.targetsMember() &&
+                            Manager.nodeKey(Edge.To) == Result;
+                   }) != FullEdges.end();
+  assert(HasRemappedExtraEdge);
+
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(0)) ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(1)}));
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(1)) ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(2)}));
+  assert(Manager.ownerOf(1) == RootId);
+}
+
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -1796,6 +1871,7 @@ int main() {
   testOverlaySharedEdgeMutationsUpdateViews();
   testOverlaySharedNodeSuccessorsCanTargetStructuredResults();
   testOverlayCollapseRegionRewiresSharedGraph();
+  testOverlayReplaceNodesRewiresSharedGraphAndBookkeeping();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();

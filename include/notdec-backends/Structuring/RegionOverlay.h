@@ -74,7 +74,9 @@ struct OverlayMember {
   static OverlayMember block(BlockId Id);
   static OverlayMember region(RegionId Id);
   static OverlayMember structured(NodeId Id,
-                                  RegionId SourceRegion = InvalidRegionId);
+                                  RegionId SourceRegion = InvalidRegionId,
+                                  BlockId RepresentativeBlock =
+                                      InvalidBlockId);
 };
 
 // One edge in an overlay-derived region view. Member views only contain
@@ -179,6 +181,8 @@ public:
                          const SuccessorSnapshot &Snapshot = {});
   void clearStructuredRoot(RegionId Id);
   void collapseRegionTo(RegionId Id, NodeId RootId);
+  void replaceNodes(RegionId Id, const std::vector<OverlayNodeKey> &OldNodes,
+                    NodeId RootId, bool SelfLoop = true);
 
 private:
   friend class RegionOverlay;
@@ -214,6 +218,13 @@ private:
   void clearHiddenEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
   void clearEdgeStateForBlock(BlockId Block);
   std::vector<OverlayNodeKey> memberNodeKeys(const OverlayMember &Member) const;
+  void remapViewEdgeEndpoint(RegionId ViewId, OverlayViewEdge &Edge,
+                             bool Source,
+                             const std::vector<OverlayNodeKey> &OldNodes,
+                             const OverlayNodeKey &NewNode) const;
+  void remapBookkeeping(RegionId Id,
+                        const std::vector<OverlayNodeKey> &OldNodes,
+                        const OverlayNodeKey &NewNode);
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
 
@@ -264,6 +275,8 @@ public:
                         const OverlayEdgeEndpoint &To);
   void finalize(NodeId RootId, const SuccessorSnapshot &Snapshot = {});
   void collapseTo(NodeId RootId);
+  void replaceNodes(const std::vector<OverlayNodeKey> &OldNodes,
+                    NodeId RootId, bool SelfLoop = true);
   void dissolve();
 
 private:
