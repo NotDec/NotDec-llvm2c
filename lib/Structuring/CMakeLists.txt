@@ -8,6 +8,7 @@ add_library(notdec-backend-structuring STATIC
     StructurerRegistry.cpp
     StructuringEvaluator.cpp
     StructuringOptimizationPass.cpp
+    StructuringOptimizationPipeline.cpp
     StructuringQuality.cpp
     GotoManager.cpp
     GotoStructurer.cpp

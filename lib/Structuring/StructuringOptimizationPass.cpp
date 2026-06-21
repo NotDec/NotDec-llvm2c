@@ -2,6 +2,13 @@
 
 namespace notdec::backend::structuring {
 
+GotoManager StructuringOptimizationPass::getNewGotos(
+    const StructuringEvaluation &Initial,
+    const StructuringEvaluation &Current) const {
+  (void)Initial;
+  return Current.Gotos;
+}
+
 bool StructuringOptimizationPass::needsInitialEvaluation() const {
   return Options.RequireStructurableGraph || Options.RequireGotos ||
          Options.PreventNewGotos || Options.MustImproveRelativeQuality;
@@ -12,7 +19,8 @@ bool StructuringOptimizationPass::acceptsFinalEvaluation(
     const StructuringEvaluation &Current) const {
   if (Options.PreventNewGotos) {
     std::size_t InitialGotos = Initial.Gotos.size();
-    std::size_t CurrentGotos = Current.Gotos.size();
+    GotoManager NewGotos = getNewGotos(Initial, Current);
+    std::size_t CurrentGotos = NewGotos.size();
     if (Options.StrictlyLessGotos) {
       if (CurrentGotos >= InitialGotos) {
         return false;

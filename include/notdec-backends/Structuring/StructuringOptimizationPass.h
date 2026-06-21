@@ -44,6 +44,11 @@ public:
 protected:
   virtual bool runOnGraph(StructuredCFG &Graph,
                           const StructuringEvaluation &Current) = 0;
+  // Angr lets a pass override _get_new_gotos() after a successful trial. Future
+  // SAILR deoptimization passes need this to ignore gotos they deliberately
+  // leave for a later pass while still using the shared safety checks.
+  virtual GotoManager getNewGotos(const StructuringEvaluation &Initial,
+                                  const StructuringEvaluation &Current) const;
 
 private:
   bool needsInitialEvaluation() const;

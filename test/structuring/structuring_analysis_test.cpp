@@ -9,6 +9,7 @@
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-backends/Structuring/StructuringEvaluator.h"
 #include "notdec-backends/Structuring/StructuringOptimizationPass.h"
+#include "notdec-backends/Structuring/StructuringOptimizationPipeline.h"
 #include "notdec-backends/Structuring/StructuringQuality.h"
 
 #include <algorithm>
@@ -272,6 +273,18 @@ protected:
       }
     }
     return false;
+  }
+};
+
+class AddFirstSuccessorIgnoringNewGotosPass : public AddFirstSuccessorPass {
+public:
+  using AddFirstSuccessorPass::AddFirstSuccessorPass;
+
+protected:
+  GotoManager getNewGotos(const StructuringEvaluation &Initial,
+                          const StructuringEvaluation &Current) const override {
+    (void)Current;
+    return Initial.Gotos;
   }
 };
 
@@ -743,6 +756,25 @@ void testStructuringOptimizationPassRejectsNewGotos() {
   assert(!Result.Succeeded);
 }
 
+void testStructuringOptimizationPassCanOverrideNewGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  CFGEdgeGotoRegionStructurer Structurer;
+  AddFirstSuccessorIgnoringNewGotosPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block0->Successors.front() == 1);
+}
+
 void testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -774,6 +806,28 @@ void testStructuringOptimizationPassRecoversAndContinuesFixedPoint() {
   assert(Block0 != nullptr);
   assert(Block0->Successors.empty());
   assert(Result.Output.getBlock(99) == nullptr);
+}
+
+void testStructuringOptimizationPipelineKeepsAcceptedPasses() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions RejectingOptions;
+  RejectingOptions.RequireGotos = false;
+  RejectingOptions.MustImproveRelativeQuality = false;
+
+  StructuringOptimizationPipeline Pipeline;
+  Pipeline.addPass(std::make_unique<RemoveFirstSuccessorPass>());
+  Pipeline.addPass(std::make_unique<AddFirstSuccessorPass>(RejectingOptions));
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  StructuringOptimizationPipelineResult Result = Pipeline.run(Cfg, Structurer);
+
+  assert(Result.Changed);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors.empty());
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -3146,8 +3200,10 @@ int main() {
   testRelativeQualityRejectsMoreGotoTargets();
   testStructuringOptimizationPassAcceptsImprovedGraph();
   testStructuringOptimizationPassRejectsNewGotos();
+  testStructuringOptimizationPassCanOverrideNewGotos();
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
+  testStructuringOptimizationPipelineKeepsAcceptedPasses();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();
