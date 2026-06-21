@@ -500,6 +500,21 @@ void testOverlayManagerKeepsSharedCFGSuccessors() {
   assert(Manager.sharedSuccessors(99).empty());
 }
 
+void testOverlayManagerDerivesVisibleSuccessors() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {0, 1}));
+  Cfg.addBlock(block(1, {}));
+
+  OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
+  RegionOverlay *Root = Manager.root();
+  assert(Root != nullptr);
+  assert(Root->children().size() == 1);
+  RegionId LoopId = Root->children().front();
+
+  assert(Manager.visibleSuccessors(Root->id()).empty());
+  assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({1}));
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1213,6 +1228,7 @@ int main() {
   testOverlayManagerInitialMembersMatchRegionTree();
   testOverlayManagerFinalizeAndDissolveUpdateMembers();
   testOverlayManagerKeepsSharedCFGSuccessors();
+  testOverlayManagerDerivesVisibleSuccessors();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();

@@ -68,6 +68,7 @@ public:
   RegionId ownerOf(BlockId Id) const;
   const std::vector<OverlayMember> &members(RegionId Id) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
+  std::vector<BlockId> visibleSuccessors(RegionId Id) const;
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
@@ -92,6 +93,7 @@ private:
 
   void initializeOverlayState();
   void initializeSharedGraph(const StructuredCFG &Cfg);
+  const OverlayMember *memberForBlock(RegionId ViewId, BlockId Block) const;
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
 

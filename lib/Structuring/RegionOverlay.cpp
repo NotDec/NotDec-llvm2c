@@ -6,6 +6,16 @@
 
 namespace notdec::backend::structuring {
 
+namespace {
+
+void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
+  if (std::find(Values.begin(), Values.end(), Id) == Values.end()) {
+    Values.push_back(Id);
+  }
+}
+
+} // namespace
+
 OverlayMember OverlayMember::block(BlockId Id) {
   OverlayMember Member;
   Member.Kind = OverlayMemberKind::Block;
@@ -125,6 +135,55 @@ const std::vector<BlockId> &OverlayManager::sharedSuccessors(BlockId Id) const {
   static const std::vector<BlockId> Empty;
   auto It = SharedSuccessors.find(Id);
   return It == SharedSuccessors.end() ? Empty : It->second;
+}
+
+const OverlayMember *OverlayManager::memberForBlock(RegionId ViewId,
+                                                    BlockId Block) const {
+  const std::vector<OverlayMember> &ViewMembers = members(ViewId);
+  for (const OverlayMember &Member : ViewMembers) {
+    if (Member.Kind == OverlayMemberKind::Block && Member.Block == Block) {
+      return &Member;
+    }
+    if (Member.Kind == OverlayMemberKind::Region ||
+        Member.Kind == OverlayMemberKind::Structured) {
+      const Region *MemberRegion = getRegionData(Member.Region);
+      if (MemberRegion != nullptr &&
+          std::find(MemberRegion->Blocks.begin(), MemberRegion->Blocks.end(),
+                    Block) != MemberRegion->Blocks.end()) {
+        return &Member;
+      }
+    }
+  }
+  return nullptr;
+}
+
+std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
+  std::vector<BlockId> Result;
+  const std::vector<OverlayMember> &ViewMembers = members(Id);
+  for (const OverlayMember &Member : ViewMembers) {
+    std::vector<BlockId> Blocks;
+    if (Member.Kind == OverlayMemberKind::Block) {
+      Blocks.push_back(Member.Block);
+    } else {
+      const Region *MemberRegion = getRegionData(Member.Region);
+      if (MemberRegion != nullptr) {
+        Blocks = MemberRegion->Blocks;
+      }
+    }
+
+    for (BlockId Block : Blocks) {
+      for (BlockId Succ : sharedSuccessors(Block)) {
+        if (memberForBlock(Id, Succ) == &Member) {
+          continue;
+        }
+        if (memberForBlock(Id, Succ) != nullptr) {
+          continue;
+        }
+        appendUniqueBlock(Result, Succ);
+      }
+    }
+  }
+  return Result;
 }
 
 void OverlayManager::finalizeRegionMembers(RegionId Id, NodeId RootId) {
