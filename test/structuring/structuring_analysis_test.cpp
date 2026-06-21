@@ -753,6 +753,23 @@ void testOverlayAcyclicViewsFilterBackEdgesByOrder() {
                    }) != AcyclicEdges.end();
   assert(!HasBackEdge);
 
+  std::vector<OverlayViewEdge> BlacklistedEdges =
+      Manager.quotientEdgesBlacklisted(
+          RootId, /*IncludeSuccessors=*/false,
+          {{OverlayNodeKey::block(0), OverlayNodeKey::block(1)}});
+  assert(BlacklistedEdges.size() == 2);
+  auto HasBlacklistedEdge =
+      std::find_if(BlacklistedEdges.begin(), BlacklistedEdges.end(),
+                   [](const OverlayViewEdge &Edge) {
+                     return Edge.From.Kind == OverlayMemberKind::Block &&
+                            Edge.From.Block == 0 &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 1;
+                   }) != BlacklistedEdges.end();
+  assert(!HasBlacklistedEdge);
+  assert(Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false).size() ==
+         3);
+
   Region Child;
   Child.Kind = RegionKind::Root;
   Child.Head = 1;
@@ -770,6 +787,9 @@ void testOverlayAcyclicViewsFilterBackEdgesByOrder() {
   OverlayManager ChildManager(std::move(ChildRegions), Cfg);
   assert(ChildManager.visibleSuccessors(ChildId) ==
          std::vector<BlockId>({2}));
+  assert(ChildManager.visibleSuccessorsBlacklisted(
+             ChildId, {{OverlayNodeKey::block(1), OverlayNodeKey::block(2)}})
+             .empty());
   std::map<OverlayNodeKey, unsigned> ChildOrder = {
       {OverlayNodeKey::block(1), 1},
       {OverlayNodeKey::block(2), 0},

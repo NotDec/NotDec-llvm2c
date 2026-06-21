@@ -160,6 +160,16 @@ public:
   std::vector<OverlayViewEdge>
   quotientEdges(RegionId Id, bool IncludeSuccessors,
                 bool IncludeMarkedEdges = false) const;
+  std::vector<OverlayNodeKey> visibleNodeSuccessorsBlacklisted(
+      RegionId Id, const std::vector<OverlayHiddenEdge> &BlacklistedEdges,
+      bool IncludeMarkedEdges = false) const;
+  std::vector<BlockId> visibleSuccessorsBlacklisted(
+      RegionId Id, const std::vector<OverlayHiddenEdge> &BlacklistedEdges,
+      bool IncludeMarkedEdges = false) const;
+  std::vector<OverlayViewEdge> quotientEdgesBlacklisted(
+      RegionId Id, bool IncludeSuccessors,
+      const std::vector<OverlayHiddenEdge> &BlacklistedEdges,
+      bool IncludeMarkedEdges = false) const;
   std::vector<OverlayNodeKey> visibleNodeSuccessorsAcyclic(
       RegionId Id, const std::map<OverlayNodeKey, unsigned> &NodeOrder,
       bool IncludeMarkedEdges = false) const;
