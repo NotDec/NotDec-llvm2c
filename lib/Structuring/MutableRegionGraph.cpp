@@ -447,10 +447,10 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
        Overlay.manager()->finalizedChildren(Overlay.id())) {
     const Region *ChildRegion = Child.RegionData;
 
-    // Until overlay finalize/dissolve lands, child regions stay visible as
-    // grouped blocks with a recorded structured root. This moves the graph
-    // builder to the overlay boundary instead of the old child-result
-    // injection path, even before full shared-graph mutation lands.
+    // Angr's finalize() replaces a reduced child region with its result node
+    // in the parent overlay view. NotDec does not yet mutate one shared graph,
+    // so the parent graph rebuild models that view with one grouped node plus
+    // the successor snapshot captured before the child reducer ran.
     GraphNodeId NodeId =
         Graph.addNode(ChildRegion->Head, Child.StructuredRoot);
     MutableRegionNode *Node = Graph.getNode(NodeId);

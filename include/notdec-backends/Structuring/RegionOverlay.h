@@ -23,10 +23,11 @@ struct FinalizedChildRegion {
   SuccessorSnapshot Snapshot;
 };
 
-// This is the first C++ step toward angr's OverlayManager/RegionOverlay model.
-// The full graph mutation API will be filled in as Phoenix/SAILR move over.
-// For now it gives RecursiveStructurer a shared region tree object instead of
-// materializing child results out-of-band.
+// Angr's OverlayManager owns one mutable graph and makes every RegionOverlay a
+// view over that graph. NotDec is still one step short of that: the manager
+// owns the region tree plus finalized child results, and MutableRegionGraph
+// rebuilds the current region view from this state. Keep graph-facing state
+// here so the later shared-graph migration has the same boundary as Angr.
 class OverlayManager {
 public:
   explicit OverlayManager(RegionTree Regions);
