@@ -278,6 +278,16 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
   std::unique_ptr<structuring::Structurer> Structurer =
       structuring::createStructurer(structuring::DefaultStructurerName);
   StructuredTree Tree = Structurer->structure(Cfg);
+  std::vector<std::string> Result = renderStructuredBody(Tree, Payloads);
+
+  Result.push_back(Payloads.empty() ? "// TODO: recover body"
+                                    : "// TODO: recover remaining body");
+  return Result;
+}
+
+std::vector<std::string>
+BodyBuilder::renderStructuredBody(const structuring::StructuredTree &Tree,
+                                  const std::vector<std::string> &Payloads) {
   std::vector<std::string> Result;
   if (Tree.root() != InvalidNodeId) {
     renderStructuredNode(Tree, Payloads, Tree.root(), Result);

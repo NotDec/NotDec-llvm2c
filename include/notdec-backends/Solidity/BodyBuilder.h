@@ -12,6 +12,10 @@ namespace llvm {
 class Function;
 }
 
+namespace notdec::backend::structuring {
+class StructuredTree;
+}
+
 namespace notdec::backend::solidity {
 
 // Builds the current Solidity function-body fallback.  This is intentionally
@@ -20,6 +24,9 @@ namespace notdec::backend::solidity {
 class BodyBuilder {
 public:
   static std::vector<std::string> readBody(const llvm::Function &F);
+  static std::vector<std::string>
+  renderStructuredBody(const structuring::StructuredTree &Tree,
+                       const std::vector<std::string> &Payloads);
   static std::optional<std::string> getStringMetadata(const llvm::Instruction &I,
                                                       llvm::StringRef Kind);
   static std::optional<std::string>

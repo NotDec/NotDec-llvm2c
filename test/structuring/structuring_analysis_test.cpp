@@ -12,6 +12,7 @@
 #include "notdec-backends/Structuring/StructuringOptimizationPass.h"
 #include "notdec-backends/Structuring/StructuringOptimizationPipeline.h"
 #include "notdec-backends/Structuring/StructuringQuality.h"
+#include "notdec-backends/Solidity/BodyBuilder.h"
 
 #include <algorithm>
 #include <cassert>
@@ -731,6 +732,32 @@ void testGotoStructurerRendersVirtualBlockBodySource() {
     }
   }
   assert(FoundVirtualBody);
+}
+
+void testSolidityBodyBuilderRendersVirtualBlockBodySource() {
+  std::vector<std::string> Payloads = {"copy-body"};
+  StructuredTree Tree;
+
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Label;
+  Label.Kind = StructuredNodeKind::Label;
+  Label.Block = 20;
+  Root.Children.push_back(Tree.addNode(std::move(Label)));
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::BasicBlock;
+  Body.Block = 20;
+  Body.Statements.push_back({0});
+  Root.Children.push_back(Tree.addNode(std::move(Body)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  std::vector<std::string> Out =
+      notdec::backend::solidity::BodyBuilder::renderStructuredBody(Tree, Payloads);
+  assert(std::find(Out.begin(), Out.end(), "// block_20:") != Out.end());
+  assert(std::find(Out.begin(), Out.end(), "copy-body") != Out.end());
 }
 
 void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
@@ -3626,6 +3653,7 @@ int main() {
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
   testGotoStructurerRendersVirtualBlockBodySource();
+  testSolidityBodyBuilderRendersVirtualBlockBodySource();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRedirectPredecessorsIsAtomic();
   testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();

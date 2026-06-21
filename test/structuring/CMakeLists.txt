@@ -24,6 +24,7 @@ add_executable(structuring-analysis-test
 target_link_libraries(structuring-analysis-test
   PRIVATE
   notdec-backend-structuring
+  notdec-backend-solidity
 )
 
 add_test(NAME structuring-analysis
