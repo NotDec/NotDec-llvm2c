@@ -1108,6 +1108,18 @@ groupVirtualEdgesBySource(const MutableRegionGraph &Graph) {
   return Result;
 }
 
+void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
+                               RegionOverlay &Overlay) {
+  for (const VirtualEdge &Edge : Graph.virtualEdges()) {
+    if (Edge.FromBlock == InvalidBlockId || Edge.ToBlock == InvalidBlockId) {
+      continue;
+    }
+    Overlay.removeEdgeWithSuccessorsOnly(
+        OverlayEdgeEndpoint::external(Edge.FromBlock),
+        OverlayEdgeEndpoint::external(Edge.ToBlock));
+  }
+}
+
 void appendControlTransfer(StructuredNode &Root, StructuredTree &Tree,
                            BlockId Target, VirtualEdgeKind Kind) {
   if (Target == InvalidBlockId) {
@@ -2707,6 +2719,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
     if (Node != nullptr && Node->StructuredRoot != InvalidNodeId) {
       NodeId RootId = wrapNaturalLoopFallback(*R, Node->StructuredRoot, Tree);
       if (!Node->SourceNodes.empty()) {
+        syncVirtualEdgesToOverlay(Graph, Overlay);
         Overlay.replaceNodes(Node->SourceNodes, RootId);
       }
       cleanupStructuredGotos(Cfg, Tree, RootId);
