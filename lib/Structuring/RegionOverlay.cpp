@@ -382,7 +382,12 @@ NodeId RegionOverlay::structuredRoot() const {
 
 SuccessorSnapshot RegionOverlay::snapshotSuccessors() const {
   SuccessorSnapshot Snapshot;
-  Snapshot.Successors = successors();
+  if (Manager != nullptr) {
+    Snapshot.Successors = Manager->visibleSuccessors(Id);
+  }
+  if (Snapshot.Successors.empty()) {
+    Snapshot.Successors = successors();
+  }
   return Snapshot;
 }
 

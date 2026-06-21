@@ -515,6 +515,47 @@ void testOverlayManagerDerivesVisibleSuccessors() {
   assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({1}));
 }
 
+void testOverlayVisibleSuccessorsMatchIdentifiedLoopSuccessors() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 4}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {}));
+
+  OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
+  RegionOverlay *Root = Manager.root();
+  assert(Root != nullptr);
+  assert(Root->children().size() == 1);
+  RegionId LoopId = Root->children().front();
+  const Region *Loop = Manager.getRegionData(LoopId);
+  assert(Loop != nullptr);
+  assert(Manager.visibleSuccessors(LoopId) == Loop->Successors);
+}
+
+void testSnapshotSuccessorsFallsBackWithoutSharedCFG() {
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1};
+  Child.Successors = {3};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 3};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
+  assert(ChildOverlay != nullptr);
+  assert(ChildOverlay->snapshotSuccessors().Successors ==
+         std::vector<BlockId>({3}));
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1229,6 +1270,8 @@ int main() {
   testOverlayManagerFinalizeAndDissolveUpdateMembers();
   testOverlayManagerKeepsSharedCFGSuccessors();
   testOverlayManagerDerivesVisibleSuccessors();
+  testOverlayVisibleSuccessorsMatchIdentifiedLoopSuccessors();
+  testSnapshotSuccessorsFallsBackWithoutSharedCFG();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();
