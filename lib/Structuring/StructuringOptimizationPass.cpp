@@ -38,7 +38,7 @@ StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
   StructuringEvaluation Initial;
 
   if (needsInitialEvaluation()) {
-    Initial = Evaluator.evaluate(Cfg, Structurer);
+    Initial = Evaluator.evaluate(Cfg, Structurer, Options.EdgesToRemove);
   } else {
     Initial.Succeeded = true;
   }
@@ -67,13 +67,14 @@ StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
     }
     HadChanges = true;
 
-    Current = Evaluator.evaluate(Candidate, Structurer);
+    Current = Evaluator.evaluate(Candidate, Structurer, Options.EdgesToRemove);
     if (!Current.Succeeded) {
       if (!Options.RecoverStructureFails) {
         return Result;
       }
       Candidate = Previous;
-      Current = Evaluator.evaluate(Candidate, Structurer);
+      Current =
+          Evaluator.evaluate(Candidate, Structurer, Options.EdgesToRemove);
       continue;
     }
 

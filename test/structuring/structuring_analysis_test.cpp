@@ -635,6 +635,22 @@ void testStructuringEvaluatorCollectsGotoSummary() {
   assert(Result.Quality.GotoTargets[1] == 1);
 }
 
+void testStructuringEvaluatorRemovesEdgesForTrialOnly() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  StructuringEvaluation Result =
+      StructuringEvaluator().evaluate(Cfg, Structurer, {{0, 1}});
+
+  assert(Result.Succeeded);
+  assert(Result.Gotos.empty());
+  const CFGBlock *Original = Cfg.getBlock(0);
+  assert(Original != nullptr);
+  assert((Original->Successors == std::vector<BlockId>{1}));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -722,6 +738,20 @@ void testStructuringOptimizationPassRejectsNewGotos() {
   Options.RequireGotos = false;
   CFGEdgeGotoRegionStructurer Structurer;
   AddFirstSuccessorPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
+}
+
+void testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.EdgesToRemove.push_back({0, 1});
+  CFGEdgeGotoRegionStructurer Structurer;
+  RemoveFirstSuccessorPass Pass(Options);
   StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
 
   assert(!Result.Succeeded);
@@ -3110,11 +3140,13 @@ int main() {
   testGotoManagerCollectsSequenceGotoSources();
   testGotoManagerCollectsIfGotoSources();
   testStructuringEvaluatorCollectsGotoSummary();
+  testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
   testStructuringOptimizationPassAcceptsImprovedGraph();
   testStructuringOptimizationPassRejectsNewGotos();
+  testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();

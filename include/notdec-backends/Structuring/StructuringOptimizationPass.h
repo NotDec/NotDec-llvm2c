@@ -4,6 +4,7 @@
 #include "notdec-backends/Structuring/StructuringEvaluator.h"
 
 #include <cstddef>
+#include <vector>
 
 namespace notdec::backend::structuring {
 
@@ -20,6 +21,7 @@ struct StructuringOptimizationOptions {
   bool MustImproveRelativeQuality = true;
   bool RequireGotos = true;
   std::size_t MaxOptIters = 1;
+  std::vector<StructuringEdge> EdgesToRemove;
 };
 
 struct StructuringOptimizationResult {
