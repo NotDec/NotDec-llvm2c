@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -53,7 +54,9 @@ GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
                                         BlockId RepresentativeBlock,
                                         NodeId StructuredRoot,
                                         bool SelfLoop = true,
-                                        bool DropRefinementMarks = false);
+                                        bool DropRefinementMarks = false,
+                                        std::optional<OverlayNodeKey>
+                                            AbsorbedSuccessor = std::nullopt);
 
 bool foldTrailingContinueBreakIfToDoWhile(StructuredNode &LoopNode,
                                           StructuredTree &Tree) {
@@ -1177,7 +1180,9 @@ GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
                                         BlockId RepresentativeBlock,
                                         NodeId StructuredRoot,
                                         bool SelfLoop,
-                                        bool DropRefinementMarks) {
+                                        bool DropRefinementMarks,
+                                        std::optional<OverlayNodeKey>
+                                            AbsorbedSuccessor) {
   std::vector<OverlayNodeKey> SourceNodes =
       Overlay == nullptr ? std::vector<OverlayNodeKey>{}
                          : collectSourceNodesForCollapse(Graph, Members);
@@ -1190,7 +1195,13 @@ GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
 
   syncVirtualEdgesToOverlay(Graph, *Overlay);
   if (!isSameStructuredSource(SourceNodes, Overlay->id(), StructuredRoot)) {
-    Overlay->replaceNodes(SourceNodes, StructuredRoot, SelfLoop);
+    Overlay->replaceNodes(SourceNodes, StructuredRoot, AbsorbedSuccessor,
+                          SelfLoop);
+  } else if (AbsorbedSuccessor) {
+    Overlay->absorbSuccessorInto(
+        OverlayEdgeEndpoint::external(*AbsorbedSuccessor),
+        OverlayEdgeEndpoint::member(
+            OverlayMember::structured(StructuredRoot, Overlay->id())));
   }
   if (DropRefinementMarks) {
     Overlay->dropEdgeMarksFrom(

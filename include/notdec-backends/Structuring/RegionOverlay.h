@@ -299,6 +299,9 @@ public:
   void collapseTo(NodeId RootId);
   void replaceNodes(const std::vector<OverlayNodeKey> &OldNodes,
                     NodeId RootId, bool SelfLoop = true);
+  void replaceNodes(const std::vector<OverlayNodeKey> &OldNodes, NodeId RootId,
+                    const std::optional<OverlayNodeKey> &AbsorbedSuccessor,
+                    bool SelfLoop = true);
   void dissolve();
 
 private:

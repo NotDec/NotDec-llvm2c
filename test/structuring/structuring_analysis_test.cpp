@@ -1131,6 +1131,59 @@ void testOverlayAbsorbSuccessorIntoStructuredMember() {
   assert(!StillShowsOriginalSuccessor);
 }
 
+void testOverlayReplaceNodesAbsorbsSuccessor() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  OverlayEdgeEndpoint Succ = OverlayEdgeEndpoint::external(1);
+  OverlayEdgeEndpoint SuccOut = OverlayEdgeEndpoint::external(2);
+  RootOverlay->addExtraFullEdge(Succ, SuccOut);
+  RootOverlay->replaceNodes({OverlayNodeKey::block(0)}, 88,
+                            OverlayNodeKey::block(1));
+
+  const std::vector<OverlayMember> &RootMembers = Manager.members(RootId);
+  assert(RootMembers.size() == 1);
+  OverlayMember Structured = RootMembers.front();
+  assert(Structured.Kind == OverlayMemberKind::Structured);
+
+  std::vector<OverlayViewEdge> FullEdges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true);
+  bool HasAbsorbedEdge =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) ==
+                                Manager.nodeKey(Structured) &&
+                            !Edge.targetsMember() &&
+                            Edge.targetNode() == OverlayNodeKey::block(2);
+                   }) != FullEdges.end();
+  bool StillShowsOriginalSuccessor =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) ==
+                                Manager.nodeKey(Structured) &&
+                            !Edge.targetsMember() &&
+                            Edge.targetNode() == OverlayNodeKey::block(1);
+                   }) != FullEdges.end();
+  assert(HasAbsorbedEdge);
+  assert(!StillShowsOriginalSuccessor);
+}
+
 void testOverlayEdgeMarksFilterAndRemap() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2178,6 +2231,7 @@ int main() {
   testOverlayCollapseRegionRewiresSharedGraph();
   testOverlayReplaceNodesRewiresSharedGraphAndBookkeeping();
   testOverlayAbsorbSuccessorIntoStructuredMember();
+  testOverlayReplaceNodesAbsorbsSuccessor();
   testOverlayEdgeMarksFilterAndRemap();
   testPhoenixOverlayPathSyncsReducerCollapseToOverlay();
   testPhoenixOverlayPathSyncsRepeatedReducerCollapses();

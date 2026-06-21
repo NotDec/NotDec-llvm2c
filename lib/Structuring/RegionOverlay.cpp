@@ -1571,6 +1571,29 @@ void RegionOverlay::replaceNodes(const std::vector<OverlayNodeKey> &OldNodes,
   Manager->replaceNodes(Id, OldNodes, RootId, SelfLoop);
 }
 
+void RegionOverlay::replaceNodes(
+    const std::vector<OverlayNodeKey> &OldNodes, NodeId RootId,
+    const std::optional<OverlayNodeKey> &AbsorbedSuccessor, bool SelfLoop) {
+  replaceNodes(OldNodes, RootId, SelfLoop);
+  if (!AbsorbedSuccessor || Manager == nullptr || RootId == InvalidNodeId) {
+    return;
+  }
+  const std::vector<OverlayMember> &ViewMembers = Manager->members(Id);
+  auto NewMemberIt =
+      std::find_if(ViewMembers.begin(), ViewMembers.end(),
+                   [&](const OverlayMember &Member) {
+                     return Member.Kind == OverlayMemberKind::Structured &&
+                            Member.StructuredRoot == RootId &&
+                            Member.Region == Id;
+                   });
+  if (NewMemberIt == ViewMembers.end()) {
+    return;
+  }
+  absorbSuccessorInto(
+      OverlayEdgeEndpoint::external(*AbsorbedSuccessor),
+      OverlayEdgeEndpoint::member(*NewMemberIt));
+}
+
 void RegionOverlay::dissolve() {
   if (Manager == nullptr) {
     return;
