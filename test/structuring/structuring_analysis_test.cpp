@@ -775,6 +775,49 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   assert(hasSinglePayload(Copy3->Statements, 7));
 }
 
+void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Ret = block(2, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({9});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(2) == nullptr);
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  const CFGBlock *Block1 = Result.Output.getBlock(1);
+  assert(Block0 != nullptr && Block0->Successors.size() == 1);
+  assert(Block1 != nullptr && Block1->Successors.size() == 1);
+  assert(Block0->Successors.front() != 2);
+  assert(Block1->Successors.front() != 2);
+  assert(Block0->Successors.front() != Block1->Successors.front());
+
+  const CFGBlock *Copy0 = Result.Output.getBlock(Block0->Successors.front());
+  const CFGBlock *Copy1 = Result.Output.getBlock(Block1->Successors.front());
+  assert(Copy0 != nullptr && Copy1 != nullptr);
+  assert(Copy0->Terminator == TerminatorKind::Return);
+  assert(Copy1->Terminator == TerminatorKind::Return);
+  assert(Copy0->BodyBlock == Copy0->Id);
+  assert(Copy1->BodyBlock == Copy1->Id);
+  assert(hasSinglePayload(Copy0->Statements, 9));
+  assert(hasSinglePayload(Copy1->Statements, 9));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -3310,6 +3353,7 @@ int main() {
   testGotoStructurerRendersVirtualBlockBodySource();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
+  testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();

@@ -50,6 +50,91 @@ bool replaceSuccessor(CFGBlock &Block, BlockId OldTarget, BlockId NewTarget) {
 
 } // namespace
 
+StructuringOptimizationOptions ReturnDuplicatorLow::defaultOptions() {
+  StructuringOptimizationOptions Options;
+  Options.MaxOptIters = 4;
+  return Options;
+}
+
+bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
+                                     const StructuringEvaluation &Current) {
+  std::map<BlockId, std::vector<BlockId>> ToUpdate;
+
+  for (const CFGBlock &Block : Graph.blocks()) {
+    if (Block.Terminator != TerminatorKind::Return ||
+        !Block.Successors.empty()) {
+      continue;
+    }
+
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Block.Id);
+    if (Preds.size() <= 1) {
+      continue;
+    }
+
+    for (BlockId Pred : Preds) {
+      if (Current.Gotos.isGotoEdge(Pred, Block.Id)) {
+        ToUpdate[Block.Id].push_back(Pred);
+      }
+    }
+  }
+
+  bool Changed = false;
+  for (auto &Entry : ToUpdate) {
+    BlockId ReturnBlock = Entry.first;
+    std::vector<BlockId> &PredsToUpdate = Entry.second;
+    std::sort(PredsToUpdate.begin(), PredsToUpdate.end());
+    PredsToUpdate.erase(std::unique(PredsToUpdate.begin(), PredsToUpdate.end()),
+                        PredsToUpdate.end());
+    if (PredsToUpdate.empty()) {
+      continue;
+    }
+
+    const CFGBlock *ReturnBlockPtr = Graph.getBlock(ReturnBlock);
+    if (ReturnBlockPtr == nullptr ||
+        ReturnBlockPtr->Terminator != TerminatorKind::Return ||
+        !ReturnBlockPtr->Successors.empty()) {
+      continue;
+    }
+
+    std::vector<BlockId> CurrentPreds = predecessorsOf(Graph, ReturnBlock);
+    bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
+
+    std::vector<BlockId> Copies;
+    std::vector<BlockId> UpdatedPreds;
+    for (BlockId Pred : PredsToUpdate) {
+      CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr || !hasSuccessor(*PredBlock, ReturnBlock)) {
+        continue;
+      }
+
+      BlockId Copy = Graph.duplicateBlock(ReturnBlock, {});
+      if (Copy == InvalidBlockId) {
+        continue;
+      }
+      PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr) {
+        Graph.removeBlock(Copy);
+        continue;
+      }
+      if (!replaceSuccessor(*PredBlock, ReturnBlock, Copy)) {
+        Graph.removeBlock(Copy);
+        continue;
+      }
+
+      Copies.push_back(Copy);
+      UpdatedPreds.push_back(Pred);
+      Changed = true;
+    }
+
+    if (DeleteOriginal && Copies.size() == CurrentPreds.size() &&
+        sameBlockSet(CurrentPreds, UpdatedPreds)) {
+      Graph.removeBlock(ReturnBlock);
+    }
+  }
+
+  return Changed;
+}
+
 StructuringOptimizationOptions CrossJumpReverter::defaultOptions() {
   StructuringOptimizationOptions Options;
   Options.StrictlyLessGotos = true;
@@ -101,6 +186,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
 
     std::vector<BlockId> Copies;
+    std::vector<BlockId> UpdatedPreds;
     for (BlockId Pred : PredsToUpdate) {
       CFGBlock *PredBlock = Graph.getBlock(Pred);
       if (PredBlock == nullptr || !hasSuccessor(*PredBlock, Target)) {
@@ -122,10 +208,12 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
       }
 
       Copies.push_back(Copy);
+      UpdatedPreds.push_back(Pred);
       Changed = true;
     }
 
-    if (DeleteOriginal && !Copies.empty()) {
+    if (DeleteOriginal && Copies.size() == CurrentPreds.size() &&
+        sameBlockSet(CurrentPreds, UpdatedPreds)) {
       Graph.removeBlock(Target);
     }
   }
@@ -135,6 +223,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
 StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline() {
   StructuringOptimizationPipeline Pipeline;
+  Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
   return Pipeline;
 }
