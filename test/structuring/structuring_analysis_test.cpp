@@ -74,6 +74,12 @@ public:
   using SwitchDefaultCaseDuplicator::runOnGraph;
 };
 
+class TestSwitchReusedEntryRewriter : public SwitchReusedEntryRewriter {
+public:
+  using SwitchReusedEntryRewriter::SwitchReusedEntryRewriter;
+  using SwitchReusedEntryRewriter::runOnGraph;
+};
+
 class OrderCaptureStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::virtualizeOneEdge;
@@ -912,6 +918,41 @@ void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   assert(Copy->Successors == std::vector<BlockId>{4});
   assert(Copy->BodyBlock == 1);
   assert(hasSinglePayload(Copy->Statements, 11));
+}
+
+void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 3}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(switchBlock(2, {1, 5}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(5, {}));
+
+  CFGBlock *Entry = Cfg.getBlock(1);
+  assert(Entry != nullptr);
+  Entry->Statements.push_back({21});
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch2 = Cfg.getBlock(2);
+  const CFGBlock *EntryBlock = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch2 != nullptr && EntryBlock != nullptr);
+  assert(Switch0->Successors.front() == 1);
+  assert(Switch2->Successors.front() != 1);
+  assert(hasSinglePayload(EntryBlock->Statements, 21));
+
+  BlockId CopyId = Switch2->Successors.front();
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Successors == std::vector<BlockId>{4});
+  assert(Copy->BodyBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 21));
 }
 
 void testControlFlowStructureCounterCollectsSharedQuality() {
@@ -3451,6 +3492,7 @@ int main() {
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
+  testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();

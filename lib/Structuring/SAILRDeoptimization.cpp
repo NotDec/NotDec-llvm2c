@@ -160,6 +160,21 @@ bool disjointPredecessorSets(const StructuredCFG &Graph, BlockId Lhs,
   return true;
 }
 
+bool switchReachesBlock(const CFGBlock &Block, BlockId Target) {
+  if (Block.Terminator != TerminatorKind::Switch) {
+    return false;
+  }
+  if (hasSuccessor(Block, Target)) {
+    return true;
+  }
+  for (const SwitchCase &Case : Block.Cases) {
+    if (Case.Target == Target) {
+      return true;
+    }
+  }
+  return false;
+}
+
 BlockId defaultSwitchSuccessor(const CFGBlock &Block) {
   if (Block.Terminator != TerminatorKind::Switch ||
       Block.Successors.empty()) {
@@ -223,6 +238,82 @@ bool copyRegionForPredecessor(StructuredCFG &Graph, const ReturnRegion &Region,
 }
 
 } // namespace
+
+StructuringOptimizationOptions SwitchReusedEntryRewriter::defaultOptions() {
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  Options.MaxOptIters = 2;
+  return Options;
+}
+
+bool SwitchReusedEntryRewriter::runOnGraph(
+    StructuredCFG &Graph, const StructuringEvaluation &Current) {
+  (void)Current;
+
+  std::vector<BlockId> EntryIds;
+  EntryIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Entry : Graph.blocks()) {
+    EntryIds.push_back(Entry.Id);
+  }
+
+  bool Changed = false;
+  for (BlockId EntryId : EntryIds) {
+    const CFGBlock *Entry = Graph.getBlock(EntryId);
+    if (Entry == nullptr) {
+      continue;
+    }
+
+    std::vector<BlockId> SwitchPreds;
+    for (const CFGBlock &PredBlock : Graph.blocks()) {
+      if (switchReachesBlock(PredBlock, EntryId)) {
+        SwitchPreds.push_back(PredBlock.Id);
+      }
+    }
+
+    if (SwitchPreds.size() <= 1) {
+      continue;
+    }
+
+    std::sort(SwitchPreds.begin(), SwitchPreds.end());
+    SwitchPreds.erase(std::unique(SwitchPreds.begin(), SwitchPreds.end()),
+                      SwitchPreds.end());
+
+    if (Entry->Successors.empty()) {
+      continue;
+    }
+
+    std::vector<BlockId> EntrySuccessors = Entry->Successors;
+    bool First = true;
+    for (BlockId Pred : SwitchPreds) {
+      if (First) {
+        First = false;
+        continue;
+      }
+
+      CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr || !hasSuccessor(*PredBlock, EntryId)) {
+        continue;
+      }
+
+      BlockId Copy = Graph.duplicateBlock(EntryId, EntrySuccessors);
+      if (Copy == InvalidBlockId) {
+        continue;
+      }
+      PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr ||
+          !replaceSuccessor(*PredBlock, EntryId, Copy)) {
+        Graph.removeBlock(Copy);
+        continue;
+      }
+
+      Changed = true;
+    }
+  }
+
+  return Changed;
+}
 
 StructuringOptimizationOptions SwitchDefaultCaseDuplicator::defaultOptions() {
   StructuringOptimizationOptions Options;
@@ -530,6 +621,7 @@ StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline() {
   StructuringOptimizationPipeline Pipeline;
   Pipeline.addPass(std::make_unique<DuplicationReverter>());
   Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
+  Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
   Pipeline.addPass(std::make_unique<SwitchDefaultCaseDuplicator>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
   return Pipeline;
