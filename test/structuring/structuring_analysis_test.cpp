@@ -716,6 +716,67 @@ void testOverlayManagerQuotientKeepsBlockSelfLoop() {
   assert(HasExternalFollow);
 }
 
+void testOverlayAcyclicViewsFilterBackEdgesByOrder() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {1}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  RegionTree Regions;
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  std::map<OverlayNodeKey, unsigned> NodeOrder = {
+      {OverlayNodeKey::block(0), 0},
+      {OverlayNodeKey::block(1), 1},
+      {OverlayNodeKey::block(2), 2},
+  };
+
+  std::vector<OverlayViewEdge> RawEdges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  std::vector<OverlayViewEdge> AcyclicEdges = Manager.quotientEdgesAcyclic(
+      RootId, /*IncludeSuccessors=*/false, NodeOrder);
+  assert(RawEdges.size() == 3);
+  assert(AcyclicEdges.size() == 2);
+  auto HasBackEdge =
+      std::find_if(AcyclicEdges.begin(), AcyclicEdges.end(),
+                   [](const OverlayViewEdge &Edge) {
+                     return Edge.From.Kind == OverlayMemberKind::Block &&
+                            Edge.From.Block == 2 &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 1;
+                   }) != AcyclicEdges.end();
+  assert(!HasBackEdge);
+
+  Region Child;
+  Child.Kind = RegionKind::Root;
+  Child.Head = 1;
+  Child.Blocks = {1};
+  RegionTree ChildRegions;
+  RegionId ChildId = ChildRegions.addRegion(Child);
+  Region Parent;
+  Parent.Kind = RegionKind::Root;
+  Parent.Head = 0;
+  Parent.Blocks = {0, 1, 2};
+  Parent.Children = {ChildId};
+  RegionId ParentId = ChildRegions.addRegion(Parent);
+  ChildRegions.setRoot(ParentId);
+
+  OverlayManager ChildManager(std::move(ChildRegions), Cfg);
+  assert(ChildManager.visibleSuccessors(ChildId) ==
+         std::vector<BlockId>({2}));
+  std::map<OverlayNodeKey, unsigned> ChildOrder = {
+      {OverlayNodeKey::block(1), 1},
+      {OverlayNodeKey::block(2), 0},
+  };
+  assert(ChildManager.visibleSuccessorsAcyclic(ChildId, ChildOrder).empty());
+}
+
 void testOverlayGraphBuildsEdgesFromQuotientView() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2258,6 +2319,7 @@ int main() {
   testSnapshotSuccessorsFallsBackWithoutSharedCFG();
   testOverlayManagerDerivesQuotientEdges();
   testOverlayManagerQuotientKeepsBlockSelfLoop();
+  testOverlayAcyclicViewsFilterBackEdgesByOrder();
   testOverlayGraphBuildsEdgesFromQuotientView();
   testOverlayFullViewAddsLoopSuccessorEdges();
   testOverlayViewOnlyMutationsAffectQuotientEdges();

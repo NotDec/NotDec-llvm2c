@@ -65,6 +65,16 @@ bool edgeReferencesBlock(const OverlayViewEdge &Edge, BlockId Block) {
           Edge.ExternalSuccessorNode.Block == Block);
 }
 
+bool isBackEdgeByOrder(const OverlayNodeKey &From, const OverlayNodeKey &To,
+                       const std::map<OverlayNodeKey, unsigned> &NodeOrder) {
+  auto FromIt = NodeOrder.find(From);
+  auto ToIt = NodeOrder.find(To);
+  if (FromIt == NodeOrder.end() || ToIt == NodeOrder.end()) {
+    return false;
+  }
+  return FromIt->second >= ToIt->second;
+}
+
 void appendUniqueEdge(std::vector<OverlayViewEdge> &Edges,
                       const OverlayViewEdge &Edge) {
   auto It = std::find_if(Edges.begin(), Edges.end(),
@@ -899,6 +909,57 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors,
       }
     }
   }
+  return Result;
+}
+
+std::vector<OverlayNodeKey> OverlayManager::visibleNodeSuccessorsAcyclic(
+    RegionId Id, const std::map<OverlayNodeKey, unsigned> &NodeOrder,
+    bool IncludeMarkedEdges) const {
+  std::vector<OverlayNodeKey> Result;
+  for (const OverlayViewEdge &Edge :
+       quotientEdgesAcyclic(Id, /*IncludeSuccessors=*/true, NodeOrder,
+                            IncludeMarkedEdges)) {
+    if (Edge.sourcesMember() && !Edge.targetsMember()) {
+      appendUniqueNodeKey(Result, Edge.targetNode());
+    }
+  }
+  return Result;
+}
+
+std::vector<BlockId> OverlayManager::visibleSuccessorsAcyclic(
+    RegionId Id, const std::map<OverlayNodeKey, unsigned> &NodeOrder,
+    bool IncludeMarkedEdges) const {
+  std::vector<BlockId> Result;
+  for (const OverlayNodeKey &Succ :
+       visibleNodeSuccessorsAcyclic(Id, NodeOrder, IncludeMarkedEdges)) {
+    if (Succ.isBlock()) {
+      appendUniqueBlock(Result, Succ.Block);
+    }
+  }
+  return Result;
+}
+
+std::vector<OverlayViewEdge> OverlayManager::quotientEdgesAcyclic(
+    RegionId Id, bool IncludeSuccessors,
+    const std::map<OverlayNodeKey, unsigned> &NodeOrder,
+    bool IncludeMarkedEdges) const {
+  std::vector<OverlayViewEdge> Result =
+      quotientEdges(Id, IncludeSuccessors, IncludeMarkedEdges);
+  Result.erase(std::remove_if(Result.begin(), Result.end(),
+                              [&](const OverlayViewEdge &Edge) {
+                                OverlayNodeKey From = Edge.sourcesMember()
+                                                          ? nodeKey(Edge.From)
+                                                          : Edge.sourceNode();
+                                OverlayNodeKey To = Edge.targetsMember()
+                                                        ? nodeKey(Edge.To)
+                                                        : Edge.targetNode();
+                                if (From == OverlayNodeKey{} ||
+                                    To == OverlayNodeKey{}) {
+                                  return false;
+                                }
+                                return isBackEdgeByOrder(From, To, NodeOrder);
+                              }),
+               Result.end());
   return Result;
 }
 
