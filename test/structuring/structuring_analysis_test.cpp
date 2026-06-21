@@ -1770,6 +1770,53 @@ void testSwitchReusedEntryRewriterCopiesEntryTailRegion() {
   assert(hasSinglePayload(CopyTail->Statements, 24));
 }
 
+void testSwitchReusedEntryRewriterCopiesConnectedPredsOnce() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 6}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(switchBlock(2, {3, 1}));
+  Cfg.addBlock(switchBlock(3, {1, 7}));
+  Cfg.addBlock(block(4, {8}));
+  Cfg.addBlock(block(6, {8}));
+  Cfg.addBlock(block(7, {8}));
+  Cfg.addBlock(block(8, {}));
+
+  CFGBlock *Entry = Cfg.getBlock(1);
+  CFGBlock *Tail = Cfg.getBlock(4);
+  assert(Entry != nullptr && Tail != nullptr);
+  Entry->Statements.push_back({25});
+  Tail->Statements.push_back({26});
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch2 = Cfg.getBlock(2);
+  const CFGBlock *Switch3 = Cfg.getBlock(3);
+  assert(Switch0 != nullptr && Switch2 != nullptr && Switch3 != nullptr);
+  assert(Switch0->Successors.front() == 1);
+  assert(Switch2->Successors.size() == 2);
+  assert(Switch3->Successors.size() == 2);
+  assert(Switch2->Successors.front() == 3);
+  assert(Switch2->Successors[1] == Switch3->Successors.front());
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch3->Successors.front());
+  assert(Copy != nullptr);
+  assert(Copy->Successors.size() == 1);
+  assert(Copy->BodyBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 25));
+
+  const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->Successors == std::vector<BlockId>{8});
+  assert(CopyTail->BodyBlock == 4);
+  assert(hasSinglePayload(CopyTail->Statements, 26));
+}
+
 void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   StructuredCFG Cfg;
 
@@ -4517,6 +4564,7 @@ int main() {
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterCopiesEntryTailRegion();
+  testSwitchReusedEntryRewriterCopiesConnectedPredsOnce();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();

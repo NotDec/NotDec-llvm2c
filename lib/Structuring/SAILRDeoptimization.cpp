@@ -543,19 +543,30 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       continue;
     }
 
-    bool First = true;
+    std::vector<BlockId> PredsToUpdate;
     for (BlockId Pred : SwitchPreds) {
-      if (First) {
-        First = false;
+      if (Pred == SwitchPreds.front()) {
         continue;
       }
+      PredsToUpdate.push_back(Pred);
+    }
 
-      if (!Graph.hasEdge(Pred, EntryId)) {
+    std::vector<std::vector<BlockId>> PredComponents =
+        connectedPredecessorComponents(Graph, PredsToUpdate);
+    for (const std::vector<BlockId> &Component : PredComponents) {
+      bool AllStillReachEntry = true;
+      for (BlockId Pred : Component) {
+        if (!Graph.hasEdge(Pred, EntryId)) {
+          AllStillReachEntry = false;
+          break;
+        }
+      }
+      if (!AllStillReachEntry) {
         continue;
       }
 
       std::vector<BlockId> Copies;
-      if (!copyLinearRegionForPredecessors(Graph, Region, {Pred}, Copies)) {
+      if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
         continue;
       }
 
