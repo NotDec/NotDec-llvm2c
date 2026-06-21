@@ -75,6 +75,31 @@ public:
   mutable std::vector<VirtualEdge> CapturedEdges;
 };
 
+bool treeContainsKind(const StructuredTree &Tree, NodeId Id,
+                      StructuredNodeKind Kind) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if (Node->Kind == Kind) {
+    return true;
+  }
+  for (NodeId Child : Node->Children) {
+    if (treeContainsKind(Tree, Child, Kind)) {
+      return true;
+    }
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    if (treeContainsKind(Tree, Case.Body, Kind)) {
+      return true;
+    }
+  }
+  return treeContainsKind(Tree, Node->Then, Kind) ||
+         treeContainsKind(Tree, Node->Else, Kind) ||
+         treeContainsKind(Tree, Node->Body, Kind) ||
+         treeContainsKind(Tree, Node->Default, Kind);
+}
+
 class RecordingRegionStructurer : public RegionStructurer {
 public:
   bool supportsChildRegions() const override { return true; }
@@ -1959,6 +1984,61 @@ void testRefineCyclicReducesGraphNaturalLoop() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicOverlayMarksSuccessorBreakEdge() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 4}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  GraphNodeId BreakSourceId = Graph.getNodeForBlock(2);
+  assert(BreakSourceId != InvalidGraphNodeId);
+
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+  assert(Structurer.refineCyclic(Cfg, Manager.regionTree(), *RootOverlay->region(),
+                                 Graph, Tree, RootOverlay));
+
+  const MutableRegionNode *BreakSource = Graph.getNode(BreakSourceId);
+  assert(BreakSource != nullptr);
+  assert(BreakSource->StructuredRoot != InvalidNodeId);
+  assert(treeContainsKind(Tree, BreakSource->StructuredRoot,
+                          StructuredNodeKind::Break));
+
+  const std::vector<OverlayMember> &Members = Manager.members(RootId);
+  auto LoopIt =
+      std::find_if(Members.begin(), Members.end(), [](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured;
+      });
+  assert(LoopIt != Members.end());
+  OverlayNodeKey LoopNode = Manager.nodeKey(*LoopIt);
+
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true);
+  bool HasFollowEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        OverlayNodeKey Target =
+            Edge.targetsMember() ? Manager.nodeKey(Edge.To) : Edge.targetNode();
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == LoopNode &&
+               Target == OverlayNodeKey::block(4);
+      }) != Edges.end();
+  assert(HasFollowEdge);
+}
+
 void testRefineCyclicDropsOverlayRefinementMarksAfterCollapse() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 2}));
@@ -2660,6 +2740,7 @@ int main() {
   testFinalizedChildSnapshotSkipsParentLoopHead();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
+  testRefineCyclicOverlayMarksSuccessorBreakEdge();
   testRefineCyclicDropsOverlayRefinementMarksAfterCollapse();
   testRefineCyclicMergesMultipleLatches();
   testRefineCyclicVirtualizesExtraContinues();

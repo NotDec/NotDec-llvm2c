@@ -49,6 +49,8 @@ void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
                             NodeId Id);
 void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
                                RegionOverlay &Overlay);
+bool sourceContainsStructuredSwitch(const MutableRegionNode &Source,
+                                    const StructuredTree &Tree);
 GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
                                         RegionOverlay *Overlay,
                                         const std::vector<GraphNodeId> &Members,
@@ -1565,6 +1567,20 @@ void detachOverlayVirtualEdge(RegionOverlay *Overlay,
   }
 }
 
+void markOverlayRefinementEdge(RegionOverlay *Overlay,
+                               const std::vector<OverlayNodeKey> &FromNodes,
+                               const std::vector<OverlayNodeKey> &ToNodes) {
+  if (Overlay == nullptr || Overlay->manager() == nullptr) {
+    return;
+  }
+  for (const OverlayNodeKey &From : FromNodes) {
+    for (const OverlayNodeKey &To : ToNodes) {
+      Overlay->manager()->markNodeEdge(Overlay->id(), From, To,
+                                       "cyclic_refinement_outgoing");
+    }
+  }
+}
+
 bool installVirtualizedEdge(const StructuredCFG &Cfg, const Region &R,
                             MutableRegionGraph &Graph, StructuredTree &Tree,
                             RegionOverlay *Overlay,
@@ -1602,6 +1618,59 @@ bool installVirtualizedEdge(const StructuredCFG &Cfg, const Region &R,
         Edge.From, {OverlayNodeKey::structured(Replacement, Overlay->id())});
   }
   return true;
+}
+
+bool rewriteLoopSuccessorExits(const StructuredCFG &Cfg,
+                               const Region &LoopRegion,
+                               const std::set<GraphNodeId> &Members,
+                               BlockId FollowBlock, GraphNodeId HeadId,
+                               MutableRegionGraph &Graph,
+                               StructuredTree &Tree, RegionOverlay *Overlay) {
+  if (Overlay == nullptr || FollowBlock == InvalidBlockId) {
+    return false;
+  }
+
+  bool Changed = false;
+  for (GraphNodeId SourceId : Members) {
+    const MutableRegionNode *Source = Graph.getNode(SourceId);
+    if (Source == nullptr || SourceId == HeadId ||
+        Source->TailBlock == LoopRegion.Latch) {
+      continue;
+    }
+
+    for (GraphNodeId SuccId : Source->Succs) {
+      if (Members.count(SuccId)) {
+        continue;
+      }
+      const MutableRegionNode *Succ = Graph.getNode(SuccId);
+      if (Succ == nullptr || Succ->Blocks.empty() ||
+          Succ->Blocks.front() != FollowBlock) {
+        continue;
+      }
+
+      std::vector<OverlayNodeKey> FromNodes =
+          overlayNodesForGraphNode(Source, Source->TailBlock);
+      std::vector<OverlayNodeKey> ToNodes =
+          overlayNodesForGraphNode(Succ, FollowBlock);
+      markOverlayRefinementEdge(Overlay, FromNodes, ToNodes);
+
+      if (!sourceContainsStructuredSwitch(*Source, Tree)) {
+        VirtualEdge Edge{SourceId, SuccId, Source->TailBlock, FollowBlock,
+                         VirtualEdgeKind::Break};
+        NodeId Replacement =
+            buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion, Tree);
+        if (Replacement != InvalidNodeId && !FromNodes.empty()) {
+          Graph.setStructuredRoot(SourceId, Replacement);
+          Overlay->replaceNodes(FromNodes, Replacement);
+          Graph.setSourceNodes(
+              SourceId,
+              {OverlayNodeKey::structured(Replacement, Overlay->id())});
+        }
+      }
+      Changed = true;
+    }
+  }
+  return Changed;
 }
 
 bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
@@ -2631,6 +2700,9 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
                                                        FollowBlock)) {
       continue;
     }
+
+    rewriteLoopSuccessorExits(Cfg, LoopRegion, MemberSet, FollowBlock, HeadId,
+                              Graph, Tree, Overlay);
 
     if (Successors.size() > 1) {
       virtualizeNonFollowLoopExits(Cfg, LoopRegion, MemberSet, FollowBlock,
