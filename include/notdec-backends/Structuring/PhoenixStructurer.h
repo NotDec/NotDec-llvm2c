@@ -62,7 +62,8 @@ protected:
                           const MutableRegionGraphAnalysis &Analysis,
                           std::vector<VirtualEdge> Edges) const;
   bool virtualizeOneEdge(const StructuredCFG &Cfg, const Region &R,
-                         MutableRegionGraph &Graph, StructuredTree &Tree) const;
+                         MutableRegionGraph &Graph, StructuredTree &Tree,
+                         RegionOverlay *Overlay = nullptr) const;
 };
 
 } // namespace notdec::backend::structuring

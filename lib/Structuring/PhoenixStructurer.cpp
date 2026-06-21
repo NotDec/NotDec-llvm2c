@@ -5,6 +5,7 @@
 #include "notdec-backends/Structuring/RegionIdentifier.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -1144,6 +1145,43 @@ void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
     Manager->detachNodeEdge(OverlayNodeKey::block(Edge.FromBlock),
                             OverlayNodeKey::block(Edge.ToBlock));
   }
+}
+
+void applyOverlayNodeOrder(const MutableRegionGraph &Graph,
+                           const RegionOverlay *Overlay,
+                           MutableRegionGraphAnalysis &Analysis) {
+  if (Overlay == nullptr || Overlay->manager() == nullptr) {
+    return;
+  }
+
+  std::map<OverlayNodeKey, unsigned> OverlayOrder =
+      Overlay->manager()->quasiTopologicalNodeOrder(Overlay->id());
+  if (OverlayOrder.empty()) {
+    return;
+  }
+
+  std::map<GraphNodeId, unsigned> MappedOrder = Analysis.NodeOrder;
+  for (GraphNodeId Id : Graph.activeNodes()) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr || Node->SourceNodes.empty()) {
+      continue;
+    }
+
+    unsigned Best = std::numeric_limits<unsigned>::max();
+    bool Found = false;
+    for (const OverlayNodeKey &Source : Node->SourceNodes) {
+      auto It = OverlayOrder.find(Source);
+      if (It == OverlayOrder.end()) {
+        continue;
+      }
+      Best = std::min(Best, It->second);
+      Found = true;
+    }
+    if (Found) {
+      MappedOrder[Id] = Best;
+    }
+  }
+  Analysis.NodeOrder = std::move(MappedOrder);
 }
 
 std::vector<OverlayNodeKey>
@@ -2679,7 +2717,7 @@ bool PhoenixStructurer::lastResortRefinement(const StructuredCFG &Cfg,
   }
   std::size_t OverlayCheckpoint =
       Overlay == nullptr ? 0 : Overlay->manager()->checkpoint();
-  if (virtualizeOneEdge(Cfg, R, Graph, Tree)) {
+  if (virtualizeOneEdge(Cfg, R, Graph, Tree, Overlay)) {
     if (Overlay != nullptr) {
       syncVirtualEdgesToOverlay(Graph, *Overlay);
       Overlay->manager()->commit(OverlayCheckpoint);
@@ -2696,8 +2734,10 @@ bool PhoenixStructurer::lastResortRefinement(const StructuredCFG &Cfg,
 bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
                                           const Region &R,
                                           MutableRegionGraph &Graph,
-                                          StructuredTree &Tree) const {
+                                          StructuredTree &Tree,
+                                          RegionOverlay *Overlay) const {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  applyOverlayNodeOrder(Graph, Overlay, Analysis);
   for (const VirtualEdge &Hint :
        edgeVirtualizationHints(Cfg, Graph, Analysis)) {
     if (Graph.hasEdge(Hint.From, Hint.To)) {

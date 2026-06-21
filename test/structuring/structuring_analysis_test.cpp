@@ -53,6 +53,24 @@ public:
 class TestPhoenixStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::refineCyclic;
+  using PhoenixStructurer::virtualizeOneEdge;
+};
+
+class OrderCaptureStructurer : public PhoenixStructurer {
+public:
+  using PhoenixStructurer::virtualizeOneEdge;
+
+  std::vector<VirtualEdge> orderVirtualizableEdges(
+      const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+      const MutableRegionGraphAnalysis &Analysis,
+      std::vector<VirtualEdge> Edges) const override {
+    (void)Cfg;
+    (void)Graph;
+    CapturedOrder = Analysis.NodeOrder;
+    return {};
+  }
+
+  mutable std::map<GraphNodeId, unsigned> CapturedOrder;
 };
 
 class RecordingRegionStructurer : public RegionStructurer {
@@ -799,6 +817,47 @@ void testOverlayAcyclicViewsFilterBackEdgesByOrder() {
       ChildManager.quasiTopologicalNodeOrder(ChildId);
   assert(DerivedChildOrder[OverlayNodeKey::block(1)] == 0);
   assert(DerivedChildOrder[OverlayNodeKey::block(2)] == 1);
+}
+
+void testPhoenixOverlayPathUsesOverlayNodeOrder() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  assert(Analysis.NodeOrder[0] == 1);
+  assert(Analysis.NodeOrder[1] == 0);
+  assert(Analysis.NodeOrder[2] == 2);
+
+  OrderCaptureStructurer Plain;
+  StructuredTree PlainTree;
+  assert(!Plain.virtualizeOneEdge(Cfg, Root, Graph, PlainTree));
+  assert(Plain.CapturedOrder == Analysis.NodeOrder);
+
+  RegionTree Regions;
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph OverlayGraph =
+      MutableRegionGraph::build(Cfg, *RootOverlay);
+  OrderCaptureStructurer OverlayPath;
+  StructuredTree OverlayTree;
+  assert(!OverlayPath.virtualizeOneEdge(Cfg, Root, OverlayGraph, OverlayTree,
+                                        RootOverlay));
+  assert(OverlayPath.CapturedOrder[0] == 0);
+  assert(OverlayPath.CapturedOrder[1] == 1);
+  assert(OverlayPath.CapturedOrder[2] == 2);
+  assert(OverlayPath.CapturedOrder != Analysis.NodeOrder);
 }
 
 void testOverlayGraphBuildsEdgesFromQuotientView() {
@@ -2344,6 +2403,7 @@ int main() {
   testOverlayManagerDerivesQuotientEdges();
   testOverlayManagerQuotientKeepsBlockSelfLoop();
   testOverlayAcyclicViewsFilterBackEdgesByOrder();
+  testPhoenixOverlayPathUsesOverlayNodeOrder();
   testOverlayGraphBuildsEdgesFromQuotientView();
   testOverlayFullViewAddsLoopSuccessorEdges();
   testOverlayViewOnlyMutationsAffectQuotientEdges();
