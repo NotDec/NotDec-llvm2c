@@ -76,14 +76,19 @@ public:
   void clearStructuredRoot(RegionId Id);
 
 private:
+  friend class RegionOverlay;
+
   struct CheckpointState {
     std::map<RegionId, NodeId> StructuredRoots;
     std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
     std::map<RegionId, std::vector<OverlayMember>> Members;
     std::map<BlockId, RegionId> BlockOwners;
+    std::map<RegionId, RegionId> ParentRegions;
   };
 
   void initializeOverlayState();
+  void finalizeRegionMembers(RegionId Id, NodeId RootId);
+  void dissolveRegionMembers(RegionId Id);
 
   RegionTree Regions;
   std::map<RegionId, RegionOverlay> Overlays;

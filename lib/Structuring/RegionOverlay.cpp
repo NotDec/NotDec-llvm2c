@@ -108,6 +108,50 @@ const std::vector<OverlayMember> &OverlayManager::members(RegionId Id) const {
   return It == Members.end() ? Empty : It->second;
 }
 
+void OverlayManager::finalizeRegionMembers(RegionId Id, NodeId RootId) {
+  RegionId ParentId = parentOf(Id);
+  if (ParentId == InvalidRegionId) {
+    return;
+  }
+
+  std::vector<OverlayMember> &ParentMembers = Members[ParentId];
+  for (OverlayMember &Member : ParentMembers) {
+    if (Member.Kind == OverlayMemberKind::Region && Member.Region == Id) {
+      Member = OverlayMember::structured(RootId);
+      break;
+    }
+  }
+}
+
+void OverlayManager::dissolveRegionMembers(RegionId Id) {
+  RegionId ParentId = parentOf(Id);
+  if (ParentId == InvalidRegionId) {
+    return;
+  }
+
+  std::vector<OverlayMember> ChildMembers = Members[Id];
+  std::vector<OverlayMember> &ParentMembers = Members[ParentId];
+  std::vector<OverlayMember> Rebuilt;
+  Rebuilt.reserve(ParentMembers.size() + ChildMembers.size());
+  for (const OverlayMember &Member : ParentMembers) {
+    if (Member.Kind == OverlayMemberKind::Region && Member.Region == Id) {
+      Rebuilt.insert(Rebuilt.end(), ChildMembers.begin(), ChildMembers.end());
+      continue;
+    }
+    Rebuilt.push_back(Member);
+  }
+  ParentMembers = std::move(Rebuilt);
+  Members[Id].clear();
+
+  for (const OverlayMember &Member : ChildMembers) {
+    if (Member.Kind == OverlayMemberKind::Block) {
+      BlockOwners[Member.Block] = ParentId;
+    } else if (Member.Kind == OverlayMemberKind::Region) {
+      ParentRegions[Member.Region] = ParentId;
+    }
+  }
+}
+
 RegionTree OverlayManager::visibleRegionTree() const {
   RegionTree Visible = Regions;
   for (Region &R : Visible.regions()) {
@@ -158,7 +202,8 @@ OverlayManager::finalizedChildren(RegionId Id) const {
 
 std::size_t OverlayManager::checkpoint() {
   StructuredRootCheckpoints.push_back(
-      {StructuredRoots, SuccessorSnapshots, Members, BlockOwners});
+      {StructuredRoots, SuccessorSnapshots, Members, BlockOwners,
+       ParentRegions});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -171,6 +216,7 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
       StructuredRootCheckpoints[Checkpoint].SuccessorSnapshots;
   Members = StructuredRootCheckpoints[Checkpoint].Members;
   BlockOwners = StructuredRootCheckpoints[Checkpoint].BlockOwners;
+  ParentRegions = StructuredRootCheckpoints[Checkpoint].ParentRegions;
 }
 
 void OverlayManager::commit(std::size_t Checkpoint) {
@@ -190,6 +236,7 @@ void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId,
   }
   StructuredRoots[Id] = RootId;
   SuccessorSnapshots[Id] = Snapshot;
+  finalizeRegionMembers(Id, RootId);
 }
 
 void OverlayManager::clearStructuredRoot(RegionId Id) {
@@ -272,6 +319,7 @@ void RegionOverlay::dissolve() {
   if (Manager == nullptr) {
     return;
   }
+  Manager->dissolveRegionMembers(Id);
   Manager->clearStructuredRoot(Id);
 }
 

@@ -438,6 +438,54 @@ void testOverlayManagerInitialMembersMatchRegionTree() {
   assert(ChildMembers[1].Block == 2);
 }
 
+void testOverlayManagerFinalizeAndDissolveUpdateMembers() {
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1, 2};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
+  assert(ChildOverlay != nullptr);
+
+  std::size_t Checkpoint = Manager.checkpoint();
+  ChildOverlay->finalize(42, SuccessorSnapshot{{3}});
+  const std::vector<OverlayMember> &FinalizedRootMembers =
+      Manager.members(RootId);
+  assert(FinalizedRootMembers.size() == 3);
+  assert(FinalizedRootMembers[0].Kind == OverlayMemberKind::Structured);
+  assert(FinalizedRootMembers[0].StructuredRoot == 42);
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.members(RootId).front().Kind == OverlayMemberKind::Region);
+
+  Checkpoint = Manager.checkpoint();
+  ChildOverlay->dissolve();
+  const std::vector<OverlayMember> &DissolvedRootMembers =
+      Manager.members(RootId);
+  assert(DissolvedRootMembers.size() == 4);
+  assert(DissolvedRootMembers[0].Kind == OverlayMemberKind::Block);
+  assert(DissolvedRootMembers[0].Block == 1);
+  assert(DissolvedRootMembers[1].Kind == OverlayMemberKind::Block);
+  assert(DissolvedRootMembers[1].Block == 2);
+  assert(Manager.ownerOf(1) == RootId);
+  assert(Manager.ownerOf(2) == RootId);
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.ownerOf(1) == ChildId);
+  assert(Manager.ownerOf(2) == ChildId);
+  assert(Manager.members(RootId).front().Kind == OverlayMemberKind::Region);
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1111,6 +1159,7 @@ int main() {
   testGotoRegionSkipsChildBlocks();
   testVisibleRegionTreeOnlyIncludesFinalizedChildren();
   testOverlayManagerInitialMembersMatchRegionTree();
+  testOverlayManagerFinalizeAndDissolveUpdateMembers();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testFinalizedChildSnapshotSkipsParentLoopHead();
