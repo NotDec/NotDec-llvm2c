@@ -30,13 +30,16 @@ protected:
   virtual bool analyzeAcyclic(const StructuredCFG &Cfg,
                               const RegionTree &Regions, const Region &R,
                               MutableRegionGraph &Graph,
-                              StructuredTree &Tree) const;
+                              StructuredTree &Tree,
+                              RegionOverlay *Overlay = nullptr) const;
   virtual bool analyzeCyclic(const StructuredCFG &Cfg,
                              MutableRegionGraph &Graph,
-                             StructuredTree &Tree) const;
+                             StructuredTree &Tree,
+                             RegionOverlay *Overlay = nullptr) const;
   virtual bool refineCyclic(const StructuredCFG &Cfg, const RegionTree &Regions,
                             const Region &R, MutableRegionGraph &Graph,
-                            StructuredTree &Tree) const;
+                            StructuredTree &Tree,
+                            RegionOverlay *Overlay = nullptr) const;
   virtual bool lastResortRefinement(const StructuredCFG &Cfg, const Region &R,
                                     MutableRegionGraph &Graph,
                                     StructuredTree &Tree) const;

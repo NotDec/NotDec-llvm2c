@@ -1109,6 +1109,40 @@ void testPhoenixOverlayPathSyncsReducerCollapseToOverlay() {
   assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(1)).empty());
 }
 
+void testPhoenixOverlayPathSyncsRepeatedReducerCollapses() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  PhoenixStructurer Structurer;
+  StructuredTree Tree;
+  NodeId RootNode = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
+  assert(RootNode != InvalidNodeId);
+
+  const std::vector<OverlayMember> &RootMembers = Manager.members(RootId);
+  assert(RootMembers.size() == 1);
+  assert(RootMembers.front().Kind == OverlayMemberKind::Structured);
+  assert(RootMembers.front().StructuredRoot == RootNode);
+  OverlayNodeKey Result = Manager.nodeKey(RootMembers.front());
+  assert(Manager.sharedNodeSuccessors(Result).empty());
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(0)).empty());
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(1)).empty());
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(2)).empty());
+}
+
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -1912,6 +1946,7 @@ int main() {
   testOverlayCollapseRegionRewiresSharedGraph();
   testOverlayReplaceNodesRewiresSharedGraphAndBookkeeping();
   testPhoenixOverlayPathSyncsReducerCollapseToOverlay();
+  testPhoenixOverlayPathSyncsRepeatedReducerCollapses();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();

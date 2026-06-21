@@ -45,6 +45,14 @@ void dropGotoIntoFollowingNode(StructuredNode &Node,
                                const StructuredTree &Tree);
 void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
                             NodeId Id);
+void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
+                               RegionOverlay &Overlay);
+GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
+                                        RegionOverlay *Overlay,
+                                        const std::vector<GraphNodeId> &Members,
+                                        BlockId RepresentativeBlock,
+                                        NodeId StructuredRoot,
+                                        bool SelfLoop = true);
 
 bool foldTrailingContinueBreakIfToDoWhile(StructuredNode &LoopNode,
                                           StructuredTree &Tree) {
@@ -249,7 +257,7 @@ bool collapseCrossesNaturalLoopBoundary(
 
 bool reduceSequenceOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                         const RegionTree &Regions, const Region &R,
-                        StructuredTree &Tree) {
+                        StructuredTree &Tree, RegionOverlay *Overlay) {
   for (GraphNodeId FromId : Graph.activeNodes()) {
     const MutableRegionNode *From = Graph.getNode(FromId);
     if (From == nullptr || From->Succs.size() != 1) {
@@ -274,7 +282,8 @@ bool reduceSequenceOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     std::vector<BlockId> Blocks = From->Blocks;
     Blocks.insert(Blocks.end(), To->Blocks.begin(), To->Blocks.end());
     NodeId Root = buildSequenceNode(Cfg, {From, To}, Tree);
-    Graph.collapseNodes({FromId, ToId}, From->Block, Root);
+    collapseNodesAndSyncOverlay(Graph, Overlay, {FromId, ToId}, From->Block,
+                                Root);
     return true;
   }
   return false;
@@ -282,7 +291,7 @@ bool reduceSequenceOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
 
 bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                   const RegionTree &Regions, const Region &R,
-                  StructuredTree &Tree) {
+                  StructuredTree &Tree, RegionOverlay *Overlay) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
     const MutableRegionNode *Header = Graph.getNode(HeaderId);
     if (Header == nullptr || Header->Blocks.empty() ||
@@ -402,7 +411,7 @@ bool reduceIfOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     Sequence.Children.push_back(Tree.addNode(std::move(IfNode)));
 
     NodeId Root = Tree.addNode(std::move(Sequence));
-    Graph.collapseNodes(Members, Header->Block, Root);
+    collapseNodesAndSyncOverlay(Graph, Overlay, Members, Header->Block, Root);
     return true;
   }
   return false;
@@ -429,7 +438,7 @@ NodeId buildSwitchCaseBody(const StructuredCFG &Cfg,
 
 bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
                       const RegionTree &Regions, const Region &R,
-                      StructuredTree &Tree) {
+                      StructuredTree &Tree, RegionOverlay *Overlay) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
     const MutableRegionNode *Header = Graph.getNode(HeaderId);
     if (Header == nullptr || Header->Blocks.empty()) {
@@ -549,8 +558,8 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     }
     Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
 
-    Graph.collapseNodes(MemberList, Header->Block,
-                        Tree.addNode(std::move(Sequence)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, MemberList, Header->Block,
+                                Tree.addNode(std::move(Sequence)));
     return true;
   }
   return false;
@@ -747,7 +756,7 @@ bool collectLinearLoopBodyWithBreak(
 }
 
 bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
-                           StructuredTree &Tree) {
+                           StructuredTree &Tree, RegionOverlay *Overlay) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
     const MutableRegionNode *Header = Graph.getNode(HeaderId);
     if (Header == nullptr || Header->Blocks.size() != 1 ||
@@ -806,8 +815,8 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     std::vector<GraphNodeId> Members;
     Members.push_back(HeaderId);
     Members.insert(Members.end(), BodyIds.begin(), BodyIds.end());
-    Graph.collapseNodes(Members, Header->Block,
-                        Tree.addNode(std::move(WhileNode)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, Members, Header->Block,
+                                Tree.addNode(std::move(WhileNode)));
     return true;
   }
   return false;
@@ -815,7 +824,8 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
 
 bool reduceLinearWhileWithBreakOnce(const StructuredCFG &Cfg,
                                     MutableRegionGraph &Graph,
-                                    StructuredTree &Tree) {
+                                    StructuredTree &Tree,
+                                    RegionOverlay *Overlay) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
     const MutableRegionNode *Header = Graph.getNode(HeaderId);
     if (Header == nullptr || Header->Blocks.size() != 1 ||
@@ -874,8 +884,8 @@ bool reduceLinearWhileWithBreakOnce(const StructuredCFG &Cfg,
         BreakSite.ExitNode != InvalidGraphNodeId) {
       Members.push_back(BreakSite.ExitNode);
     }
-    Graph.collapseNodes(Members, Header->Block,
-                        Tree.addNode(std::move(WhileNode)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, Members, Header->Block,
+                                Tree.addNode(std::move(WhileNode)));
     return true;
   }
   return false;
@@ -920,7 +930,8 @@ bool collectLinearDoWhileBody(const StructuredCFG &Cfg,
 }
 
 bool reduceLinearDoWhileOnce(const StructuredCFG &Cfg,
-                             MutableRegionGraph &Graph, StructuredTree &Tree) {
+                             MutableRegionGraph &Graph, StructuredTree &Tree,
+                             RegionOverlay *Overlay) {
   for (GraphNodeId LatchId : Graph.activeNodes()) {
     const MutableRegionNode *Latch = Graph.getNode(LatchId);
     if (Latch == nullptr || Latch->Blocks.empty() || Latch->Succs.size() != 2) {
@@ -982,15 +993,15 @@ bool reduceLinearDoWhileOnce(const StructuredCFG &Cfg,
     DoWhileNode.Condition = Tail->Condition;
     DoWhileNode.ConditionNegated = NegateCondition;
     DoWhileNode.Body = buildSequenceNode(Cfg, BodyNodes, Tree);
-    Graph.collapseNodes(BodyIds, Entry->Block,
-                        Tree.addNode(std::move(DoWhileNode)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, BodyIds, Entry->Block,
+                                Tree.addNode(std::move(DoWhileNode)));
     return true;
   }
   return false;
 }
 
 bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
-                        StructuredTree &Tree) {
+                        StructuredTree &Tree, RegionOverlay *Overlay) {
   for (GraphNodeId HeaderId : Graph.activeNodes()) {
     const MutableRegionNode *Header = Graph.getNode(HeaderId);
     if (Header == nullptr || Header->Blocks.empty() ||
@@ -1032,8 +1043,8 @@ bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     }
 
     foldTrailingContinueBreakIfToDoWhile(LoopNode, Tree);
-    Graph.collapseNodes({HeaderId}, Header->Block,
-                        Tree.addNode(std::move(LoopNode)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, {HeaderId}, Header->Block,
+                                Tree.addNode(std::move(LoopNode)));
     return true;
   }
   return false;
@@ -1118,6 +1129,65 @@ void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
         OverlayEdgeEndpoint::external(Edge.FromBlock),
         OverlayEdgeEndpoint::external(Edge.ToBlock));
   }
+}
+
+std::vector<OverlayNodeKey>
+collectSourceNodesForCollapse(const MutableRegionGraph &Graph,
+                              const std::vector<GraphNodeId> &Members) {
+  std::vector<OverlayNodeKey> SourceNodes;
+  auto AppendUnique = [&](const OverlayNodeKey &Key) {
+    if (std::find(SourceNodes.begin(), SourceNodes.end(), Key) ==
+        SourceNodes.end()) {
+      SourceNodes.push_back(Key);
+    }
+  };
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr || !Node->Active) {
+      continue;
+    }
+    for (const OverlayNodeKey &Key : Node->SourceNodes) {
+      AppendUnique(Key);
+    }
+  }
+  return SourceNodes;
+}
+
+bool isSameStructuredSource(const std::vector<OverlayNodeKey> &SourceNodes,
+                            RegionId Region, NodeId Root) {
+  return SourceNodes.size() == 1 &&
+         SourceNodes.front() == OverlayNodeKey::structured(Root, Region);
+}
+
+GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
+                                        RegionOverlay *Overlay,
+                                        const std::vector<GraphNodeId> &Members,
+                                        BlockId RepresentativeBlock,
+                                        NodeId StructuredRoot,
+                                        bool SelfLoop) {
+  std::vector<OverlayNodeKey> SourceNodes =
+      Overlay == nullptr ? std::vector<OverlayNodeKey>{}
+                         : collectSourceNodesForCollapse(Graph, Members);
+  GraphNodeId Collapsed =
+      Graph.collapseNodes(Members, RepresentativeBlock, StructuredRoot);
+  if (Overlay == nullptr || Collapsed == InvalidGraphNodeId ||
+      StructuredRoot == InvalidNodeId || SourceNodes.empty()) {
+    return Collapsed;
+  }
+
+  syncVirtualEdgesToOverlay(Graph, *Overlay);
+  if (!isSameStructuredSource(SourceNodes, Overlay->id(), StructuredRoot)) {
+    Overlay->replaceNodes(SourceNodes, StructuredRoot, SelfLoop);
+  }
+
+  // After the shared graph has been replaced, the next reducer step must refer
+  // to the new structured overlay node, not to blocks that no longer exist.
+  MutableRegionNode *CollapsedNode = Graph.getNode(Collapsed);
+  if (CollapsedNode != nullptr) {
+    CollapsedNode->SourceNodes = {
+        OverlayNodeKey::structured(StructuredRoot, Overlay->id())};
+  }
+  return Collapsed;
 }
 
 void appendControlTransfer(StructuredNode &Root, StructuredTree &Tree,
@@ -2283,7 +2353,7 @@ StructuredNode makeGraphInfiniteLoop(const StructuredCFG &Cfg,
 
 bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
                                 MutableRegionGraph &Graph,
-                                StructuredTree &Tree) {
+                                StructuredTree &Tree, RegionOverlay *Overlay) {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
   for (GraphNodeId HeadId : Graph.activeNodes()) {
     const MutableRegionNode *Head = Graph.getNode(HeadId);
@@ -2388,8 +2458,8 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
     } else {
       LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
     }
-    Graph.collapseNodes(Members, LoopRegion.Head,
-                        Tree.addNode(std::move(LoopNode)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, Members, LoopRegion.Head,
+                                Tree.addNode(std::move(LoopNode)));
     return true;
   }
   return false;
@@ -2399,7 +2469,8 @@ bool reduceNaturalLoopFallbackOnce(const StructuredCFG &Cfg,
                                    const RegionTree &Regions,
                                    const Region &Parent,
                                    MutableRegionGraph &Graph,
-                                   StructuredTree &Tree) {
+                                   StructuredTree &Tree,
+                                   RegionOverlay *Overlay) {
   if (Parent.Kind != RegionKind::Root) {
     return false;
   }
@@ -2453,7 +2524,8 @@ bool reduceNaturalLoopFallbackOnce(const StructuredCFG &Cfg,
     LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
     LoopNode.Block = Loop->Head;
     LoopNode.Body = Tree.addNode(std::move(Body));
-    Graph.collapseNodes(Members, Loop->Head, Tree.addNode(std::move(LoopNode)));
+    collapseNodesAndSyncOverlay(Graph, Overlay, Members, Loop->Head,
+                                Tree.addNode(std::move(LoopNode)));
     return true;
   }
   return false;
@@ -2505,46 +2577,61 @@ bool PhoenixStructurer::analyzeAcyclic(const StructuredCFG &Cfg,
                                        const RegionTree &Regions,
                                        const Region &R,
                                        MutableRegionGraph &Graph,
-                                       StructuredTree &Tree) const {
-  if (reduceSwitchOnce(Cfg, Graph, Regions, R, Tree)) {
+                                       StructuredTree &Tree,
+                                       RegionOverlay *Overlay) const {
+  if (reduceSwitchOnce(Cfg, Graph, Regions, R, Tree, Overlay)) {
     return true;
   }
-  if (reduceSequenceOnce(Cfg, Graph, Regions, R, Tree)) {
+  if (reduceSequenceOnce(Cfg, Graph, Regions, R, Tree, Overlay)) {
     return true;
   }
-  return reduceIfOnce(Cfg, Graph, Regions, R, Tree);
+  return reduceIfOnce(Cfg, Graph, Regions, R, Tree, Overlay);
 }
 
 bool PhoenixStructurer::analyzeCyclic(const StructuredCFG &Cfg,
                                       MutableRegionGraph &Graph,
-                                      StructuredTree &Tree) const {
-  if (reduceLinearWhileOnce(Cfg, Graph, Tree)) {
+                                      StructuredTree &Tree,
+                                      RegionOverlay *Overlay) const {
+  if (reduceLinearWhileOnce(Cfg, Graph, Tree, Overlay)) {
     return true;
   }
   if (useImprovedCyclicSchemas() &&
-      reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree)) {
+      reduceLinearWhileWithBreakOnce(Cfg, Graph, Tree, Overlay)) {
     return true;
   }
-  if (reduceLinearDoWhileOnce(Cfg, Graph, Tree)) {
+  if (reduceLinearDoWhileOnce(Cfg, Graph, Tree, Overlay)) {
     return true;
   }
-  return reduceSelfLoopOnce(Cfg, Graph, Tree);
+  return reduceSelfLoopOnce(Cfg, Graph, Tree, Overlay);
 }
 
 bool PhoenixStructurer::refineCyclic(const StructuredCFG &Cfg,
                                      const RegionTree &Regions, const Region &R,
                                      MutableRegionGraph &Graph,
-                                     StructuredTree &Tree) const {
+                                     StructuredTree &Tree,
+                                     RegionOverlay *Overlay) const {
   std::size_t Checkpoint = Graph.checkpoint();
-  if (reduceGraphNaturalLoopOnce(Cfg, R, Graph, Tree)) {
+  std::size_t OverlayCheckpoint =
+      Overlay == nullptr ? 0 : Overlay->manager()->checkpoint();
+  if (reduceGraphNaturalLoopOnce(Cfg, R, Graph, Tree, Overlay)) {
     Graph.commit(Checkpoint);
+    if (Overlay != nullptr) {
+      Overlay->manager()->commit(OverlayCheckpoint);
+    }
     return true;
   }
-  if (reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree)) {
+  if (reduceNaturalLoopFallbackOnce(Cfg, Regions, R, Graph, Tree, Overlay)) {
     Graph.commit(Checkpoint);
+    if (Overlay != nullptr) {
+      Overlay->manager()->commit(OverlayCheckpoint);
+    }
     return true;
   }
   Graph.rollback(Checkpoint);
+  if (Overlay != nullptr) {
+    Overlay->manager()->rollback(OverlayCheckpoint);
+    Overlay->manager()->commit(OverlayCheckpoint);
+  }
   Graph.commit(Checkpoint);
   return false;
 }
@@ -2697,14 +2784,14 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
   do {
     Changed = false;
     bool HasCycle = Graph.hasCycle();
-    if (analyzeAcyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
+    if (analyzeAcyclic(Cfg, VisibleRegions, *R, Graph, Tree, &Overlay)) {
       Changed = true;
     }
-    if (HasCycle && analyzeCyclic(Cfg, Graph, Tree)) {
+    if (HasCycle && analyzeCyclic(Cfg, Graph, Tree, &Overlay)) {
       Changed = true;
     }
     if (!Changed && HasCycle &&
-        refineCyclic(Cfg, VisibleRegions, *R, Graph, Tree)) {
+        refineCyclic(Cfg, VisibleRegions, *R, Graph, Tree, &Overlay)) {
       Changed = true;
     }
     if (!Changed && lastResortRefinement(Cfg, *R, Graph, Tree)) {
@@ -2720,7 +2807,9 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
       NodeId RootId = wrapNaturalLoopFallback(*R, Node->StructuredRoot, Tree);
       if (!Node->SourceNodes.empty()) {
         syncVirtualEdgesToOverlay(Graph, Overlay);
-        Overlay.replaceNodes(Node->SourceNodes, RootId);
+        if (!isSameStructuredSource(Node->SourceNodes, Overlay.id(), RootId)) {
+          Overlay.replaceNodes(Node->SourceNodes, RootId);
+        }
       }
       cleanupStructuredGotos(Cfg, Tree, RootId);
       return RootId;
