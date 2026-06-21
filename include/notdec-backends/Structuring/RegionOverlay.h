@@ -130,6 +130,7 @@ public:
   const std::vector<OverlayNodeKey> &
   sharedNodeSuccessors(const OverlayNodeKey &Id) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
+  std::vector<OverlayNodeKey> visibleNodeSuccessors(RegionId Id) const;
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;
   std::vector<OverlayViewEdge> quotientEdges(RegionId Id,
                                              bool IncludeSuccessors) const;
@@ -176,6 +177,8 @@ private:
 
   void initializeOverlayState();
   void initializeSharedGraph(const StructuredCFG &Cfg);
+  const OverlayMember *memberForNodeKey(RegionId ViewId,
+                                        const OverlayNodeKey &Key) const;
   const OverlayMember *memberForBlock(RegionId ViewId, BlockId Block) const;
   std::vector<BlockId> underlyingBlocks(const OverlayMember &Member) const;
   std::optional<OverlayMember> memberForEndpoint(

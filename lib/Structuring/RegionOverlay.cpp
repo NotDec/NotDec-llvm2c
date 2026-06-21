@@ -15,6 +15,13 @@ void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
   }
 }
 
+void appendUniqueNodeKey(std::vector<OverlayNodeKey> &Values,
+                         const OverlayNodeKey &Id) {
+  if (std::find(Values.begin(), Values.end(), Id) == Values.end()) {
+    Values.push_back(Id);
+  }
+}
+
 bool sameMember(const OverlayMember &Lhs, const OverlayMember &Rhs) {
   if (Lhs.Kind != Rhs.Kind) {
     return false;
@@ -293,6 +300,22 @@ const OverlayMember *OverlayManager::memberForBlock(RegionId ViewId,
   return nullptr;
 }
 
+const OverlayMember *
+OverlayManager::memberForNodeKey(RegionId ViewId,
+                                 const OverlayNodeKey &Key) const {
+  if (Key.isBlock()) {
+    return memberForBlock(ViewId, Key.Block);
+  }
+
+  const std::vector<OverlayMember> &ViewMembers = members(ViewId);
+  for (const OverlayMember &Member : ViewMembers) {
+    if (nodeKey(Member) == Key) {
+      return &Member;
+    }
+  }
+  return nullptr;
+}
+
 std::vector<BlockId>
 OverlayManager::underlyingBlocks(const OverlayMember &Member) const {
   if (Member.Kind == OverlayMemberKind::Block) {
@@ -437,25 +460,21 @@ void OverlayManager::clearEdgeStateForBlock(BlockId Block) {
   }
 }
 
-std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
-  std::vector<BlockId> Result;
+std::vector<OverlayNodeKey>
+OverlayManager::visibleNodeSuccessors(RegionId Id) const {
+  std::vector<OverlayNodeKey> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
   for (const OverlayMember &Member : ViewMembers) {
     if (Member.Kind != OverlayMemberKind::Region) {
-      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(nodeKey(Member))) {
-        if (!Succ.isBlock()) {
+      OverlayNodeKey From = nodeKey(Member);
+      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
+        if (isHiddenEdge(Id, From, Succ)) {
           continue;
         }
-        if (isHiddenEdge(Id, nodeKey(Member), Succ)) {
+        if (memberForNodeKey(Id, Succ) != nullptr) {
           continue;
         }
-        if (memberForBlock(Id, Succ.Block) == &Member) {
-          continue;
-        }
-        if (memberForBlock(Id, Succ.Block) != nullptr) {
-          continue;
-        }
-        appendUniqueBlock(Result, Succ.Block);
+        appendUniqueNodeKey(Result, Succ);
       }
       continue;
     }
@@ -467,19 +486,27 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
     }
 
     for (BlockId Block : Blocks) {
-      for (BlockId Succ : sharedSuccessors(Block)) {
+      OverlayNodeKey From = OverlayNodeKey::block(Block);
+      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(From)) {
         if (isHiddenEdge(Id, OverlayNodeKey::block(Block),
-                         OverlayNodeKey::block(Succ))) {
+                         Succ)) {
           continue;
         }
-        if (memberForBlock(Id, Succ) == &Member) {
+        if (memberForNodeKey(Id, Succ) != nullptr) {
           continue;
         }
-        if (memberForBlock(Id, Succ) != nullptr) {
-          continue;
-        }
-        appendUniqueBlock(Result, Succ);
+        appendUniqueNodeKey(Result, Succ);
       }
+    }
+  }
+  return Result;
+}
+
+std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
+  std::vector<BlockId> Result;
+  for (const OverlayNodeKey &Succ : visibleNodeSuccessors(Id)) {
+    if (Succ.isBlock()) {
+      appendUniqueBlock(Result, Succ.Block);
     }
   }
   return Result;
