@@ -13,6 +13,7 @@ add_library(notdec-backend-structuring STATIC
     GotoManager.cpp
     GotoStructurer.cpp
     PhoenixStructurer.cpp
+    SAILRDeoptimization.cpp
     SAILRStructurer.cpp
     LLVMFunctionCFGBuilder.cpp
 )

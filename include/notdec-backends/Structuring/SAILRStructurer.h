@@ -15,6 +15,8 @@ public:
       : ImprovePhoenix(ImprovePhoenix), PostDomMaxEdges(PostDomMaxEdges),
         PostDomMaxGraphSize(PostDomMaxGraphSize) {}
 
+  StructuredTree structure(const StructuredCFG &Cfg) override;
+
 protected:
   bool useImprovedCyclicSchemas() const override { return ImprovePhoenix; }
   std::vector<VirtualEdge>

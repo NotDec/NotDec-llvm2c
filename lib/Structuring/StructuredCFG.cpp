@@ -1,5 +1,7 @@
 #include "notdec-backends/Structuring/StructuredCFG.h"
 
+#include <algorithm>
+
 namespace notdec::backend::structuring {
 
 BlockId StructuredCFG::addBlock(CFGBlock Block) {
@@ -39,6 +41,15 @@ const CFGBlock *StructuredCFG::getBlock(BlockId Id) const {
   return nullptr;
 }
 
+CFGBlock *StructuredCFG::getBlock(BlockId Id) {
+  for (auto &Block : Blocks) {
+    if (Block.Id == Id) {
+      return &Block;
+    }
+  }
+  return nullptr;
+}
+
 BlockId StructuredCFG::bodyBlock(BlockId Id) const {
   const CFGBlock *Block = getBlock(Id);
   if (Block == nullptr) {
@@ -49,6 +60,34 @@ BlockId StructuredCFG::bodyBlock(BlockId Id) const {
 
 const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
   return getBlock(bodyBlock(Id));
+}
+
+bool StructuredCFG::removeBlock(BlockId Id) {
+  auto It = std::find_if(Blocks.begin(), Blocks.end(),
+                         [Id](const CFGBlock &Block) {
+                           return Block.Id == Id;
+                         });
+  if (It == Blocks.end()) {
+    return false;
+  }
+
+  for (CFGBlock &Block : Blocks) {
+    if (Block.BodyBlock == Id) {
+      Block.BodyBlock = Block.Id;
+    }
+    Block.Successors.erase(
+        std::remove(Block.Successors.begin(), Block.Successors.end(), Id),
+        Block.Successors.end());
+    Block.Cases.erase(
+        std::remove_if(Block.Cases.begin(), Block.Cases.end(),
+                       [Id](const SwitchCase &Case) {
+                         return Case.Target == Id;
+                       }),
+        Block.Cases.end());
+  }
+
+  Blocks.erase(It);
+  return true;
 }
 
 BlockId StructuredCFG::nextBlockId() const {

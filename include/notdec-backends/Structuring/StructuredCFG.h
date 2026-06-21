@@ -70,8 +70,10 @@ public:
   std::vector<CFGBlock> &blocks() { return Blocks; }
 
   const CFGBlock *getBlock(BlockId Id) const;
+  CFGBlock *getBlock(BlockId Id);
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
+  bool removeBlock(BlockId Id);
 
 private:
   BlockId nextBlockId() const;

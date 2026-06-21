@@ -5,6 +5,7 @@
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
 #include "notdec-backends/Structuring/RegionOverlay.h"
+#include "notdec-backends/Structuring/SAILRDeoptimization.h"
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-backends/Structuring/StructuringEvaluator.h"
@@ -712,6 +713,66 @@ void testGotoStructurerRendersVirtualBlockBodySource() {
     }
   }
   assert(FoundVirtualBody);
+}
+
+void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
+  StructuredCFG Cfg;
+  CFGBlock Source = block(10, {});
+  Source.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source));
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {});
+  assert(CopyId != InvalidBlockId);
+  assert(Cfg.removeBlock(10));
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Cfg.getBodyBlock(CopyId) == Copy);
+  assert(hasSinglePayload(Copy->Statements, 7));
+}
+
+void testCrossJumpReverterDuplicatesLinearGotoTarget() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({7});
+  Cfg.addBlock(std::move(Target));
+
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(3, {1}));
+
+  StructuringOptimizationOptions Options = CrossJumpReverter::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  CrossJumpReverter Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(1) == nullptr);
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  const CFGBlock *Block3 = Result.Output.getBlock(3);
+  assert(Block0 != nullptr && Block0->Successors.size() == 1);
+  assert(Block3 != nullptr && Block3->Successors.size() == 1);
+  assert(Block0->Successors.front() != 1);
+  assert(Block3->Successors.front() != 1);
+  assert(Block0->Successors.front() != Block3->Successors.front());
+
+  const CFGBlock *Copy0 = Result.Output.getBlock(Block0->Successors.front());
+  const CFGBlock *Copy3 = Result.Output.getBlock(Block3->Successors.front());
+  assert(Copy0 != nullptr && Copy3 != nullptr);
+  assert((Copy0->Successors == std::vector<BlockId>{2}));
+  assert((Copy3->Successors == std::vector<BlockId>{2}));
+  assert(Copy0->BodyBlock == Copy0->Id);
+  assert(Copy3->BodyBlock == Copy3->Id);
+  assert(hasSinglePayload(Copy0->Statements, 7));
+  assert(hasSinglePayload(Copy3->Statements, 7));
 }
 
 void testControlFlowStructureCounterCollectsSharedQuality() {
@@ -3247,6 +3308,8 @@ int main() {
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
   testGotoStructurerRendersVirtualBlockBodySource();
+  testStructuredCFGRemoveBlockMaterializesCopiedBody();
+  testCrossJumpReverterDuplicatesLinearGotoTarget();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
