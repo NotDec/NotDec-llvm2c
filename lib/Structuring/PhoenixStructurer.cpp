@@ -51,6 +51,11 @@ void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
                                RegionOverlay &Overlay);
 bool sourceContainsStructuredSwitch(const MutableRegionNode &Source,
                                     const StructuredTree &Tree);
+bool isStructuredLoopKind(StructuredNodeKind Kind);
+NodeId rewriteStructuredSourceTargetTransfer(StructuredTree &Tree,
+                                             NodeId SourceRoot,
+                                             BlockId Target,
+                                             VirtualEdgeKind Kind);
 GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
                                         RegionOverlay *Overlay,
                                         const std::vector<GraphNodeId> &Members,
@@ -1654,18 +1659,26 @@ bool rewriteLoopSuccessorExits(const StructuredCFG &Cfg,
           overlayNodesForGraphNode(Succ, FollowBlock);
       markOverlayRefinementEdge(Overlay, FromNodes, ToNodes);
 
-      if (!sourceContainsStructuredSwitch(*Source, Tree)) {
+      NodeId Replacement = InvalidNodeId;
+      if (Source->StructuredRoot != InvalidNodeId) {
+        Replacement = rewriteStructuredSourceTargetTransfer(
+            Tree, Source->StructuredRoot, FollowBlock, VirtualEdgeKind::Break);
+      }
+
+      if (Replacement == InvalidNodeId &&
+          !sourceContainsStructuredSwitch(*Source, Tree)) {
         VirtualEdge Edge{SourceId, SuccId, Source->TailBlock, FollowBlock,
                          VirtualEdgeKind::Break};
-        NodeId Replacement =
-            buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion, Tree);
-        if (Replacement != InvalidNodeId && !FromNodes.empty()) {
-          Graph.setStructuredRoot(SourceId, Replacement);
-          Overlay->replaceNodes(FromNodes, Replacement);
-          Graph.setSourceNodes(
-              SourceId,
-              {OverlayNodeKey::structured(Replacement, Overlay->id())});
-        }
+        Replacement = buildVirtualizedSource(Cfg, *Source, Edge, LoopRegion,
+                                             Tree);
+      }
+
+      if (Replacement != InvalidNodeId && !FromNodes.empty()) {
+        Graph.setStructuredRoot(SourceId, Replacement);
+        Overlay->replaceNodes(FromNodes, Replacement);
+        Graph.setSourceNodes(
+            SourceId,
+            {OverlayNodeKey::structured(Replacement, Overlay->id())});
       }
       Changed = true;
     }
@@ -1709,6 +1722,83 @@ bool nodeTreeContainsControlTransfer(const StructuredTree &Tree, NodeId Id) {
   return nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Goto) ||
          nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Break) ||
          nodeTreeContainsKind(Tree, Id, StructuredNodeKind::Continue);
+}
+
+bool isTargetedControlTransfer(const StructuredNode &Node, BlockId Target) {
+  return (Node.Kind == StructuredNodeKind::Goto ||
+          Node.Kind == StructuredNodeKind::Break ||
+          Node.Kind == StructuredNodeKind::Continue) &&
+         Node.Target == Target;
+}
+
+NodeId copyReplacingTargetTransfer(StructuredTree &Tree, NodeId Id,
+                                   BlockId Target, VirtualEdgeKind Kind,
+                                   bool EnterLoops, bool &Changed) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return InvalidNodeId;
+  }
+
+  if (isTargetedControlTransfer(*Node, Target)) {
+    Changed = true;
+    return Tree.addNode(makeControlTransfer(Target, Kind));
+  }
+
+  if (Node->Kind == StructuredNodeKind::Switch ||
+      (!EnterLoops && isStructuredLoopKind(Node->Kind))) {
+    return Id;
+  }
+
+  StructuredNode Copy = *Node;
+  bool LocalChanged = false;
+  for (NodeId &Child : Copy.Children) {
+    bool ChildChanged = false;
+    NodeId NewChild = copyReplacingTargetTransfer(Tree, Child, Target, Kind,
+                                                  EnterLoops, ChildChanged);
+    if (ChildChanged) {
+      Child = NewChild;
+      LocalChanged = true;
+    }
+  }
+  for (StructuredSwitchCase &Case : Copy.StructuredCases) {
+    bool CaseChanged = false;
+    NodeId NewBody = copyReplacingTargetTransfer(Tree, Case.Body, Target, Kind,
+                                                 EnterLoops, CaseChanged);
+    if (CaseChanged) {
+      Case.Body = NewBody;
+      LocalChanged = true;
+    }
+  }
+
+  auto RewriteChild = [&](NodeId &Child) {
+    bool ChildChanged = false;
+    NodeId NewChild = copyReplacingTargetTransfer(Tree, Child, Target, Kind,
+                                                  EnterLoops, ChildChanged);
+    if (ChildChanged) {
+      Child = NewChild;
+      LocalChanged = true;
+    }
+  };
+  RewriteChild(Copy.Then);
+  RewriteChild(Copy.Else);
+  RewriteChild(Copy.Body);
+  RewriteChild(Copy.Default);
+
+  if (!LocalChanged) {
+    return Id;
+  }
+  Changed = true;
+  return Tree.addNode(std::move(Copy));
+}
+
+NodeId rewriteStructuredSourceTargetTransfer(StructuredTree &Tree,
+                                             NodeId SourceRoot,
+                                             BlockId Target,
+                                             VirtualEdgeKind Kind) {
+  bool Changed = false;
+  NodeId Replacement = copyReplacingTargetTransfer(
+      Tree, SourceRoot, Target, Kind, /*EnterLoops=*/false, Changed);
+  return Changed ? Replacement : InvalidNodeId;
 }
 
 bool sourceContainsStructuredSwitch(const MutableRegionNode &Source,
