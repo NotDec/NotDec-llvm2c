@@ -873,6 +873,50 @@ void testStructuredCFGSuccessorsOfDeduplicatesCaseTargets() {
   assert(Cfg.successorsOf(0) == std::vector<BlockId>({9, 2}));
 }
 
+void testStructuredCFGDuplicateRegionRewritesInternalEdges() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(10, {11, 12});
+  Switch.Cases.push_back({{}, 11});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Body = block(11, {13});
+  Body.Statements.push_back({31});
+  Cfg.addBlock(std::move(Body));
+
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(13, {}));
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({10, 11});
+  assert(CopyRegion.has_value());
+
+  BlockId CopySwitchId = CopyRegion->copyOf(10);
+  BlockId CopyBodyId = CopyRegion->copyOf(11);
+  assert(CopySwitchId != InvalidBlockId);
+  assert(CopyBodyId != InvalidBlockId);
+
+  const CFGBlock *CopySwitch = Cfg.getBlock(CopySwitchId);
+  const CFGBlock *CopyBody = Cfg.getBlock(CopyBodyId);
+  assert(CopySwitch != nullptr && CopyBody != nullptr);
+  assert(CopySwitch->BodyBlock == 10);
+  assert(CopyBody->BodyBlock == 11);
+  assert(CopySwitch->Successors == std::vector<BlockId>({CopyBodyId, 12}));
+  assert(CopySwitch->Cases.size() == 2);
+  assert(CopySwitch->Cases[0].Target == 12);
+  assert(CopySwitch->Cases[1].Target == CopyBodyId);
+  assert(CopyBody->Successors == std::vector<BlockId>{13});
+  assert(hasSinglePayload(CopyBody->Statements, 31));
+}
+
+void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  assert(!Cfg.duplicateRegion({0, 99}).has_value());
+  assert(Cfg.blocks().size() == 1);
+  assert(Cfg.getBlock(0) != nullptr);
+}
+
 void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -3880,6 +3924,8 @@ int main() {
   testStructuredCFGFindsCaseOnlyPredecessors();
   testStructuredCFGSuccessorsOfIncludesCaseTargets();
   testStructuredCFGSuccessorsOfDeduplicatesCaseTargets();
+  testStructuredCFGDuplicateRegionRewritesInternalEdges();
+  testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();

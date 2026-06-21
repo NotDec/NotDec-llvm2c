@@ -61,10 +61,21 @@ struct CFGBlock {
   std::vector<SwitchCase> Cases;
 };
 
+// Copied-region bookkeeping stays in the shared CFG so deoptimization passes
+// can duplicate blocks once and then retarget the new copy graph in a uniform
+// way.
+struct DuplicatedRegion {
+  std::vector<std::pair<BlockId, BlockId>> Blocks;
+
+  BlockId copyOf(BlockId Original) const;
+};
+
 class StructuredCFG {
 public:
   BlockId addBlock(CFGBlock Block);
   BlockId duplicateBlock(BlockId Source, std::vector<BlockId> Successors);
+  std::optional<DuplicatedRegion>
+  duplicateRegion(const std::vector<BlockId> &RegionBlocks);
 
   const std::vector<CFGBlock> &blocks() const { return Blocks; }
   std::vector<CFGBlock> &blocks() { return Blocks; }

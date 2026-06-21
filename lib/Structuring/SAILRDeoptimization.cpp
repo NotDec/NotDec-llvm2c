@@ -284,54 +284,23 @@ BlockId defaultSwitchSuccessor(const StructuredCFG &Graph,
 bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
                                const std::vector<BlockId> &Preds,
                                std::vector<BlockId> &OutCopies) {
-  std::map<BlockId, BlockId> CopyByOriginal;
-  std::vector<BlockId> Copies;
-
-  for (BlockId Original : Region.Blocks) {
-    BlockId Copy = Graph.duplicateBlock(Original, {});
-    if (Copy == InvalidBlockId) {
-      for (BlockId OldCopy : Copies) {
-        Graph.removeBlock(OldCopy);
-      }
-      return false;
-    }
-    CopyByOriginal[Original] = Copy;
-    Copies.push_back(Copy);
+  std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
+  if (!CopyRegion.has_value()) {
+    return false;
   }
 
-  for (BlockId Original : Region.Blocks) {
-    const CFGBlock *OriginalBlock = Graph.getBlock(Original);
-    CFGBlock *CopyBlock = Graph.getBlock(CopyByOriginal[Original]);
-    if (OriginalBlock == nullptr || CopyBlock == nullptr) {
-      for (BlockId Copy : Copies) {
-        Graph.removeBlock(Copy);
-      }
-      return false;
-    }
-
-    CopyBlock->Successors.clear();
-    for (BlockId Succ : OriginalBlock->Successors) {
-      auto It = CopyByOriginal.find(Succ);
-      CopyBlock->Successors.push_back(It == CopyByOriginal.end() ? Succ
-                                                                 : It->second);
-    }
-    for (SwitchCase &Case : CopyBlock->Cases) {
-      auto It = CopyByOriginal.find(Case.Target);
-      if (It != CopyByOriginal.end()) {
-        Case.Target = It->second;
-      }
-    }
-  }
-
-  if (!Graph.redirectPredecessors(Region.Head, CopyByOriginal[Region.Head],
-                                  Preds)) {
-    for (BlockId Copy : Copies) {
+  BlockId CopyHead = CopyRegion->copyOf(Region.Head);
+  if (CopyHead == InvalidBlockId ||
+      !Graph.redirectPredecessors(Region.Head, CopyHead, Preds)) {
+    for (const auto &[_, Copy] : CopyRegion->Blocks) {
       Graph.removeBlock(Copy);
     }
     return false;
   }
 
-  OutCopies.insert(OutCopies.end(), Copies.begin(), Copies.end());
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    OutCopies.push_back(Copy);
+  }
   return true;
 }
 

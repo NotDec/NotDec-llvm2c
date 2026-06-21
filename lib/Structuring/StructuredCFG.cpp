@@ -33,6 +33,10 @@ void appendUniqueTarget(std::vector<BlockId> &Targets, BlockId Target) {
   }
 }
 
+BlockId copyOf(const DuplicatedRegion &Region, BlockId Original) {
+  return Region.copyOf(Original);
+}
+
 } // namespace
 
 BlockId StructuredCFG::addBlock(CFGBlock Block) {
@@ -61,6 +65,14 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
                        : SourceBlock->BodyBlock;
   Copy.Successors = std::move(Successors);
   return addBlock(std::move(Copy));
+}
+
+BlockId DuplicatedRegion::copyOf(BlockId Original) const {
+  auto It = std::find_if(Blocks.begin(), Blocks.end(),
+                         [Original](const std::pair<BlockId, BlockId> &Entry) {
+                           return Entry.first == Original;
+                         });
+  return It == Blocks.end() ? InvalidBlockId : It->second;
 }
 
 const CFGBlock *StructuredCFG::getBlock(BlockId Id) const {
@@ -122,6 +134,52 @@ std::vector<BlockId> StructuredCFG::predecessorsOf(BlockId Target) const {
     }
   }
   return Preds;
+}
+
+std::optional<DuplicatedRegion>
+StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks) {
+  DuplicatedRegion Region;
+  std::vector<BlockId> Copies;
+  Region.Blocks.reserve(RegionBlocks.size());
+  Copies.reserve(RegionBlocks.size());
+
+  for (BlockId Original : RegionBlocks) {
+    BlockId Copy = duplicateBlock(Original, {});
+    if (Copy == InvalidBlockId) {
+      for (BlockId OldCopy : Copies) {
+        removeBlock(OldCopy);
+      }
+      return std::nullopt;
+    }
+    Region.Blocks.push_back({Original, Copy});
+    Copies.push_back(Copy);
+  }
+
+  for (BlockId Original : RegionBlocks) {
+    const CFGBlock *OriginalBlock = getBlock(Original);
+    CFGBlock *CopyBlock = getBlock(copyOf(Region, Original));
+    if (OriginalBlock == nullptr || CopyBlock == nullptr) {
+      for (BlockId OldCopy : Copies) {
+        removeBlock(OldCopy);
+      }
+      return std::nullopt;
+    }
+
+    CopyBlock->Successors.clear();
+    for (BlockId Succ : OriginalBlock->Successors) {
+      BlockId CopiedSucc = copyOf(Region, Succ);
+      CopyBlock->Successors.push_back(CopiedSucc == InvalidBlockId ? Succ
+                                                                   : CopiedSucc);
+    }
+    for (SwitchCase &Case : CopyBlock->Cases) {
+      BlockId CopiedTarget = copyOf(Region, Case.Target);
+      if (CopiedTarget != InvalidBlockId) {
+        Case.Target = CopiedTarget;
+      }
+    }
+  }
+
+  return Region;
 }
 
 bool StructuredCFG::replaceEdge(BlockId From, BlockId OldTarget,
