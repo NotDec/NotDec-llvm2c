@@ -6,9 +6,28 @@ BlockId StructuredCFG::addBlock(CFGBlock Block) {
   if (Block.Id == InvalidBlockId) {
     Block.Id = static_cast<BlockId>(Blocks.size());
   }
+  if (Block.BodyBlock == InvalidBlockId) {
+    Block.BodyBlock = Block.Id;
+  }
   BlockId Id = Block.Id;
   Blocks.push_back(std::move(Block));
   return Id;
+}
+
+BlockId StructuredCFG::duplicateBlock(BlockId Source,
+                                      std::vector<BlockId> Successors) {
+  const CFGBlock *SourceBlock = getBlock(Source);
+  if (SourceBlock == nullptr) {
+    return InvalidBlockId;
+  }
+
+  CFGBlock Copy = *SourceBlock;
+  Copy.Id = nextBlockId();
+  Copy.BodyBlock = SourceBlock->BodyBlock == InvalidBlockId
+                       ? SourceBlock->Id
+                       : SourceBlock->BodyBlock;
+  Copy.Successors = std::move(Successors);
+  return addBlock(std::move(Copy));
 }
 
 const CFGBlock *StructuredCFG::getBlock(BlockId Id) const {
@@ -18,6 +37,28 @@ const CFGBlock *StructuredCFG::getBlock(BlockId Id) const {
     }
   }
   return nullptr;
+}
+
+BlockId StructuredCFG::bodyBlock(BlockId Id) const {
+  const CFGBlock *Block = getBlock(Id);
+  if (Block == nullptr) {
+    return InvalidBlockId;
+  }
+  return Block->BodyBlock == InvalidBlockId ? Block->Id : Block->BodyBlock;
+}
+
+const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
+  return getBlock(bodyBlock(Id));
+}
+
+BlockId StructuredCFG::nextBlockId() const {
+  BlockId Next = 0;
+  for (const CFGBlock &Block : Blocks) {
+    if (Block.Id != InvalidBlockId && Block.Id >= Next) {
+      Next = Block.Id + 1;
+    }
+  }
+  return Next;
 }
 
 NodeId StructuredTree::addNode(StructuredNode Node) {

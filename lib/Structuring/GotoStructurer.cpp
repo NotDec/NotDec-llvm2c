@@ -15,6 +15,20 @@ static StructuredNode makeGoto(BlockId Target) {
   return Node;
 }
 
+static StructuredNode makeBlockBody(const StructuredCFG &Cfg,
+                                    const CFGBlock &Block) {
+  const CFGBlock *BodyBlock = Cfg.getBodyBlock(Block.Id);
+  if (BodyBlock == nullptr) {
+    BodyBlock = &Block;
+  }
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::BasicBlock;
+  Body.Block = Block.Id;
+  Body.Statements = BodyBlock->Statements;
+  return Body;
+}
+
 StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
   OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
   return RecursiveStructurer().structure(Cfg, Manager, *this);
@@ -38,11 +52,7 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
     Label.Block = Block.Id;
     Root.Children.push_back(Tree.addNode(std::move(Label)));
 
-    StructuredNode Body;
-    Body.Kind = StructuredNodeKind::BasicBlock;
-    Body.Block = Block.Id;
-    Body.Statements = Block.Statements;
-    Root.Children.push_back(Tree.addNode(std::move(Body)));
+    Root.Children.push_back(Tree.addNode(makeBlockBody(Cfg, Block)));
 
     switch (Block.Terminator) {
     case TerminatorKind::Branch: {
@@ -141,11 +151,7 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
     Label.Block = Block.Id;
     Root.Children.push_back(Tree.addNode(std::move(Label)));
 
-    StructuredNode Body;
-    Body.Kind = StructuredNodeKind::BasicBlock;
-    Body.Block = Block.Id;
-    Body.Statements = Block.Statements;
-    Root.Children.push_back(Tree.addNode(std::move(Body)));
+    Root.Children.push_back(Tree.addNode(makeBlockBody(Cfg, Block)));
   }
 
   return Tree.addNode(std::move(Root));

@@ -48,6 +48,12 @@ struct StructuredSwitchCase {
 
 struct CFGBlock {
   BlockId Id = InvalidBlockId;
+
+  // SAILR deoptimization can duplicate or synthesize control-flow blocks.
+  // BodyBlock keeps the backend-neutral identity of the block whose statements
+  // and terminator payloads should be rendered for this block. Original blocks
+  // point to themselves; copied blocks point to the original body.
+  BlockId BodyBlock = InvalidBlockId;
   std::vector<PayloadRef> Statements;
   TerminatorKind Terminator = TerminatorKind::Fallthrough;
   PayloadRef Condition;
@@ -58,13 +64,18 @@ struct CFGBlock {
 class StructuredCFG {
 public:
   BlockId addBlock(CFGBlock Block);
+  BlockId duplicateBlock(BlockId Source, std::vector<BlockId> Successors);
 
   const std::vector<CFGBlock> &blocks() const { return Blocks; }
   std::vector<CFGBlock> &blocks() { return Blocks; }
 
   const CFGBlock *getBlock(BlockId Id) const;
+  BlockId bodyBlock(BlockId Id) const;
+  const CFGBlock *getBodyBlock(BlockId Id) const;
 
 private:
+  BlockId nextBlockId() const;
+
   std::vector<CFGBlock> Blocks;
 };
 

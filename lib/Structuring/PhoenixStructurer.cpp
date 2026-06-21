@@ -135,11 +135,15 @@ void appendBlockBody(const StructuredCFG &Cfg, BlockId Id,
   if (Block == nullptr) {
     return;
   }
+  const CFGBlock *BodyBlock = Cfg.getBodyBlock(Id);
+  if (BodyBlock == nullptr) {
+    BodyBlock = Block;
+  }
 
   StructuredNode Body;
   Body.Kind = StructuredNodeKind::BasicBlock;
   Body.Block = Block->Id;
-  Body.Statements = Block->Statements;
+  Body.Statements = BodyBlock->Statements;
   Sequence.Children.push_back(Tree.addNode(std::move(Body)));
 }
 

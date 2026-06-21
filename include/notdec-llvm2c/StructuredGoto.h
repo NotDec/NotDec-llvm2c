@@ -32,6 +32,7 @@ public:
     getBlockLabel(Block);
     return Block->getLabelStmt();
   }
+  clang::LabelStmt *createStructuredBlockLabelStmt(unsigned BlockId);
   clang::GotoStmt *makeGotoStmt(clang::LabelDecl *Label) {
     return createGotoStmt(Label);
   }

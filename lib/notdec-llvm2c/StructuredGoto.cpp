@@ -2,8 +2,10 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <vector>
 
+#include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <llvm/ADT/APInt.h>
@@ -11,6 +13,7 @@
 
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/StructuralAnalysis.h"
 #include "notdec-llvm2c/StructuredGoto.h"
 #include "notdec-llvm2c/Utils.h"
 
@@ -26,7 +29,8 @@ class StructuredGotoAdapter {
   StructuredGoto &SA;
 
   std::vector<clang::Stmt *> Payloads;
-  std::map<st::BlockId, CFGBlock *> Blocks;
+  st::StructuredCFG SharedCfg;
+  std::map<st::BlockId, clang::LabelStmt *> Labels;
   std::set<st::BlockId> TargetedLabels;
 
 public:
@@ -37,7 +41,8 @@ public:
     std::unique_ptr<st::Structurer> Structurer =
         st::createStructurer(SA.getStructurerName());
     assert(Structurer != nullptr);
-    st::StructuredTree Tree = Structurer->structure(buildCFG());
+    SharedCfg = buildCFG();
+    st::StructuredTree Tree = Structurer->structure(SharedCfg);
     collectGotoTargets(Tree, Tree.root());
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Tree.root(), Stmts);
@@ -61,10 +66,22 @@ private:
     return Payloads[Ref.Id];
   }
 
-  CFGBlock *getBlock(st::BlockId Id) const {
-    auto It = Blocks.find(Id);
-    assert(It != Blocks.end());
-    return It->second;
+  const st::CFGBlock *getSharedBlock(st::BlockId Id) const {
+    const st::CFGBlock *Block = SharedCfg.getBlock(Id);
+    assert(Block != nullptr);
+    return Block;
+  }
+
+  clang::LabelStmt *getOrCreateLabelStmt(st::BlockId Id) {
+    auto &Label = Labels[Id];
+    if (Label == nullptr) {
+      Label = SA.createStructuredBlockLabelStmt(Id);
+    }
+    return Label;
+  }
+
+  clang::LabelDecl *getOrCreateLabel(st::BlockId Id) {
+    return getOrCreateLabelStmt(Id)->getDecl();
   }
 
   void collectGotoTargets(const st::StructuredTree &Tree, st::NodeId Id) {
@@ -94,7 +111,6 @@ private:
     for (CFGBlock *Block : Cfg) {
       st::CFGBlock NewBlock;
       NewBlock.Id = Block->getBlockID();
-      Blocks[NewBlock.Id] = Block;
       bool HasReturnStmt = false;
 
       for (auto It = Block->begin(); It != Block->end(); ++It) {
@@ -155,7 +171,7 @@ private:
       break;
     case st::StructuredNodeKind::Label:
       if (TargetedLabels.count(Node->Block) != 0) {
-        Stmts.push_back(SA.getOrCreateBlockLabelStmt(getBlock(Node->Block)));
+        Stmts.push_back(getOrCreateLabelStmt(Node->Block));
       }
       break;
     case st::StructuredNodeKind::BasicBlock:
@@ -180,8 +196,7 @@ private:
       }
       break;
     case st::StructuredNodeKind::Goto:
-      Stmts.push_back(
-          SA.makeGotoStmt(SA.getOrCreateBlockLabel(getBlock(Node->Target))));
+      Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
       break;
     case st::StructuredNodeKind::Return:
     case st::StructuredNodeKind::Unreachable:
@@ -214,28 +229,32 @@ private:
 
   clang::Expr *invertCond(clang::Expr *Cond) {
     if (auto *BO = llvm::dyn_cast<clang::BinaryOperator>(Cond)) {
+      clang::BinaryOperatorKind Inverted;
       switch (BO->getOpcode()) {
       case clang::BO_EQ:
-        BO->setOpcode(clang::BO_NE);
-        return BO;
-      case clang::BO_NE:
-        BO->setOpcode(clang::BO_EQ);
-        return BO;
-      case clang::BO_LT:
-        BO->setOpcode(clang::BO_GE);
-        return BO;
-      case clang::BO_GT:
-        BO->setOpcode(clang::BO_LE);
-        return BO;
-      case clang::BO_LE:
-        BO->setOpcode(clang::BO_GT);
-        return BO;
-      case clang::BO_GE:
-        BO->setOpcode(clang::BO_LT);
-        return BO;
-      default:
+        Inverted = clang::BO_NE;
         break;
+      case clang::BO_NE:
+        Inverted = clang::BO_EQ;
+        break;
+      case clang::BO_LT:
+        Inverted = clang::BO_GE;
+        break;
+      case clang::BO_GT:
+        Inverted = clang::BO_LE;
+        break;
+      case clang::BO_LE:
+        Inverted = clang::BO_GT;
+        break;
+      case clang::BO_GE:
+        Inverted = clang::BO_LT;
+        break;
+      default:
+        return createUnaryOperator(Ctx, Cond, clang::UO_LNot, Ctx.IntTy,
+                                   clang::VK_PRValue);
       }
+      return createBinaryOperator(Ctx, BO->getLHS(), BO->getRHS(), Inverted,
+                                  BO->getType(), BO->getValueKind());
     }
     return createUnaryOperator(Ctx, Cond, clang::UO_LNot, Ctx.IntTy,
                                clang::VK_PRValue);
@@ -269,22 +288,17 @@ private:
 
   void renderIf(const st::StructuredNode &Node,
                 std::vector<clang::Stmt *> &Stmts) {
-    CFGBlock *Block = getBlock(Node.Block);
-    assert(Block->succ_size() == 2);
-
-    auto SuccIt = Block->succ_begin();
-    CFGBlock *TrueBlock = *SuccIt;
-    ++SuccIt;
-    CFGBlock *FalseBlock = *SuccIt;
+    const st::CFGBlock *Block = getSharedBlock(Node.Block);
+    assert(Block->Successors.size() == 2);
 
     auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
-    auto *ThenGoto = SA.makeGotoStmt(SA.getOrCreateBlockLabel(TrueBlock));
+    auto *ThenGoto = SA.makeGotoStmt(getOrCreateLabel(Block->Successors[0]));
     auto *If = clang::IfStmt::Create(
         Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary,
         nullptr, nullptr, Cond, clang::SourceLocation(),
         clang::SourceLocation(), ThenGoto, clang::SourceLocation());
     Stmts.push_back(If);
-    Stmts.push_back(SA.makeGotoStmt(SA.getOrCreateBlockLabel(FalseBlock)));
+    Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Block->Successors[1])));
   }
 
   clang::Stmt *renderSwitch(const st::StructuredTree &Tree,
@@ -323,8 +337,8 @@ private:
   }
 
   clang::Stmt *renderSwitch(const st::StructuredNode &Node) {
-    CFGBlock *Block = getBlock(Node.Block);
-    assert(Block->succ_size() > 2);
+    const st::CFGBlock *Block = getSharedBlock(Node.Block);
+    assert(Block->Successors.size() > 1);
 
     auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
     Cond = SA.castRenderSwitchCondition(Cond);
@@ -334,24 +348,20 @@ private:
         clang::SourceLocation());
     std::vector<clang::Stmt *> Cases;
 
-    auto SuccIt = Block->succ_begin();
-    CFGBlock *DefaultBlock = *SuccIt;
-    auto *DefaultGoto = SA.makeGotoStmt(SA.getOrCreateBlockLabel(DefaultBlock));
+    auto *DefaultGoto =
+        SA.makeGotoStmt(getOrCreateLabel(Block->Successors.front()));
     auto *Default = new (Ctx) clang::DefaultStmt(
         clang::SourceLocation(), clang::SourceLocation(), DefaultGoto);
-    ++SuccIt;
 
     for (const auto &Case : Node.Cases) {
-      assert(SuccIt != Block->succ_end());
       auto *CaseStmt = clang::CaseStmt::Create(
           Ctx, llvm::cast<clang::Expr>(getPayload(Case.Value)), nullptr,
           clang::SourceLocation(), clang::SourceLocation(),
           clang::SourceLocation());
-      CaseStmt->setSubStmt(
-          SA.makeGotoStmt(SA.getOrCreateBlockLabel(*SuccIt)));
+      assert(Case.Target != st::InvalidBlockId);
+      CaseStmt->setSubStmt(SA.makeGotoStmt(getOrCreateLabel(Case.Target)));
       Switch->addSwitchCase(CaseStmt);
       Cases.push_back(CaseStmt);
-      ++SuccIt;
     }
 
     Switch->addSwitchCase(Default);
@@ -412,6 +422,17 @@ private:
 void StructuredGoto::execute() {
   StructuredGotoAdapter Adapter(*this);
   Adapter.execute();
+}
+
+clang::LabelStmt *
+StructuredGoto::createStructuredBlockLabelStmt(unsigned BlockId) {
+  std::string Name = "structured_block_" + std::to_string(BlockId);
+  clang::IdentifierInfo *II = FCtx.getIdentifierInfo(Name);
+  auto *Decl = clang::LabelDecl::Create(Ctx, FCtx.getFunctionDecl(),
+                                        clang::SourceLocation(), II);
+  return new (Ctx)
+      clang::LabelStmt(clang::SourceLocation(), Decl,
+                       new (Ctx) clang::NullStmt(clang::SourceLocation()));
 }
 
 } // namespace notdec::llvm2c

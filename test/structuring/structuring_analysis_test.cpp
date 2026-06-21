@@ -359,6 +359,10 @@ CFGBlock switchBlock(BlockId Id, std::vector<BlockId> Successors) {
   return Block;
 }
 
+bool hasSinglePayload(const std::vector<PayloadRef> &Refs, PayloadId Id) {
+  return Refs.size() == 1 && Refs.front().Id == Id;
+}
+
 void testAcyclicDroppedEdges() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -662,6 +666,52 @@ void testStructuringEvaluatorRemovesEdgesForTrialOnly() {
   const CFGBlock *Original = Cfg.getBlock(0);
   assert(Original != nullptr);
   assert((Original->Successors == std::vector<BlockId>{1}));
+}
+
+void testStructuredCFGDuplicatesBlockBodySource() {
+  StructuredCFG Cfg;
+  CFGBlock Source = block(10, {11});
+  Source.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {11});
+  assert(CopyId == 12);
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->BodyBlock == 10);
+  assert(Cfg.bodyBlock(CopyId) == 10);
+  assert(Cfg.getBodyBlock(CopyId) == Cfg.getBlock(10));
+  assert(hasSinglePayload(Copy->Statements, 7));
+  assert((Copy->Successors == std::vector<BlockId>{11}));
+
+  BlockId SecondCopyId = Cfg.duplicateBlock(CopyId, {});
+  const CFGBlock *SecondCopy = Cfg.getBlock(SecondCopyId);
+  assert(SecondCopy != nullptr);
+  assert(SecondCopy->BodyBlock == 10);
+  assert(Cfg.bodyBlock(SecondCopyId) == 10);
+}
+
+void testGotoStructurerRendersVirtualBlockBodySource() {
+  StructuredCFG Cfg;
+  CFGBlock Source = block(10, {});
+  Source.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source));
+
+  CFGBlock Virtual = block(20, {});
+  Virtual.BodyBlock = 10;
+  Cfg.addBlock(std::move(Virtual));
+
+  StructuredTree Tree = GotoStructurer().structure(Cfg);
+  bool FoundVirtualBody = false;
+  for (const StructuredNode &Node : Tree.nodes()) {
+    if (Node.Kind == StructuredNodeKind::BasicBlock && Node.Block == 20) {
+      FoundVirtualBody = true;
+      assert(hasSinglePayload(Node.Statements, 7));
+    }
+  }
+  assert(FoundVirtualBody);
 }
 
 void testControlFlowStructureCounterCollectsSharedQuality() {
@@ -3195,6 +3245,8 @@ int main() {
   testGotoManagerCollectsIfGotoSources();
   testStructuringEvaluatorCollectsGotoSummary();
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
+  testStructuredCFGDuplicatesBlockBodySource();
+  testGotoStructurerRendersVirtualBlockBodySource();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
