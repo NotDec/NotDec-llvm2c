@@ -1272,6 +1272,83 @@ void testReturnDuplicatorLowCopiesTerminalForkRegion() {
   assert(hasSinglePayload(CopyTrap1->Statements, 19));
 }
 
+void testReturnDuplicatorLowUsesGotoInReturnTail() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Head = block(2, {3});
+  Head.Statements.push_back({23});
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Tail = block(3, {4});
+  Tail.Statements.push_back({24});
+  Cfg.addBlock(std::move(Tail));
+
+  CFGBlock Ret = block(4, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({25});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode HeadNode;
+  HeadNode.Kind = StructuredNodeKind::BasicBlock;
+  HeadNode.Block = 2;
+  Root.Children.push_back(Tree.addNode(std::move(HeadNode)));
+
+  StructuredNode TailGoto;
+  TailGoto.Kind = StructuredNodeKind::Goto;
+  TailGoto.Target = 3;
+  Root.Children.push_back(Tree.addNode(std::move(TailGoto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) == nullptr);
+  assert(Cfg.getBlock(3) == nullptr);
+  assert(Cfg.getBlock(4) == nullptr);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors.size() == 1);
+  assert(Block0->Successors.front() != Block1->Successors.front());
+
+  const CFGBlock *CopyHead0 = Cfg.getBlock(Block0->Successors.front());
+  const CFGBlock *CopyHead1 = Cfg.getBlock(Block1->Successors.front());
+  assert(CopyHead0 != nullptr && CopyHead1 != nullptr);
+  assert(CopyHead0->Successors.size() == 1);
+  assert(CopyHead1->Successors.size() == 1);
+  assert(hasSinglePayload(CopyHead0->Statements, 23));
+  assert(hasSinglePayload(CopyHead1->Statements, 23));
+
+  const CFGBlock *CopyTail0 = Cfg.getBlock(CopyHead0->Successors.front());
+  const CFGBlock *CopyTail1 = Cfg.getBlock(CopyHead1->Successors.front());
+  assert(CopyTail0 != nullptr && CopyTail1 != nullptr);
+  assert(CopyTail0->Successors.size() == 1);
+  assert(CopyTail1->Successors.size() == 1);
+  assert(hasSinglePayload(CopyTail0->Statements, 24));
+  assert(hasSinglePayload(CopyTail1->Statements, 24));
+
+  const CFGBlock *CopyRet0 = Cfg.getBlock(CopyTail0->Successors.front());
+  const CFGBlock *CopyRet1 = Cfg.getBlock(CopyTail1->Successors.front());
+  assert(CopyRet0 != nullptr && CopyRet1 != nullptr);
+  assert(CopyRet0->Terminator == TerminatorKind::Return);
+  assert(CopyRet1->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyRet0->Statements, 25));
+  assert(hasSinglePayload(CopyRet1->Statements, 25));
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -4083,6 +4160,7 @@ int main() {
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
+  testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();

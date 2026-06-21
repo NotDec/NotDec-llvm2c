@@ -268,6 +268,33 @@ bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
       return true;
     }
   }
+
+  // Angr also handles Phoenix loop-region cases where the tested edge enters a
+  // return region, but the actual goto appears on the region's linear tail.
+  std::set<BlockId> Seen;
+  BlockId Node = Target;
+  while (Seen.insert(Node).second) {
+    std::vector<BlockId> Succs = Graph.successorsOf(Node);
+    if (Succs.size() != 1) {
+      break;
+    }
+
+    BlockId Succ = Succs.front();
+    if (Succ == Node) {
+      break;
+    }
+
+    std::vector<BlockId> SuccPreds = predecessorsOf(Graph, Succ);
+    if (SuccPreds.size() != 1) {
+      break;
+    }
+
+    if (Gotos.isGotoEdge(Node, Succ)) {
+      return true;
+    }
+    Node = Succ;
+  }
+
   return false;
 }
 
