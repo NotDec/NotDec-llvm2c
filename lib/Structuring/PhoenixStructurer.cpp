@@ -2283,7 +2283,8 @@ bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
                                   const std::set<GraphNodeId> &Members,
                                   BlockId FollowBlock,
                                   MutableRegionGraph &Graph,
-                                  StructuredTree &Tree) {
+                                  StructuredTree &Tree,
+                                  RegionOverlay *Overlay) {
   bool Changed = false;
   std::vector<VirtualEdge> Edges;
   for (GraphNodeId Id : Members) {
@@ -2306,16 +2307,8 @@ bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
   }
 
   for (const VirtualEdge &Edge : Edges) {
-    const MutableRegionNode *Source = Graph.getNode(Edge.From);
-    if (Source != nullptr) {
-      NodeId Replacement = buildVirtualizedSource(Cfg, *Source, Edge,
-                                                  LoopRegion, Tree);
-      if (Replacement != InvalidNodeId) {
-        Graph.setStructuredRoot(Edge.From, Replacement);
-      }
-    }
-    Graph.virtualizeEdge(Edge.From, Edge.To, Edge.Kind);
-    Changed = true;
+    Changed |= installVirtualizedEdge(Cfg, LoopRegion, Graph, Tree, Overlay,
+                                      Edge);
   }
   return Changed;
 }
@@ -2645,7 +2638,7 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
 
     if (Successors.size() > 1) {
       virtualizeNonFollowLoopExits(Cfg, LoopRegion, MemberSet, FollowBlock,
-                                   Graph, Tree);
+                                   Graph, Tree, Overlay);
     }
     virtualizeExtraContinueEdges(Cfg, LoopRegion, MemberSet, HeadId, Analysis,
                                  Graph, Tree);

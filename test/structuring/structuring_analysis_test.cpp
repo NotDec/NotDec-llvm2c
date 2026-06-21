@@ -2311,6 +2311,65 @@ void testRefineCyclicVirtualizesNonFollowExits() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicOverlayVirtualizesNonFollowExits() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {2, 5}));
+  Cfg.addBlock(branchBlock(2, {3, 6}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 5, 6};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Manager.regionTree(), *RootOverlay->region(),
+                                 Graph, Tree, RootOverlay));
+  assert(Graph.virtualEdges().size() == 1);
+  assert(Graph.virtualEdges().front().ToBlock == 6);
+
+  const std::vector<OverlayMember> &Members = Manager.members(RootId);
+  auto LoopIt =
+      std::find_if(Members.begin(), Members.end(), [](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured;
+      });
+  assert(LoopIt != Members.end());
+  OverlayNodeKey LoopNode = Manager.nodeKey(*LoopIt);
+
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true,
+                            /*IncludeMarkedEdges=*/true);
+  bool HasFollowEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        OverlayNodeKey Target =
+            Edge.targetsMember() ? Manager.nodeKey(Edge.To) : Edge.targetNode();
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == LoopNode &&
+               Target == OverlayNodeKey::block(5);
+      }) != Edges.end();
+  bool HasNonFollowEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        OverlayNodeKey Target =
+            Edge.targetsMember() ? Manager.nodeKey(Edge.To) : Edge.targetNode();
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == LoopNode &&
+               Target == OverlayNodeKey::block(6);
+      }) != Edges.end();
+  assert(HasFollowEdge);
+  assert(!HasNonFollowEdge);
+}
+
 void testRefineCyclicKeepsDanglingNonFollowExit() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2549,6 +2608,7 @@ int main() {
   testRefineCyclicBuildsDoWhileAfterIfJoin();
   testStructureNaturalLoopKeepsDoWhileAfterIfJoin();
   testRefineCyclicVirtualizesNonFollowExits();
+  testRefineCyclicOverlayVirtualizesNonFollowExits();
   testRefineCyclicKeepsDanglingNonFollowExit();
   testRefineCyclicStructuresChildRegionMultipleSuccessors();
   testRefineCyclicPrefersMostCommonExitAsFollow();
