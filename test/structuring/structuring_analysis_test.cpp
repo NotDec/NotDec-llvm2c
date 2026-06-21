@@ -835,6 +835,43 @@ void testOverlayViewOnlyMutationsAffectQuotientEdges() {
                    }) != FullEdges.end();
   assert(HasExtraEdge);
 
+  OverlayNodeKey ExternalStructured = OverlayNodeKey::structured(99);
+  OverlayEdgeEndpoint StructuredSucc =
+      OverlayEdgeEndpoint::external(ExternalStructured);
+  LoopOverlay->addExtraFullEdge(StructuredSucc, SecondSucc);
+  LoopOverlay->addExtraFullEdge(FirstSucc, StructuredSucc);
+  FullEdges = Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
+  bool HasStructuredSourceEdge =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return !Edge.sourcesMember() &&
+                            Edge.sourceNode() == ExternalStructured &&
+                            !Edge.targetsMember() &&
+                            Edge.targetNode() == OverlayNodeKey::block(2);
+                   }) != FullEdges.end();
+  bool HasStructuredTargetEdge =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return !Edge.sourcesMember() &&
+                            Edge.sourceNode() == OverlayNodeKey::block(1) &&
+                            !Edge.targetsMember() &&
+                            Edge.targetNode() == ExternalStructured;
+                   }) != FullEdges.end();
+  assert(HasStructuredSourceEdge);
+  assert(HasStructuredTargetEdge);
+
+  LoopOverlay->removeEdgeWithSuccessorsOnly(StructuredSucc, SecondSucc);
+  FullEdges = Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
+  HasStructuredSourceEdge =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return !Edge.sourcesMember() &&
+                            Edge.sourceNode() == ExternalStructured &&
+                            !Edge.targetsMember() &&
+                            Edge.targetNode() == OverlayNodeKey::block(2);
+                   }) != FullEdges.end();
+  assert(!HasStructuredSourceEdge);
+
   Manager.rollback(Checkpoint);
   Manager.commit(Checkpoint);
   assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({1, 2}));

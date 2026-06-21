@@ -41,8 +41,12 @@ bool sameMember(const OverlayMember &Lhs, const OverlayMember &Rhs) {
 bool sameEdge(const OverlayViewEdge &Lhs, const OverlayViewEdge &Rhs) {
   return sameMember(Lhs.From, Rhs.From) &&
          Lhs.ExternalSource == Rhs.ExternalSource &&
+         Lhs.HasExternalSourceNode == Rhs.HasExternalSourceNode &&
+         Lhs.ExternalSourceNode == Rhs.ExternalSourceNode &&
          sameMember(Lhs.To, Rhs.To) &&
-         Lhs.ExternalSuccessor == Rhs.ExternalSuccessor;
+         Lhs.ExternalSuccessor == Rhs.ExternalSuccessor &&
+         Lhs.HasExternalSuccessorNode == Rhs.HasExternalSuccessorNode &&
+         Lhs.ExternalSuccessorNode == Rhs.ExternalSuccessorNode;
 }
 
 bool memberReferencesBlock(const OverlayMember &Member, BlockId Block) {
@@ -52,8 +56,13 @@ bool memberReferencesBlock(const OverlayMember &Member, BlockId Block) {
 bool edgeReferencesBlock(const OverlayViewEdge &Edge, BlockId Block) {
   return (Edge.sourcesMember() && memberReferencesBlock(Edge.From, Block)) ||
          (!Edge.sourcesMember() && Edge.ExternalSource == Block) ||
+         (Edge.HasExternalSourceNode && Edge.ExternalSourceNode.isBlock() &&
+          Edge.ExternalSourceNode.Block == Block) ||
          (Edge.targetsMember() && memberReferencesBlock(Edge.To, Block)) ||
-         (!Edge.targetsMember() && Edge.ExternalSuccessor == Block);
+         (!Edge.targetsMember() && Edge.ExternalSuccessor == Block) ||
+         (Edge.HasExternalSuccessorNode &&
+          Edge.ExternalSuccessorNode.isBlock() &&
+          Edge.ExternalSuccessorNode.Block == Block);
 }
 
 void appendUniqueEdge(std::vector<OverlayViewEdge> &Edges,
@@ -136,6 +145,26 @@ OverlayMember OverlayMember::structured(NodeId Id, RegionId SourceRegion) {
   return Member;
 }
 
+OverlayNodeKey OverlayViewEdge::sourceNode() const {
+  if (sourcesMember()) {
+    return OverlayNodeKey{};
+  }
+  if (HasExternalSourceNode) {
+    return ExternalSourceNode;
+  }
+  return OverlayNodeKey::block(ExternalSource);
+}
+
+OverlayNodeKey OverlayViewEdge::targetNode() const {
+  if (targetsMember()) {
+    return OverlayNodeKey{};
+  }
+  if (HasExternalSuccessorNode) {
+    return ExternalSuccessorNode;
+  }
+  return OverlayNodeKey::block(ExternalSuccessor);
+}
+
 OverlayEdgeEndpoint OverlayEdgeEndpoint::member(OverlayMember Member) {
   OverlayEdgeEndpoint Endpoint;
   Endpoint.Member = Member;
@@ -146,6 +175,24 @@ OverlayEdgeEndpoint OverlayEdgeEndpoint::external(BlockId Block) {
   OverlayEdgeEndpoint Endpoint;
   Endpoint.ExternalBlock = Block;
   return Endpoint;
+}
+
+OverlayEdgeEndpoint OverlayEdgeEndpoint::external(const OverlayNodeKey &Node) {
+  OverlayEdgeEndpoint Endpoint;
+  if (Node.isBlock()) {
+    Endpoint.ExternalBlock = Node.Block;
+  } else {
+    Endpoint.HasExternalNode = true;
+    Endpoint.ExternalNode = Node;
+  }
+  return Endpoint;
+}
+
+OverlayNodeKey OverlayEdgeEndpoint::node() const {
+  if (HasExternalNode) {
+    return ExternalNode;
+  }
+  return OverlayNodeKey::block(ExternalBlock);
 }
 
 OverlayManager::OverlayManager(RegionTree Regions) : Regions(std::move(Regions)) {
@@ -331,7 +378,10 @@ std::optional<OverlayMember> OverlayManager::memberForEndpoint(
   if (Endpoint.isMember()) {
     return Endpoint.Member;
   }
-  const OverlayMember *Member = memberForBlock(ViewId, Endpoint.ExternalBlock);
+  if (!Endpoint.node().isBlock()) {
+    return std::nullopt;
+  }
+  const OverlayMember *Member = memberForBlock(ViewId, Endpoint.node().Block);
   if (Member == nullptr) {
     return std::nullopt;
   }
@@ -345,22 +395,36 @@ std::optional<OverlayViewEdge> OverlayManager::viewEdgeForEndpoints(
   if (From.isMember()) {
     Edge.From = From.Member;
   } else {
-    const OverlayMember *Member = memberForBlock(ViewId, From.ExternalBlock);
+    OverlayNodeKey FromNode = From.node();
+    const OverlayMember *Member =
+        FromNode.isBlock() ? memberForBlock(ViewId, FromNode.Block) : nullptr;
     if (Member != nullptr) {
       Edge.From = *Member;
     } else {
-      Edge.ExternalSource = From.ExternalBlock;
+      if (FromNode.isBlock()) {
+        Edge.ExternalSource = FromNode.Block;
+      } else {
+        Edge.HasExternalSourceNode = true;
+        Edge.ExternalSourceNode = FromNode;
+      }
     }
   }
 
   if (To.isMember()) {
     Edge.To = To.Member;
   } else {
-    const OverlayMember *Member = memberForBlock(ViewId, To.ExternalBlock);
+    OverlayNodeKey ToNode = To.node();
+    const OverlayMember *Member =
+        ToNode.isBlock() ? memberForBlock(ViewId, ToNode.Block) : nullptr;
     if (Member != nullptr) {
       Edge.To = *Member;
     } else {
-      Edge.ExternalSuccessor = To.ExternalBlock;
+      if (ToNode.isBlock()) {
+        Edge.ExternalSuccessor = ToNode.Block;
+      } else {
+        Edge.HasExternalSuccessorNode = true;
+        Edge.ExternalSuccessorNode = ToNode;
+      }
     }
   }
   return Edge;
@@ -548,6 +612,16 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
     if (It != ViewMembers.end()) {
       OverlayViewEdge Edge = {Member, InvalidBlockId, *It, InvalidBlockId};
       if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+        appendUniqueEdge(Result, Edge);
+      }
+      return;
+    }
+
+    if (IncludeSuccessors) {
+      OverlayViewEdge Edge = {Member, InvalidBlockId, {}, InvalidBlockId};
+      Edge.HasExternalSuccessorNode = true;
+      Edge.ExternalSuccessorNode = Succ;
+      if (!isHiddenFullEdge(Id, Edge)) {
         appendUniqueEdge(Result, Edge);
       }
     }

@@ -519,18 +519,26 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
       }
       From = FromIt->second;
     } else {
-      FromBlock = Edge.ExternalSource;
-      From = getOrCreateExternalPlaceholder(Edge.ExternalSource);
+      OverlayNodeKey SourceNode = Edge.sourceNode();
+      if (!SourceNode.isBlock()) {
+        continue;
+      }
+      FromBlock = SourceNode.Block;
+      From = getOrCreateExternalPlaceholder(SourceNode.Block);
     }
 
     if (!Edge.targetsMember()) {
+      OverlayNodeKey TargetNode = Edge.targetNode();
+      if (!TargetNode.isBlock()) {
+        continue;
+      }
       if (Edge.sourcesMember()) {
         MutableRegionNode *FromNode = Graph.getNode(From);
         if (FromNode != nullptr) {
-          appendUniqueBlock(FromNode->ExternalSuccs, Edge.ExternalSuccessor);
+          appendUniqueBlock(FromNode->ExternalSuccs, TargetNode.Block);
         }
       }
-      Graph.addEdge(From, getOrCreateExternalPlaceholder(Edge.ExternalSuccessor));
+      Graph.addEdge(From, getOrCreateExternalPlaceholder(TargetNode.Block));
       continue;
     }
 

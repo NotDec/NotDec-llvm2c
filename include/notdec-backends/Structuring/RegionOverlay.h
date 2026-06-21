@@ -85,18 +85,34 @@ struct OverlayViewEdge {
   BlockId ExternalSource = InvalidBlockId;
   OverlayMember To;
   BlockId ExternalSuccessor = InvalidBlockId;
+  bool HasExternalSourceNode = false;
+  OverlayNodeKey ExternalSourceNode;
+  bool HasExternalSuccessorNode = false;
+  OverlayNodeKey ExternalSuccessorNode;
 
-  bool sourcesMember() const { return ExternalSource == InvalidBlockId; }
-  bool targetsMember() const { return ExternalSuccessor == InvalidBlockId; }
+  bool sourcesMember() const {
+    return ExternalSource == InvalidBlockId && !HasExternalSourceNode;
+  }
+  bool targetsMember() const {
+    return ExternalSuccessor == InvalidBlockId && !HasExternalSuccessorNode;
+  }
+  OverlayNodeKey sourceNode() const;
+  OverlayNodeKey targetNode() const;
 };
 
 struct OverlayEdgeEndpoint {
   OverlayMember Member;
   BlockId ExternalBlock = InvalidBlockId;
+  bool HasExternalNode = false;
+  OverlayNodeKey ExternalNode;
 
   static OverlayEdgeEndpoint member(OverlayMember Member);
   static OverlayEdgeEndpoint external(BlockId Block);
-  bool isMember() const { return ExternalBlock == InvalidBlockId; }
+  static OverlayEdgeEndpoint external(const OverlayNodeKey &Node);
+  bool isMember() const {
+    return ExternalBlock == InvalidBlockId && !HasExternalNode;
+  }
+  OverlayNodeKey node() const;
 };
 
 struct OverlayHiddenEdge {
