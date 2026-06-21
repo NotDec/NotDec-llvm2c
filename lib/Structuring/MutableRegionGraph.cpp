@@ -706,6 +706,14 @@ void MutableRegionGraph::setStructuredRoot(GraphNodeId Id,
   }
 }
 
+void MutableRegionGraph::setSourceNodes(
+    GraphNodeId Id, std::vector<OverlayNodeKey> SourceNodes) {
+  MutableRegionNode *Node = getNode(Id);
+  if (Node != nullptr) {
+    Node->SourceNodes = std::move(SourceNodes);
+  }
+}
+
 void MutableRegionGraph::virtualizeEdge(GraphNodeId From, GraphNodeId To,
                                         VirtualEdgeKind Kind) {
   if (!hasEdge(From, To)) {

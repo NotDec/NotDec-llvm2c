@@ -1541,6 +1541,68 @@ NodeId buildVirtualizedSource(const StructuredCFG &Cfg,
   return InvalidNodeId;
 }
 
+std::vector<OverlayNodeKey>
+overlayNodesForGraphNode(const MutableRegionNode *Node, BlockId FallbackBlock) {
+  if (Node != nullptr && !Node->SourceNodes.empty()) {
+    return Node->SourceNodes;
+  }
+  if (FallbackBlock != InvalidBlockId) {
+    return {OverlayNodeKey::block(FallbackBlock)};
+  }
+  return {};
+}
+
+void detachOverlayVirtualEdge(RegionOverlay *Overlay,
+                              const std::vector<OverlayNodeKey> &FromNodes,
+                              const std::vector<OverlayNodeKey> &ToNodes) {
+  if (Overlay == nullptr || Overlay->manager() == nullptr) {
+    return;
+  }
+  for (const OverlayNodeKey &From : FromNodes) {
+    for (const OverlayNodeKey &To : ToNodes) {
+      Overlay->manager()->detachNodeEdge(From, To);
+    }
+  }
+}
+
+bool installVirtualizedEdge(const StructuredCFG &Cfg, const Region &R,
+                            MutableRegionGraph &Graph, StructuredTree &Tree,
+                            RegionOverlay *Overlay,
+                            const VirtualEdge &Edge) {
+  if (!Graph.hasEdge(Edge.From, Edge.To)) {
+    return false;
+  }
+
+  const MutableRegionNode *Source = Graph.getNode(Edge.From);
+  const MutableRegionNode *Target = Graph.getNode(Edge.To);
+  std::vector<OverlayNodeKey> FromNodes =
+      overlayNodesForGraphNode(Source, Edge.FromBlock);
+  std::vector<OverlayNodeKey> ToNodes =
+      overlayNodesForGraphNode(Target, Edge.ToBlock);
+
+  NodeId Replacement = InvalidNodeId;
+  if (Source != nullptr) {
+    Replacement = buildVirtualizedSource(Cfg, *Source, Edge, R, Tree);
+    if (Replacement != InvalidNodeId) {
+      Graph.setStructuredRoot(Edge.From, Replacement);
+    }
+  }
+
+  // Angr detaches the graph edge before replace_nodes_both(). This lets the
+  // replacement inherit only the remaining real outgoing edges while the
+  // rewritten tree keeps the virtualized control transfer explicitly.
+  Graph.virtualizeEdge(Edge.From, Edge.To, Edge.Kind);
+  detachOverlayVirtualEdge(Overlay, FromNodes, ToNodes);
+
+  if (Overlay != nullptr && Replacement != InvalidNodeId &&
+      !FromNodes.empty()) {
+    Overlay->replaceNodes(FromNodes, Replacement);
+    Graph.setSourceNodes(
+        Edge.From, {OverlayNodeKey::structured(Replacement, Overlay->id())});
+  }
+  return true;
+}
+
 bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
                           StructuredNodeKind Kind) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -2816,16 +2878,7 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
   for (const VirtualEdge &Hint :
        edgeVirtualizationHints(Cfg, Graph, Analysis)) {
     if (Graph.hasEdge(Hint.From, Hint.To)) {
-      const MutableRegionNode *Source = Graph.getNode(Hint.From);
-      if (Source != nullptr) {
-        NodeId Replacement =
-            buildVirtualizedSource(Cfg, *Source, Hint, R, Tree);
-        if (Replacement != InvalidNodeId) {
-          Graph.setStructuredRoot(Hint.From, Replacement);
-        }
-      }
-      Graph.virtualizeEdge(Hint.From, Hint.To, Hint.Kind);
-      return true;
+      return installVirtualizedEdge(Cfg, R, Graph, Tree, Overlay, Hint);
     }
   }
 
@@ -2843,15 +2896,7 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
   }
 
   const VirtualEdge &Edge = Edges.front();
-  const MutableRegionNode *Source = Graph.getNode(Edge.From);
-  if (Source != nullptr) {
-    NodeId Replacement = buildVirtualizedSource(Cfg, *Source, Edge, R, Tree);
-    if (Replacement != InvalidNodeId) {
-      Graph.setStructuredRoot(Edge.From, Replacement);
-    }
-  }
-  Graph.virtualizeEdge(Edge.From, Edge.To, Edge.Kind);
-  return true;
+  return installVirtualizedEdge(Cfg, R, Graph, Tree, Overlay, Edge);
 }
 
 StructuredTree PhoenixStructurer::structure(const StructuredCFG &Cfg) {

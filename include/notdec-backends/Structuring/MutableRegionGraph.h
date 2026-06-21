@@ -92,6 +92,7 @@ public:
   void addEdge(GraphNodeId From, GraphNodeId To);
   void removeEdge(GraphNodeId From, GraphNodeId To);
   void setStructuredRoot(GraphNodeId Id, NodeId StructuredRoot);
+  void setSourceNodes(GraphNodeId Id, std::vector<OverlayNodeKey> SourceNodes);
   void virtualizeEdge(GraphNodeId From, GraphNodeId To, VirtualEdgeKind Kind);
 
   GraphNodeId collapseNodes(const std::vector<GraphNodeId> &Members,

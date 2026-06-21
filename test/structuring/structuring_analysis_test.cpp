@@ -228,6 +228,70 @@ void testEdgeVirtualizationHints() {
   assert(Source->StructuredRoot != InvalidNodeId);
 }
 
+void testOverlayVirtualizationReplacesSourceNode() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {}));
+  Cfg.addBlock(block(2, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+
+  RegionTree Regions;
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  GraphNodeId From = Graph.getNodeForBlock(0);
+  GraphNodeId To = Graph.getNodeForBlock(2);
+  StructuredTree Tree;
+  HintStructurer Structurer(From, To);
+
+  assert(Structurer.virtualizeOneEdge(Cfg, Root, Graph, Tree, RootOverlay));
+  const MutableRegionNode *Source = Graph.getNode(From);
+  assert(Source != nullptr);
+  assert(Source->StructuredRoot != InvalidNodeId);
+  OverlayNodeKey Structured =
+      OverlayNodeKey::structured(Source->StructuredRoot, RootId);
+  assert(Source->SourceNodes == std::vector<OverlayNodeKey>({Structured}));
+
+  const std::vector<OverlayMember> &Members = Manager.members(RootId);
+  auto StructuredIt = std::find_if(
+      Members.begin(), Members.end(), [&](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured &&
+               Manager.nodeKey(Member) == Structured;
+      });
+  assert(StructuredIt != Members.end());
+  assert(std::find_if(Members.begin(), Members.end(),
+                      [](const OverlayMember &Member) {
+                        return Member.Kind == OverlayMemberKind::Block &&
+                               Member.Block == 0;
+                      }) == Members.end());
+
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true,
+                            /*IncludeMarkedEdges=*/true);
+  bool HasKeptEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == Structured &&
+               Edge.targetsMember() && Edge.To.Kind == OverlayMemberKind::Block &&
+               Edge.To.Block == 1;
+      }) != Edges.end();
+  bool HasRemovedEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == Structured &&
+               Edge.targetsMember() && Edge.To.Kind == OverlayMemberKind::Block &&
+               Edge.To.Block == 2;
+      }) != Edges.end();
+  assert(HasKeptEdge);
+  assert(!HasRemovedEdge);
+}
+
 void testSwitchVirtualizationInstallsSourceRoot() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2, 3}));
@@ -1583,12 +1647,28 @@ void testPhoenixOverlayLastResortDetachesVirtualizedEdge() {
   assert(Structurer.lastResortRefinement(Cfg, Root, Graph, Tree, RootOverlay));
 
   assert(!Graph.hasEdge(From, To));
-  const std::vector<OverlayNodeKey> &Succs =
-      Manager.sharedNodeSuccessors(OverlayNodeKey::block(0));
-  assert(std::find(Succs.begin(), Succs.end(), OverlayNodeKey::block(1)) ==
-         Succs.end());
-  assert(std::find(Succs.begin(), Succs.end(), OverlayNodeKey::block(2)) !=
-         Succs.end());
+  const MutableRegionNode *Source = Graph.getNode(From);
+  assert(Source != nullptr);
+  assert(Source->StructuredRoot != InvalidNodeId);
+  OverlayNodeKey Structured =
+      OverlayNodeKey::structured(Source->StructuredRoot, RootId);
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true,
+                            /*IncludeMarkedEdges=*/true);
+  bool HasRemovedEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == Structured &&
+               Edge.targetsMember() && Edge.To.Kind == OverlayMemberKind::Block &&
+               Edge.To.Block == 1;
+      }) != Edges.end();
+  bool HasKeptEdge =
+      std::find_if(Edges.begin(), Edges.end(), [&](const OverlayViewEdge &Edge) {
+        return Edge.sourcesMember() && Manager.nodeKey(Edge.From) == Structured &&
+               Edge.targetsMember() && Edge.To.Kind == OverlayMemberKind::Block &&
+               Edge.To.Block == 2;
+      }) != Edges.end();
+  assert(!HasRemovedEdge);
+  assert(HasKeptEdge);
 }
 
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
@@ -2421,6 +2501,7 @@ int main() {
   testAcyclicDroppedEdges();
   testMutableRegionGraphCheckpointRestoresMutations();
   testEdgeVirtualizationHints();
+  testOverlayVirtualizationReplacesSourceNode();
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
