@@ -870,6 +870,35 @@ void testOverlaySharedEdgeMutationsUpdateViews() {
   assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({1}));
 }
 
+void testOverlaySharedNodeSuccessorsCanTargetStructuredResults() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  OverlayNodeKey Structured = OverlayNodeKey::structured(42, RootId);
+  Manager.addNodeEdge(Structured, OverlayNodeKey::block(1));
+  assert(Manager.sharedNodeSuccessors(Structured).size() == 1);
+  assert(Manager.sharedNodeSuccessors(Structured).front().isBlock());
+  assert(Manager.sharedNodeSuccessors(Structured).front().Block == 1);
+  assert(Manager.sharedSuccessors(0) == std::vector<BlockId>({1}));
+
+  std::size_t Checkpoint = Manager.checkpoint();
+  Manager.detachNodeEdge(Structured, OverlayNodeKey::block(1));
+  assert(Manager.sharedNodeSuccessors(Structured).empty());
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.sharedNodeSuccessors(Structured).size() == 1);
+}
+
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -1634,6 +1663,7 @@ int main() {
   testOverlayFullViewAddsLoopSuccessorEdges();
   testOverlayViewOnlyMutationsAffectQuotientEdges();
   testOverlaySharedEdgeMutationsUpdateViews();
+  testOverlaySharedNodeSuccessorsCanTargetStructuredResults();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();

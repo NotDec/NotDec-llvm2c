@@ -54,6 +54,8 @@ struct OverlayNodeKey {
   bool isBlock() const { return Kind == OverlayNodeKind::Block; }
   bool isRegion() const { return Kind == OverlayNodeKind::Region; }
   bool isStructured() const { return Kind == OverlayNodeKind::Structured; }
+  bool operator<(const OverlayNodeKey &Other) const;
+  bool operator==(const OverlayNodeKey &Other) const;
 };
 
 // One member visible in a RegionOverlay. Angr stores either graph nodes or child
@@ -122,12 +124,16 @@ public:
   const std::vector<OverlayMember> &members(RegionId Id) const;
   OverlayNodeKey nodeKey(const OverlayMember &Member) const;
   BlockId representativeBlock(const OverlayMember &Member) const;
+  const std::vector<OverlayNodeKey> &
+  sharedNodeSuccessors(const OverlayNodeKey &Id) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;
   std::vector<OverlayViewEdge> quotientEdges(RegionId Id,
                                              bool IncludeSuccessors) const;
   void addBlockMember(RegionId Id, BlockId Block);
   void removeBlockMember(BlockId Block);
+  void addNodeEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
+  void detachNodeEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
   void addEdge(BlockId From, BlockId To);
   void detachEdge(BlockId From, BlockId To);
   void hideEdge(RegionId Id, BlockId From, BlockId To);
@@ -156,6 +162,7 @@ private:
     std::map<RegionId, std::vector<OverlayMember>> Members;
     std::map<BlockId, RegionId> BlockOwners;
     std::map<RegionId, RegionId> ParentRegions;
+    std::map<OverlayNodeKey, std::vector<OverlayNodeKey>> SharedNodeSuccessors;
     std::map<BlockId, std::vector<BlockId>> SharedSuccessors;
     std::map<RegionId, std::vector<OverlayHiddenEdge>> HiddenEdges;
     std::map<RegionId, std::vector<OverlayViewEdge>> HiddenFullEdges;
@@ -173,6 +180,7 @@ private:
       const OverlayEdgeEndpoint &To) const;
   bool isHiddenEdge(RegionId Id, BlockId From, BlockId To) const;
   bool isHiddenFullEdge(RegionId Id, const OverlayViewEdge &Edge) const;
+  void rebuildBlockSuccessorCompatibility();
   void clearHiddenEdge(BlockId From, BlockId To);
   void clearEdgeStateForBlock(BlockId Block);
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
@@ -183,6 +191,7 @@ private:
   std::map<RegionId, RegionId> ParentRegions;
   std::map<RegionId, std::vector<OverlayMember>> Members;
   std::map<BlockId, RegionId> BlockOwners;
+  std::map<OverlayNodeKey, std::vector<OverlayNodeKey>> SharedNodeSuccessors;
   std::map<BlockId, std::vector<BlockId>> SharedSuccessors;
   std::map<RegionId, std::vector<OverlayHiddenEdge>> HiddenEdges;
   std::map<RegionId, std::vector<OverlayViewEdge>> HiddenFullEdges;

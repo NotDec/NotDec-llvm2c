@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <set>
+#include <tuple>
 #include <utility>
 
 namespace notdec::backend::structuring {
@@ -95,6 +96,17 @@ OverlayNodeKey OverlayNodeKey::structured(NodeId Id, RegionId SourceRegion) {
   return Key;
 }
 
+bool OverlayNodeKey::operator<(const OverlayNodeKey &Other) const {
+  return std::tie(Kind, Block, Region, StructuredRoot) <
+         std::tie(Other.Kind, Other.Block, Other.Region,
+                  Other.StructuredRoot);
+}
+
+bool OverlayNodeKey::operator==(const OverlayNodeKey &Other) const {
+  return Kind == Other.Kind && Block == Other.Block &&
+         Region == Other.Region && StructuredRoot == Other.StructuredRoot;
+}
+
 OverlayMember OverlayMember::block(BlockId Id) {
   OverlayMember Member;
   Member.Kind = OverlayMemberKind::Block;
@@ -174,10 +186,16 @@ void OverlayManager::initializeOverlayState() {
 }
 
 void OverlayManager::initializeSharedGraph(const StructuredCFG &Cfg) {
+  SharedNodeSuccessors.clear();
   SharedSuccessors.clear();
   for (const CFGBlock &Block : Cfg.blocks()) {
-    SharedSuccessors[Block.Id] = Block.Successors;
+    OverlayNodeKey From = OverlayNodeKey::block(Block.Id);
+    std::vector<OverlayNodeKey> &NodeSuccs = SharedNodeSuccessors[From];
+    for (BlockId Succ : Block.Successors) {
+      NodeSuccs.push_back(OverlayNodeKey::block(Succ));
+    }
   }
+  rebuildBlockSuccessorCompatibility();
 }
 
 RegionOverlay *OverlayManager::root() {
@@ -246,6 +264,13 @@ const std::vector<BlockId> &OverlayManager::sharedSuccessors(BlockId Id) const {
   static const std::vector<BlockId> Empty;
   auto It = SharedSuccessors.find(Id);
   return It == SharedSuccessors.end() ? Empty : It->second;
+}
+
+const std::vector<OverlayNodeKey> &
+OverlayManager::sharedNodeSuccessors(const OverlayNodeKey &Id) const {
+  static const std::vector<OverlayNodeKey> Empty;
+  auto It = SharedNodeSuccessors.find(Id);
+  return It == SharedNodeSuccessors.end() ? Empty : It->second;
 }
 
 const OverlayMember *OverlayManager::memberForBlock(RegionId ViewId,
@@ -341,6 +366,21 @@ bool OverlayManager::isHiddenFullEdge(RegionId Id,
                       }) != It->second.end();
 }
 
+void OverlayManager::rebuildBlockSuccessorCompatibility() {
+  SharedSuccessors.clear();
+  for (const auto &Entry : SharedNodeSuccessors) {
+    if (!Entry.first.isBlock()) {
+      continue;
+    }
+    std::vector<BlockId> &Succs = SharedSuccessors[Entry.first.Block];
+    for (const OverlayNodeKey &Succ : Entry.second) {
+      if (Succ.isBlock()) {
+        appendUniqueBlock(Succs, Succ.Block);
+      }
+    }
+  }
+}
+
 void OverlayManager::clearHiddenEdge(BlockId From, BlockId To) {
   for (auto &Entry : HiddenEdges) {
     std::vector<OverlayHiddenEdge> &Edges = Entry.second;
@@ -353,6 +393,13 @@ void OverlayManager::clearHiddenEdge(BlockId From, BlockId To) {
 }
 
 void OverlayManager::clearEdgeStateForBlock(BlockId Block) {
+  SharedNodeSuccessors.erase(OverlayNodeKey::block(Block));
+  for (auto &Entry : SharedNodeSuccessors) {
+    std::vector<OverlayNodeKey> &Succs = Entry.second;
+    Succs.erase(std::remove(Succs.begin(), Succs.end(),
+                            OverlayNodeKey::block(Block)),
+                Succs.end());
+  }
   SharedSuccessors.erase(Block);
   for (auto &Entry : SharedSuccessors) {
     std::vector<BlockId> &Succs = Entry.second;
@@ -510,6 +557,7 @@ void OverlayManager::addBlockMember(RegionId Id, BlockId Block) {
     ViewMembers.push_back(OverlayMember::block(Block));
   }
   BlockOwners[Block] = Id;
+  SharedNodeSuccessors[OverlayNodeKey::block(Block)];
   SharedSuccessors[Block];
 }
 
@@ -528,18 +576,39 @@ void OverlayManager::removeBlockMember(BlockId Block) {
   clearEdgeStateForBlock(Block);
 }
 
+void OverlayManager::addNodeEdge(const OverlayNodeKey &From,
+                                 const OverlayNodeKey &To) {
+  std::vector<OverlayNodeKey> &Succs = SharedNodeSuccessors[From];
+  if (std::find(Succs.begin(), Succs.end(), To) == Succs.end()) {
+    Succs.push_back(To);
+  }
+  rebuildBlockSuccessorCompatibility();
+  if (From.isBlock() && To.isBlock()) {
+    clearHiddenEdge(From.Block, To.Block);
+  }
+}
+
+void OverlayManager::detachNodeEdge(const OverlayNodeKey &From,
+                                    const OverlayNodeKey &To) {
+  auto It = SharedNodeSuccessors.find(From);
+  if (It == SharedNodeSuccessors.end()) {
+    return;
+  }
+  std::vector<OverlayNodeKey> &Succs = It->second;
+  Succs.erase(std::remove(Succs.begin(), Succs.end(), To), Succs.end());
+  rebuildBlockSuccessorCompatibility();
+  if (From.isBlock() && To.isBlock()) {
+    clearHiddenEdge(From.Block, To.Block);
+  }
+}
+
 void OverlayManager::addEdge(BlockId From, BlockId To) {
-  appendUniqueBlock(SharedSuccessors[From], To);
+  addNodeEdge(OverlayNodeKey::block(From), OverlayNodeKey::block(To));
   clearHiddenEdge(From, To);
 }
 
 void OverlayManager::detachEdge(BlockId From, BlockId To) {
-  auto It = SharedSuccessors.find(From);
-  if (It == SharedSuccessors.end()) {
-    return;
-  }
-  std::vector<BlockId> &Succs = It->second;
-  Succs.erase(std::remove(Succs.begin(), Succs.end(), To), Succs.end());
+  detachNodeEdge(OverlayNodeKey::block(From), OverlayNodeKey::block(To));
   clearHiddenEdge(From, To);
 }
 
@@ -675,8 +744,8 @@ OverlayManager::finalizedChildren(RegionId Id) const {
 std::size_t OverlayManager::checkpoint() {
   StructuredRootCheckpoints.push_back(
       {StructuredRoots, SuccessorSnapshots, Members, BlockOwners,
-       ParentRegions, SharedSuccessors, HiddenEdges, HiddenFullEdges,
-       ExtraFullEdges});
+       ParentRegions, SharedNodeSuccessors, SharedSuccessors, HiddenEdges,
+       HiddenFullEdges, ExtraFullEdges});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -690,6 +759,8 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
   Members = StructuredRootCheckpoints[Checkpoint].Members;
   BlockOwners = StructuredRootCheckpoints[Checkpoint].BlockOwners;
   ParentRegions = StructuredRootCheckpoints[Checkpoint].ParentRegions;
+  SharedNodeSuccessors =
+      StructuredRootCheckpoints[Checkpoint].SharedNodeSuccessors;
   SharedSuccessors = StructuredRootCheckpoints[Checkpoint].SharedSuccessors;
   HiddenEdges = StructuredRootCheckpoints[Checkpoint].HiddenEdges;
   HiddenFullEdges = StructuredRootCheckpoints[Checkpoint].HiddenFullEdges;
