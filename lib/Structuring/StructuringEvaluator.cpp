@@ -14,6 +14,7 @@ StructuringEvaluator::evaluate(const StructuredCFG &Cfg,
   Result.Succeeded = Result.Tree.root() != InvalidNodeId;
   if (Result.Succeeded) {
     Result.Gotos = GotoManager::collect(Result.Tree);
+    Result.Quality = ControlFlowStructureCounter::collect(Result.Tree);
   }
   return Result;
 }

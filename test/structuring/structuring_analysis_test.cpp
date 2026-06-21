@@ -8,6 +8,7 @@
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-backends/Structuring/StructuringEvaluator.h"
+#include "notdec-backends/Structuring/StructuringQuality.h"
 
 #include <algorithm>
 #include <cassert>
@@ -509,6 +510,68 @@ void testStructuringEvaluatorCollectsGotoSummary() {
   assert(Result.Succeeded);
   assert(Result.Tree.root() != InvalidNodeId);
   assert(Result.Gotos.isGotoEdge(0, 1));
+  assert(Result.Quality.GotoTargets[1] == 1);
+}
+
+void testControlFlowStructureCounterCollectsSharedQuality() {
+  StructuredTree Tree;
+
+  StructuredNode Label10;
+  Label10.Kind = StructuredNodeKind::Label;
+  Label10.Block = 10;
+
+  StructuredNode Goto20;
+  Goto20.Kind = StructuredNodeKind::Goto;
+  Goto20.Target = 20;
+
+  StructuredNode WhileNode;
+  WhileNode.Kind = StructuredNodeKind::While;
+  WhileNode.Block = 11;
+  WhileNode.Body = Tree.addNode(std::move(Goto20));
+
+  StructuredNode Label20;
+  Label20.Kind = StructuredNodeKind::Label;
+  Label20.Block = 20;
+
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+  Root.Children.push_back(Tree.addNode(std::move(Label10)));
+  Root.Children.push_back(Tree.addNode(std::move(WhileNode)));
+  Root.Children.push_back(Tree.addNode(std::move(Label20)));
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  ControlFlowStructureCounter Counter =
+      ControlFlowStructureCounter::collect(Tree);
+  assert(Counter.WhileLoops == 1);
+  assert(Counter.DoWhileLoops == 0);
+  assert(Counter.GotoTargets[20] == 1);
+  assert((Counter.OrderedLabels == std::vector<BlockId>{10, 20}));
+}
+
+void testRelativeQualityRejectsBackwardGotoTrade() {
+  ControlFlowStructureCounter Initial;
+  Initial.GotoTargets[20] = 1;
+  Initial.OrderedLabels = {10, 20};
+
+  ControlFlowStructureCounter Current;
+  Current.GotoTargets[10] = 1;
+  Current.OrderedLabels = {10, 20};
+
+  assert(!improvesRelativeStructuringQuality(Initial, Current));
+  assert(improvesRelativeStructuringQuality(Current, Initial));
+}
+
+void testRelativeQualityRejectsMoreGotoTargets() {
+  ControlFlowStructureCounter Initial;
+  Initial.GotoTargets[20] = 2;
+  Initial.OrderedLabels = {10, 20};
+
+  ControlFlowStructureCounter Current;
+  Current.GotoTargets[10] = 1;
+  Current.GotoTargets[20] = 1;
+  Current.OrderedLabels = {10, 20};
+
+  assert(!improvesRelativeStructuringQuality(Initial, Current));
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -2875,6 +2938,9 @@ int main() {
   testGotoManagerCollectsSequenceGotoSources();
   testGotoManagerCollectsIfGotoSources();
   testStructuringEvaluatorCollectsGotoSummary();
+  testControlFlowStructureCounterCollectsSharedQuality();
+  testRelativeQualityRejectsBackwardGotoTrade();
+  testRelativeQualityRejectsMoreGotoTargets();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();

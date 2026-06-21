@@ -3,6 +3,7 @@
 
 #include "notdec-backends/Structuring/GotoManager.h"
 #include "notdec-backends/Structuring/RegionStructurer.h"
+#include "notdec-backends/Structuring/StructuringQuality.h"
 
 namespace notdec::backend::structuring {
 
@@ -13,6 +14,7 @@ namespace notdec::backend::structuring {
 struct StructuringEvaluation {
   StructuredTree Tree;
   GotoManager Gotos;
+  ControlFlowStructureCounter Quality;
   bool Succeeded = false;
 };
 
