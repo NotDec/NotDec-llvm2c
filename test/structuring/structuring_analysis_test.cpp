@@ -223,6 +223,20 @@ public:
   }
 };
 
+class FailOnBlockRegionStructurer : public CFGEdgeGotoRegionStructurer {
+public:
+  NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
+                         StructuredTree &Tree) override {
+    if (std::find(R.Blocks.begin(), R.Blocks.end(), FailingBlock) !=
+        R.Blocks.end()) {
+      return InvalidNodeId;
+    }
+    return CFGEdgeGotoRegionStructurer::structureRegion(Cfg, R, Tree);
+  }
+
+  BlockId FailingBlock = 99;
+};
+
 class RemoveFirstSuccessorPass : public StructuringOptimizationPass {
 public:
   using StructuringOptimizationPass::StructuringOptimizationPass;
@@ -254,6 +268,45 @@ protected:
       if (Block.Id == 0 && Block.Successors.empty()) {
         Block.Successors.push_back(1);
         Block.Terminator = TerminatorKind::Fallthrough;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+class RecoverThenRemoveSuccessorPass : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  unsigned Attempts = 0;
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    ++Attempts;
+
+    if (Attempts == 1) {
+      for (CFGBlock &Block : Graph.blocks()) {
+        if (Block.Id == 0) {
+          Block.Successors = {99};
+          Block.Terminator = TerminatorKind::Fallthrough;
+          break;
+        }
+      }
+
+      CFGBlock BadBlock;
+      BadBlock.Id = 99;
+      BadBlock.Terminator = TerminatorKind::Return;
+      Graph.addBlock(std::move(BadBlock));
+      return true;
+    }
+
+    for (CFGBlock &Block : Graph.blocks()) {
+      if (Block.Id == 0 && !Block.Successors.empty()) {
+        Block.Successors.clear();
+        Block.Terminator = TerminatorKind::Return;
         return true;
       }
     }
@@ -672,6 +725,25 @@ void testStructuringOptimizationPassRejectsNewGotos() {
   StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
 
   assert(!Result.Succeeded);
+}
+
+void testStructuringOptimizationPassRecoversAndContinuesFixedPoint() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.MaxOptIters = 2;
+  FailOnBlockRegionStructurer Structurer;
+  RecoverThenRemoveSuccessorPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Pass.Attempts == 2);
+  assert(Result.Succeeded);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors.empty());
+  assert(Result.Output.getBlock(99) == nullptr);
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -3043,6 +3115,7 @@ int main() {
   testRelativeQualityRejectsMoreGotoTargets();
   testStructuringOptimizationPassAcceptsImprovedGraph();
   testStructuringOptimizationPassRejectsNewGotos();
+  testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();

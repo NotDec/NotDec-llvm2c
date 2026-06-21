@@ -74,7 +74,7 @@ StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
       }
       Candidate = Previous;
       Current = Evaluator.evaluate(Candidate, Structurer);
-      break;
+      continue;
     }
 
     if (Options.MaxOptIters <= 1) {
