@@ -31,7 +31,9 @@ bool sameMember(const OverlayMember &Lhs, const OverlayMember &Rhs) {
 }
 
 bool sameEdge(const OverlayViewEdge &Lhs, const OverlayViewEdge &Rhs) {
-  return sameMember(Lhs.From, Rhs.From) && sameMember(Lhs.To, Rhs.To) &&
+  return sameMember(Lhs.From, Rhs.From) &&
+         Lhs.ExternalSource == Rhs.ExternalSource &&
+         sameMember(Lhs.To, Rhs.To) &&
          Lhs.ExternalSuccessor == Rhs.ExternalSuccessor;
 }
 
@@ -241,13 +243,40 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
               Member.Kind != OverlayMemberKind::Block) {
             continue;
           }
-          appendUniqueEdge(Result, {Member, *SuccMember, InvalidBlockId});
+          appendUniqueEdge(Result,
+                           {Member, InvalidBlockId, *SuccMember,
+                            InvalidBlockId});
           continue;
         }
         if (IncludeSuccessors) {
-          appendUniqueEdge(Result, {Member, {}, Succ});
+          appendUniqueEdge(Result, {Member, InvalidBlockId, {}, Succ});
         }
       }
+    }
+  }
+
+  const Region *R = getRegionData(Id);
+  bool InLoop = R != nullptr && R->Kind == RegionKind::NaturalLoop;
+  for (RegionId ParentId = parentOf(Id); ParentId != InvalidRegionId;
+       ParentId = parentOf(ParentId)) {
+    const Region *Parent = getRegionData(ParentId);
+    if (Parent != nullptr && Parent->Kind == RegionKind::NaturalLoop) {
+      InLoop = true;
+      break;
+    }
+  }
+  if (!IncludeSuccessors || !InLoop) {
+    return Result;
+  }
+
+  std::vector<BlockId> Succs = visibleSuccessors(Id);
+  for (BlockId Succ : Succs) {
+    for (BlockId SuccSucc : sharedSuccessors(Succ)) {
+      if (std::find(Succs.begin(), Succs.end(), SuccSucc) == Succs.end() ||
+          Succ == SuccSucc) {
+        continue;
+      }
+      appendUniqueEdge(Result, {{}, Succ, {}, SuccSucc});
     }
   }
   return Result;

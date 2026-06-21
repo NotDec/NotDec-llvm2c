@@ -45,15 +45,16 @@ struct OverlayMember {
                                   RegionId SourceRegion = InvalidRegionId);
 };
 
-// One edge in an overlay-derived region view. The source is always a visible
-// member. The target is either another visible member, or an external successor
-// block when IncludeSuccessors is requested. This mirrors Angr's quotient edge
-// view without forcing NotDec's reducers to consume it yet.
+// One edge in an overlay-derived region view. Member views only contain
+// member-to-member edges. Full views may also contain member-to-successor and
+// successor-to-successor edges, matching Angr's quotient edge shape.
 struct OverlayViewEdge {
   OverlayMember From;
+  BlockId ExternalSource = InvalidBlockId;
   OverlayMember To;
   BlockId ExternalSuccessor = InvalidBlockId;
 
+  bool sourcesMember() const { return ExternalSource == InvalidBlockId; }
   bool targetsMember() const { return ExternalSuccessor == InvalidBlockId; }
 };
 

@@ -509,23 +509,33 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
   (void)Cfg;
   for (const OverlayViewEdge &Edge :
        Overlay.manager()->quotientEdges(Overlay.id(), /*IncludeSuccessors=*/true)) {
-    const Region *FromRegion = Edge.From.Kind == OverlayMemberKind::Block
-                                   ? nullptr
-                                   : Overlay.manager()->getRegionData(Edge.From.Region);
-    BlockId FromBlock = Edge.From.Kind == OverlayMemberKind::Block
-                            ? Edge.From.Block
-                            : (FromRegion == nullptr ? InvalidBlockId
-                                                     : FromRegion->Head);
-    auto FromIt = BlockToNode.find(FromBlock);
-    if (FromIt == BlockToNode.end()) {
-      continue;
+    GraphNodeId From = InvalidGraphNodeId;
+    BlockId FromBlock = InvalidBlockId;
+    if (Edge.sourcesMember()) {
+      const Region *FromRegion =
+          Edge.From.Kind == OverlayMemberKind::Block
+              ? nullptr
+              : Overlay.manager()->getRegionData(Edge.From.Region);
+      FromBlock = Edge.From.Kind == OverlayMemberKind::Block
+                      ? Edge.From.Block
+                      : (FromRegion == nullptr ? InvalidBlockId
+                                               : FromRegion->Head);
+      auto FromIt = BlockToNode.find(FromBlock);
+      if (FromIt == BlockToNode.end()) {
+        continue;
+      }
+      From = FromIt->second;
+    } else {
+      FromBlock = Edge.ExternalSource;
+      From = getOrCreateExternalPlaceholder(Edge.ExternalSource);
     }
 
-    GraphNodeId From = FromIt->second;
     if (!Edge.targetsMember()) {
-      MutableRegionNode *FromNode = Graph.getNode(From);
-      if (FromNode != nullptr) {
-        appendUniqueBlock(FromNode->ExternalSuccs, Edge.ExternalSuccessor);
+      if (Edge.sourcesMember()) {
+        MutableRegionNode *FromNode = Graph.getNode(From);
+        if (FromNode != nullptr) {
+          appendUniqueBlock(FromNode->ExternalSuccs, Edge.ExternalSuccessor);
+        }
       }
       Graph.addEdge(From, getOrCreateExternalPlaceholder(Edge.ExternalSuccessor));
       continue;

@@ -685,6 +685,40 @@ void testOverlayGraphBuildsEdgesFromQuotientView() {
   assert(!Graph.hasEdge(ChildHeadId, ChildHeadId));
 }
 
+void testOverlayFullViewAddsLoopSuccessorEdges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Loop;
+  Loop.Kind = RegionKind::NaturalLoop;
+  Loop.Head = 0;
+  Loop.Blocks = {0};
+  RegionId LoopId = Regions.addRegion(Loop);
+  Regions.setRoot(LoopId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(LoopId, /*IncludeSuccessors=*/true);
+  auto HasSuccessorEdge =
+      std::find_if(Edges.begin(), Edges.end(), [](const OverlayViewEdge &Edge) {
+        return !Edge.sourcesMember() && Edge.ExternalSource == 1 &&
+               !Edge.targetsMember() && Edge.ExternalSuccessor == 2;
+      }) != Edges.end();
+  assert(HasSuccessorEdge);
+
+  RegionOverlay *LoopOverlay = Manager.root();
+  assert(LoopOverlay != nullptr);
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *LoopOverlay);
+  GraphNodeId FirstSuccId = Graph.getNodeForBlock(1);
+  GraphNodeId SecondSuccId = Graph.getNodeForBlock(2);
+  assert(FirstSuccId != InvalidGraphNodeId);
+  assert(SecondSuccId != InvalidGraphNodeId);
+  assert(Graph.hasEdge(FirstSuccId, SecondSuccId));
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1404,6 +1438,7 @@ int main() {
   testOverlayManagerDerivesQuotientEdges();
   testOverlayManagerQuotientKeepsBlockSelfLoop();
   testOverlayGraphBuildsEdgesFromQuotientView();
+  testOverlayFullViewAddsLoopSuccessorEdges();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();
