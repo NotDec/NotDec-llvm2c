@@ -188,8 +188,10 @@ void testSwitchVirtualizationInstallsSourceRoot() {
   Cfg.addBlock(block(4, {}));
 
   Region Root;
-  Root.Kind = RegionKind::Root;
+  Root.Kind = RegionKind::NaturalLoop;
   Root.Head = 0;
+  Root.Latch = 3;
+  Root.Successors = {4};
   Root.Blocks = {0, 1, 2, 3, 4};
 
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
@@ -756,6 +758,79 @@ void testRefineCyclicPrefersDoWhileWhenLatchConditionWouldBecomeBreak() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicBuildsDoWhileAfterIfJoin() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(branchBlock(3, {0, 4}));
+  Cfg.addBlock(block(4, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3, 4};
+
+  RegionTree Regions;
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+
+  assert(Structurer.refineCyclic(Cfg, Regions, Root, Graph, Tree));
+
+  bool FoundLoop = false;
+  for (GraphNodeId Id : Graph.activeNodes()) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    assert(Node != nullptr);
+    if (Node->StructuredRoot == InvalidNodeId) {
+      continue;
+    }
+    const StructuredNode *RootNode = Tree.getNode(Node->StructuredRoot);
+    assert(RootNode != nullptr);
+    if (RootNode->Kind == StructuredNodeKind::DoWhile) {
+      FoundLoop = true;
+      assert(RootNode->Block == 3);
+      const StructuredNode *Body = Tree.getNode(RootNode->Body);
+      assert(Body != nullptr);
+      bool HasIf = false;
+      for (NodeId Child : Body->Children) {
+        const StructuredNode *ChildNode = Tree.getNode(Child);
+        HasIf |= ChildNode != nullptr && ChildNode->Kind == StructuredNodeKind::If;
+      }
+      assert(HasIf);
+    }
+  }
+  assert(FoundLoop);
+}
+
+void testStructureNaturalLoopKeepsDoWhileAfterIfJoin() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(branchBlock(3, {0, 4}));
+  Cfg.addBlock(block(4, {}));
+
+  Region Loop;
+  Loop.Kind = RegionKind::NaturalLoop;
+  Loop.Head = 0;
+  Loop.Latch = 3;
+  Loop.Successors = {4};
+  Loop.Blocks = {0, 1, 2, 3};
+
+  StructuredTree Tree;
+  PhoenixStructurer Structurer;
+  NodeId Root = Structurer.structureRegion(Cfg, Loop, Tree);
+  const StructuredNode *RootNode = Tree.getNode(Root);
+  assert(RootNode != nullptr);
+  if (RootNode->Kind == StructuredNodeKind::Sequence &&
+      !RootNode->Children.empty()) {
+    RootNode = Tree.getNode(RootNode->Children.front());
+  }
+  assert(RootNode != nullptr);
+  assert(RootNode->Kind == StructuredNodeKind::DoWhile);
+}
+
 void testRefineCyclicVirtualizesNonFollowExits() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -824,7 +899,7 @@ void testRefineCyclicKeepsDanglingNonFollowExit() {
   assert(Graph.virtualEdges().empty());
 }
 
-void testRefineCyclicRejectsChildRegionMultipleSuccessors() {
+void testRefineCyclicStructuresChildRegionMultipleSuccessors() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(1, {2}));
   Cfg.addBlock(branchBlock(2, {3, 5}));
@@ -842,8 +917,8 @@ void testRefineCyclicRejectsChildRegionMultipleSuccessors() {
   StructuredTree Tree;
   TestPhoenixStructurer Structurer;
 
-  assert(!Structurer.refineCyclic(Cfg, Regions, Loop, Graph, Tree));
-  assert(Graph.virtualEdges().empty());
+  assert(Structurer.refineCyclic(Cfg, Regions, Loop, Graph, Tree));
+  assert(!Graph.virtualEdges().empty());
 }
 
 void testRefineCyclicPrefersMostCommonExitAsFollow() {
@@ -1006,9 +1081,11 @@ int main() {
   testRefineCyclicSkipsSwitchSourceContinueRewrite();
   testRefineCyclicBuildsDoWhileFromLatchCondition();
   testRefineCyclicPrefersDoWhileWhenLatchConditionWouldBecomeBreak();
+  testRefineCyclicBuildsDoWhileAfterIfJoin();
+  testStructureNaturalLoopKeepsDoWhileAfterIfJoin();
   testRefineCyclicVirtualizesNonFollowExits();
   testRefineCyclicKeepsDanglingNonFollowExit();
-  testRefineCyclicRejectsChildRegionMultipleSuccessors();
+  testRefineCyclicStructuresChildRegionMultipleSuccessors();
   testRefineCyclicPrefersMostCommonExitAsFollow();
   testSAILROrderPrefersLeastSiblingEdges();
   testSAILROrderPrefersMostPostDominators();

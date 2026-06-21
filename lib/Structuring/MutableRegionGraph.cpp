@@ -686,6 +686,7 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
   std::vector<BlockId> Blocks;
   BlockId TailBlock = InvalidBlockId;
   bool FoundOutgoingTail = false;
+  bool FoundBackedgeTail = false;
   for (GraphNodeId Id : MemberSet) {
     const MutableRegionNode *Node = getNode(Id);
     Blocks.insert(Blocks.end(), Node->Blocks.begin(), Node->Blocks.end());
@@ -698,9 +699,15 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
       }
     }
     for (GraphNodeId Succ : Node->Succs) {
+      if (!FoundBackedgeTail && MemberSet.count(Succ) &&
+          !Node->Blocks.empty() && Node->Blocks.front() != RepresentativeBlock &&
+          Node->TailBlock != InvalidBlockId) {
+        TailBlock = Node->TailBlock;
+        FoundBackedgeTail = true;
+      }
       if (!MemberSet.count(Succ) && isActive(Succ)) {
         Succs.insert(Succ);
-        if (Node->TailBlock != InvalidBlockId) {
+        if (!FoundBackedgeTail && Node->TailBlock != InvalidBlockId) {
           TailBlock = Node->TailBlock;
           FoundOutgoingTail = true;
         }
@@ -708,7 +715,7 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
     }
     for (BlockId ExternalSucc : Node->ExternalSuccs) {
       appendUniqueBlock(ExternalSuccs, ExternalSucc);
-      if (Node->TailBlock != InvalidBlockId) {
+      if (!FoundBackedgeTail && Node->TailBlock != InvalidBlockId) {
         TailBlock = Node->TailBlock;
         FoundOutgoingTail = true;
       }

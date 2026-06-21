@@ -7,31 +7,9 @@
 namespace notdec::backend::structuring {
 namespace {
 
-bool shouldFinalizeStructuredChild(const StructuredTree &Tree,
-                                   const RegionOverlay &Overlay,
-                                   NodeId ChildRoot) {
-  if (ChildRoot == InvalidNodeId) {
-    return false;
-  }
-  const Region *ChildRegion = Overlay.region();
-  if (ChildRegion == nullptr || ChildRegion->Kind != RegionKind::NaturalLoop) {
-    return true;
-  }
-
-  const StructuredNode *Node = Tree.getNode(ChildRoot);
-  if (Node == nullptr) {
-    return false;
-  }
-
-  // Keep fallback "wrap the whole region in while(1)" loops visible to the
-  // parent CFG until overlay graph mutation is implemented. Real while/do-while
-  // nodes can already propagate as stable child results.
-  return Node->Kind != StructuredNodeKind::InfiniteLoop;
-}
-
-void finishChildRegion(const StructuredTree &Tree, RegionOverlay &Overlay,
-                       NodeId Root, const SuccessorSnapshot &Snapshot) {
-  if (shouldFinalizeStructuredChild(Tree, Overlay, Root)) {
+void finishChildRegion(RegionOverlay &Overlay, NodeId Root,
+                       const SuccessorSnapshot &Snapshot) {
+  if (Root != InvalidNodeId) {
     Overlay.finalize(Root, Snapshot);
   } else {
     Overlay.dissolve();
@@ -88,7 +66,7 @@ NodeId structureOverlayTree(const StructuredCFG &Cfg, OverlayManager &Manager,
     Processed.insert(Current->id());
 
     if (Current->id() != Root.id()) {
-      finishChildRegion(Tree, *Current, RootNode, Snapshot);
+      finishChildRegion(*Current, RootNode, Snapshot);
     }
   }
 
