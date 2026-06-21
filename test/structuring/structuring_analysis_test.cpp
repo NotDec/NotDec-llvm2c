@@ -81,6 +81,12 @@ public:
   using SwitchReusedEntryRewriter::runOnGraph;
 };
 
+class TestReturnDuplicatorLow : public ReturnDuplicatorLow {
+public:
+  using ReturnDuplicatorLow::ReturnDuplicatorLow;
+  using ReturnDuplicatorLow::runOnGraph;
+};
+
 class OrderCaptureStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::virtualizeOneEdge;
@@ -982,6 +988,58 @@ void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
   assert(Copy->Terminator == TerminatorKind::Return);
   assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 13));
+}
+
+void testReturnDuplicatorLowUsesParentGotoSource() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(3, {2}));
+
+  CFGBlock Ret = block(2, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({15});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Source;
+  Source.Kind = StructuredNodeKind::BasicBlock;
+  Source.Block = 0;
+  Root.Children.push_back(Tree.addNode(std::move(Source)));
+
+  StructuredNode Goto;
+  Goto.Kind = StructuredNodeKind::Goto;
+  Goto.Target = 2;
+  Root.Children.push_back(Tree.addNode(std::move(Goto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  const CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block1 != nullptr && Block3 != nullptr);
+  assert(Block1->Successors.size() == 1);
+  assert(Block3->Successors == std::vector<BlockId>{2});
+  assert(Block1->Successors.front() != 2);
+
+  const CFGBlock *Copy = Cfg.getBlock(Block1->Successors.front());
+  assert(Copy != nullptr);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(Copy->BodyBlock == 2);
+  assert(hasSinglePayload(Copy->Statements, 15));
+
+  const CFGBlock *OriginalRet = Cfg.getBlock(2);
+  assert(OriginalRet != nullptr);
+  assert(hasSinglePayload(OriginalRet->Statements, 15));
 }
 
 void testReturnDuplicatorLowCopiesTerminalForkRegion() {
@@ -3661,6 +3719,7 @@ int main() {
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
+  testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();

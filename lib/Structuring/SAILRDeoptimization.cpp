@@ -277,6 +277,24 @@ bool switchReachesBlock(const CFGBlock &Block, BlockId Target) {
   return false;
 }
 
+bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
+                                const GotoManager &Gotos, BlockId Source,
+                                BlockId Target) {
+  if (Gotos.isGotoEdge(Source, Target)) {
+    return true;
+  }
+
+  // Angr's low return duplicator is willing to look one step above the source
+  // when an adjacent block is the real goto source. Keep the same shared CFG
+  // rule here so we do not miss the narrow if-adjacent shape.
+  for (BlockId Parent : predecessorsOf(Graph, Source)) {
+    if (Gotos.isGotoEdge(Parent, Target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 BlockId defaultSwitchSuccessor(const CFGBlock &Block) {
   if (Block.Terminator != TerminatorKind::Switch ||
       Block.Successors.empty()) {
@@ -595,7 +613,7 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     std::vector<BlockId> CurrentPreds = externalPredecessorsOf(Graph, Region);
     std::vector<BlockId> GotoPreds;
     for (BlockId Pred : CurrentPreds) {
-      if (Current.Gotos.isGotoEdge(Pred, Region.Head)) {
+      if (gotoEdgeFromSourceOrParent(Graph, Current.Gotos, Pred, Region.Head)) {
         GotoPreds.push_back(Pred);
       }
     }
