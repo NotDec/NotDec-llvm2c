@@ -9,6 +9,19 @@ namespace notdec::backend::structuring {
 
 // Shared SAILR deoptimization pass set. These passes operate only on
 // StructuredCFG, so C and Solidity see the same copied/virtual block graph.
+class DuplicationReverter : public StructuringOptimizationPass {
+public:
+  static StructuringOptimizationOptions defaultOptions();
+
+  explicit DuplicationReverter(
+      StructuringOptimizationOptions Options = defaultOptions())
+      : StructuringOptimizationPass(Options) {}
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override;
+};
+
 class ReturnDuplicatorLow : public StructuringOptimizationPass {
 public:
   static StructuringOptimizationOptions defaultOptions();

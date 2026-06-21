@@ -62,6 +62,12 @@ public:
   using PhoenixStructurer::virtualizeOneEdge;
 };
 
+class TestDuplicationReverter : public DuplicationReverter {
+public:
+  using DuplicationReverter::DuplicationReverter;
+  using DuplicationReverter::runOnGraph;
+};
+
 class OrderCaptureStructurer : public PhoenixStructurer {
 public:
   using PhoenixStructurer::virtualizeOneEdge;
@@ -773,6 +779,37 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   assert(Copy3->BodyBlock == Copy3->Id);
   assert(hasSinglePayload(Copy0->Statements, 7));
   assert(hasSinglePayload(Copy3->Statements, 7));
+}
+
+void testDuplicationReverterMergesExactDuplicateBlocks() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {}));
+
+  CFGBlock *Block1 = Cfg.getBlock(1);
+  CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block1 != nullptr && Block3 != nullptr);
+  Block1->Statements.push_back({7});
+  Block3->Statements.push_back({7});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(3) == nullptr);
+
+  const CFGBlock *NewBlock0 = Cfg.getBlock(0);
+  const CFGBlock *NewBlock2 = Cfg.getBlock(2);
+  const CFGBlock *NewBlock1 = Cfg.getBlock(1);
+  assert(NewBlock0 != nullptr && NewBlock2 != nullptr && NewBlock1 != nullptr);
+  assert(NewBlock0->Successors == std::vector<BlockId>{1});
+  assert(NewBlock2->Successors == std::vector<BlockId>{1});
+  assert(NewBlock1->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(NewBlock1->Statements, 7));
 }
 
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
@@ -3367,6 +3404,7 @@ int main() {
   testStructuredCFGDuplicatesBlockBodySource();
   testGotoStructurerRendersVirtualBlockBodySource();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
+  testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testControlFlowStructureCounterCollectsSharedQuality();

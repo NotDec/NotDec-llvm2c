@@ -18,6 +18,43 @@ bool containsBlock(const std::vector<BlockId> &Blocks, BlockId Id) {
   return std::find(Blocks.begin(), Blocks.end(), Id) != Blocks.end();
 }
 
+bool samePayload(PayloadRef Lhs, PayloadRef Rhs) { return Lhs.Id == Rhs.Id; }
+
+bool samePayloads(const std::vector<PayloadRef> &Lhs,
+                  const std::vector<PayloadRef> &Rhs) {
+  if (Lhs.size() != Rhs.size()) {
+    return false;
+  }
+  for (std::size_t I = 0; I < Lhs.size(); ++I) {
+    if (!samePayload(Lhs[I], Rhs[I])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool sameSwitchCases(const std::vector<SwitchCase> &Lhs,
+                     const std::vector<SwitchCase> &Rhs) {
+  if (Lhs.size() != Rhs.size()) {
+    return false;
+  }
+  for (std::size_t I = 0; I < Lhs.size(); ++I) {
+    if (!samePayload(Lhs[I].Value, Rhs[I].Value) ||
+        Lhs[I].Target != Rhs[I].Target) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool sameBlockShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
+  return Lhs.Terminator == Rhs.Terminator &&
+         samePayload(Lhs.Condition, Rhs.Condition) &&
+         Lhs.Successors == Rhs.Successors &&
+         sameSwitchCases(Lhs.Cases, Rhs.Cases) &&
+         samePayloads(Lhs.Statements, Rhs.Statements);
+}
+
 std::vector<BlockId> predecessorsOf(const StructuredCFG &Graph,
                                     BlockId Target) {
   std::vector<BlockId> Preds;
@@ -111,6 +148,18 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
   return Region;
 }
 
+bool disjointPredecessorSets(const StructuredCFG &Graph, BlockId Lhs,
+                             BlockId Rhs) {
+  std::vector<BlockId> LhsPreds = predecessorsOf(Graph, Lhs);
+  std::vector<BlockId> RhsPreds = predecessorsOf(Graph, Rhs);
+  for (BlockId Pred : LhsPreds) {
+    if (containsBlock(RhsPreds, Pred)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool copyRegionForPredecessor(StructuredCFG &Graph, const ReturnRegion &Region,
                               BlockId Pred, std::vector<BlockId> &OutCopies) {
   std::map<BlockId, BlockId> CopyByOriginal;
@@ -166,6 +215,76 @@ bool copyRegionForPredecessor(StructuredCFG &Graph, const ReturnRegion &Region,
 }
 
 } // namespace
+
+StructuringOptimizationOptions DuplicationReverter::defaultOptions() {
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  Options.MaxOptIters = 4;
+  return Options;
+}
+
+bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
+                                     const StructuringEvaluation &Current) {
+  (void)Current;
+
+  std::vector<BlockId> BlockIds;
+  BlockIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    BlockIds.push_back(Block.Id);
+  }
+  std::sort(BlockIds.begin(), BlockIds.end());
+
+  for (std::size_t I = 0; I < BlockIds.size(); ++I) {
+    const CFGBlock *Keep = Graph.getBlock(BlockIds[I]);
+    if (Keep == nullptr) {
+      continue;
+    }
+
+    for (std::size_t J = I + 1; J < BlockIds.size(); ++J) {
+      BlockId DropId = BlockIds[J];
+      const CFGBlock *Drop = Graph.getBlock(DropId);
+      if (Drop == nullptr || !sameBlockShape(*Keep, *Drop)) {
+        continue;
+      }
+      if (hasSuccessor(*Keep, DropId) || hasSuccessor(*Drop, Keep->Id)) {
+        continue;
+      }
+      if (!disjointPredecessorSets(Graph, Keep->Id, DropId)) {
+        continue;
+      }
+
+      std::vector<BlockId> DropPreds = predecessorsOf(Graph, DropId);
+      if (DropPreds.empty()) {
+        continue;
+      }
+
+      std::vector<BlockId> UpdatedPreds;
+      bool Changed = false;
+      for (BlockId Pred : DropPreds) {
+        CFGBlock *PredBlock = Graph.getBlock(Pred);
+        if (PredBlock == nullptr || !hasSuccessor(*PredBlock, DropId)) {
+          continue;
+        }
+        if (!replaceSuccessor(*PredBlock, DropId, Keep->Id)) {
+          continue;
+        }
+        UpdatedPreds.push_back(Pred);
+        Changed = true;
+      }
+
+      if (!Changed || UpdatedPreds.size() != DropPreds.size()) {
+        continue;
+      }
+
+      Graph.removeBlock(DropId);
+      return true;
+    }
+  }
+
+  return false;
+}
 
 StructuringOptimizationOptions ReturnDuplicatorLow::defaultOptions() {
   StructuringOptimizationOptions Options;
@@ -324,6 +443,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
 StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline() {
   StructuringOptimizationPipeline Pipeline;
+  Pipeline.addPass(std::make_unique<DuplicationReverter>());
   Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
   return Pipeline;
