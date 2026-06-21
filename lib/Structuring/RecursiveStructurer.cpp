@@ -19,11 +19,14 @@ void finishChildRegion(RegionOverlay &Overlay, NodeId Root,
 RegionOverlay *nextUnprocessedChild(OverlayManager &Manager,
                                     const RegionOverlay &Overlay,
                                     const std::set<RegionId> &Processed) {
-  for (RegionId ChildId : Overlay.children()) {
-    if (Processed.count(ChildId) != 0) {
+  for (const OverlayMember &Member : Manager.members(Overlay.id())) {
+    if (Member.Kind != OverlayMemberKind::Region) {
       continue;
     }
-    RegionOverlay *Child = Manager.getRegion(ChildId);
+    if (Processed.count(Member.Region) != 0) {
+      continue;
+    }
+    RegionOverlay *Child = Manager.getRegion(Member.Region);
     if (Child != nullptr) {
       return Child;
     }

@@ -72,6 +72,28 @@ public:
   std::vector<RegionKind> SeenRegions;
 };
 
+class FailingRegionStructurer : public RegionStructurer {
+public:
+  bool supportsChildRegions() const override { return true; }
+
+  NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
+                         StructuredTree &Tree) override {
+    (void)Cfg;
+    SeenHeads.push_back(R.Head);
+    if (R.Head == FailingHead) {
+      return InvalidNodeId;
+    }
+
+    StructuredNode Node;
+    Node.Kind = StructuredNodeKind::Sequence;
+    Node.Block = R.Head;
+    return Tree.addNode(std::move(Node));
+  }
+
+  BlockId FailingHead = InvalidBlockId;
+  std::vector<BlockId> SeenHeads;
+};
+
 class GotoRegionTester : public GotoStructurer {
 public:
   using GotoStructurer::structureRegion;
@@ -115,7 +137,7 @@ void testAcyclicDroppedEdges() {
 
   Region Root;
   Root.Kind = RegionKind::Root;
-  Root.Head = 0;
+  Root.Head = 2;
   Root.Blocks = {0, 1, 2, 3, 4, 5};
 
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
@@ -135,7 +157,7 @@ void testMutableRegionGraphCheckpointRestoresMutations() {
 
   Region Root;
   Root.Kind = RegionKind::Root;
-  Root.Head = 0;
+  Root.Head = 2;
   Root.Blocks = {0, 1, 2};
 
   MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
@@ -280,6 +302,43 @@ void testRecursiveStructurerVisitsChildBeforeParent() {
   assert(Structurer.SeenRegions[1] == RegionKind::Root);
   assert(Manager.getStructuredRoot(RootId) == InvalidNodeId);
   assert(Manager.finalizedChildren(RootId).empty());
+}
+
+void testRecursiveStructurerVisitsDissolvedChildMembers() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(branchBlock(1, {1, 2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Nested;
+  Nested.Kind = RegionKind::NaturalLoop;
+  Nested.Head = 1;
+  Nested.Blocks = {1};
+  RegionId NestedId = Regions.addRegion(Nested);
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 0;
+  Child.Blocks = {0, 1};
+  Child.Children = {NestedId};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 2;
+  Root.Blocks = {0, 1, 2};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  FailingRegionStructurer Structurer;
+  Structurer.FailingHead = 0;
+  StructuredTree Tree =
+      RecursiveStructurer().structure(Cfg, Manager, Structurer);
+  assert(Tree.root() != InvalidNodeId);
+  assert(Structurer.SeenHeads == std::vector<BlockId>({1, 0, 2}));
+  assert(Manager.parentOf(NestedId) == ChildId);
+  assert(Manager.parentOf(ChildId) == RootId);
 }
 
 void testGotoRegionSkipsChildBlocks() {
@@ -1427,6 +1486,7 @@ int main() {
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
   testRecursiveStructurerVisitsChildBeforeParent();
+  testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();
   testVisibleRegionTreeOnlyIncludesFinalizedChildren();
   testOverlayManagerInitialMembersMatchRegionTree();
