@@ -160,6 +160,58 @@ bool disjointPredecessorSets(const StructuredCFG &Graph, BlockId Lhs,
   return true;
 }
 
+// Group selected predecessors by connectivity so one copied return tail can
+// be shared by all predecessors in the same component instead of duplicating
+// the same linear tail twice.
+std::vector<std::vector<BlockId>>
+connectedPredecessorComponents(const StructuredCFG &Graph,
+                               const std::vector<BlockId> &Blocks) {
+  std::set<BlockId> NodeSet(Blocks.begin(), Blocks.end());
+  std::set<BlockId> Visited;
+  std::vector<std::vector<BlockId>> Components;
+
+  for (BlockId Seed : Blocks) {
+    if (Visited.count(Seed) != 0) {
+      continue;
+    }
+
+    std::vector<BlockId> Stack = {Seed};
+    std::vector<BlockId> Component;
+    while (!Stack.empty()) {
+      BlockId Current = Stack.back();
+      Stack.pop_back();
+      if (Visited.count(Current) != 0) {
+        continue;
+      }
+      Visited.insert(Current);
+      Component.push_back(Current);
+
+      for (BlockId Pred : predecessorsOf(Graph, Current)) {
+        if (NodeSet.count(Pred) != 0 && Visited.count(Pred) == 0) {
+          Stack.push_back(Pred);
+        }
+      }
+
+      const CFGBlock *Block = Graph.getBlock(Current);
+      if (Block == nullptr) {
+        continue;
+      }
+      for (BlockId Succ : Block->Successors) {
+        if (NodeSet.count(Succ) != 0 && Visited.count(Succ) == 0) {
+          Stack.push_back(Succ);
+        }
+      }
+    }
+
+    std::sort(Component.begin(), Component.end());
+    Component.erase(std::unique(Component.begin(), Component.end()),
+                    Component.end());
+    Components.push_back(std::move(Component));
+  }
+
+  return Components;
+}
+
 bool switchReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (Block.Terminator != TerminatorKind::Switch) {
     return false;
@@ -183,8 +235,12 @@ BlockId defaultSwitchSuccessor(const CFGBlock &Block) {
   return Block.Successors.front();
 }
 
-bool copyRegionForPredecessor(StructuredCFG &Graph, const ReturnRegion &Region,
-                              BlockId Pred, std::vector<BlockId> &OutCopies) {
+// Copy the whole return region once, then retarget every predecessor in the
+// component to the copied head block. The shared CFG keeps the copied body
+// separate from the original body through BodyBlock.
+bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
+                               const std::vector<BlockId> &Preds,
+                               std::vector<BlockId> &OutCopies) {
   std::map<BlockId, BlockId> CopyByOriginal;
   std::vector<BlockId> Copies;
 
@@ -224,13 +280,15 @@ bool copyRegionForPredecessor(StructuredCFG &Graph, const ReturnRegion &Region,
     }
   }
 
-  CFGBlock *PredBlock = Graph.getBlock(Pred);
-  if (PredBlock == nullptr ||
-      !replaceSuccessor(*PredBlock, Region.Head, CopyByOriginal[Region.Head])) {
-    for (BlockId Copy : Copies) {
-      Graph.removeBlock(Copy);
+  for (BlockId Pred : Preds) {
+    CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock == nullptr ||
+        !replaceSuccessor(*PredBlock, Region.Head, CopyByOriginal[Region.Head])) {
+      for (BlockId Copy : Copies) {
+        Graph.removeBlock(Copy);
+      }
+      return false;
     }
-    return false;
   }
 
   OutCopies.insert(OutCopies.end(), Copies.begin(), Copies.end());
@@ -511,12 +569,15 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
 
     std::vector<BlockId> Copies;
+    std::vector<std::vector<BlockId>> PredComponents =
+        connectedPredecessorComponents(Graph, PredsToUpdate);
     std::vector<BlockId> UpdatedPreds;
-    for (BlockId Pred : PredsToUpdate) {
-      if (!copyRegionForPredecessor(Graph, Region, Pred, Copies)) {
+    for (const std::vector<BlockId> &Component : PredComponents) {
+      if (!copyRegionForPredecessors(Graph, Region, Component, Copies)) {
         continue;
       }
-      UpdatedPreds.push_back(Pred);
+      UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(),
+                          Component.end());
       Changed = true;
     }
 

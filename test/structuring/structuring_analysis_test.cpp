@@ -882,6 +882,47 @@ void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   assert(hasSinglePayload(CopyRet1->Statements, 9));
 }
 
+void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(2, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({13});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(1) == nullptr);
+  assert(Result.Output.blocks().size() == 3);
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  const CFGBlock *Block2 = Result.Output.getBlock(2);
+  assert(Block0 != nullptr && Block2 != nullptr);
+  assert(Block0->Successors.size() == 2);
+  assert(Block0->Successors.front() == 2 || Block0->Successors.back() == 2);
+  BlockId CopyId = Block0->Successors.front() == 2 ? Block0->Successors.back()
+                                                   : Block0->Successors.front();
+  assert(Block2->Successors == std::vector<BlockId>{CopyId});
+
+  const CFGBlock *Copy = Result.Output.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(Copy->BodyBlock == Copy->Id);
+  assert(hasSinglePayload(Copy->Statements, 13));
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -3492,6 +3533,7 @@ int main() {
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
+  testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testControlFlowStructureCounterCollectsSharedQuality();
