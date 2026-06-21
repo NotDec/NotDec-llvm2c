@@ -1033,6 +1033,18 @@ void testOverlayGraphUsesStructuredMemberSourceRegion() {
   assert(ChildKey.StructuredRoot == 42);
   assert(ChildKey.Region == ChildId);
   assert(Manager.representativeBlock(Manager.members(RootId)[0]) == 1);
+  Manager.addNodeEdge(ChildKey, OverlayNodeKey::block(2));
+  std::vector<OverlayViewEdge> FullEdges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/true);
+  auto HasStructuredToFollow =
+      std::find_if(FullEdges.begin(), FullEdges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.From.Kind == OverlayMemberKind::Structured &&
+                            Edge.From.StructuredRoot == 42 &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != FullEdges.end();
+  assert(HasStructuredToFollow);
 
   RegionOverlay *RootOverlay = Manager.root();
   assert(RootOverlay != nullptr);

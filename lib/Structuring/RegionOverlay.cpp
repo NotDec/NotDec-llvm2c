@@ -468,15 +468,59 @@ std::vector<OverlayViewEdge>
 OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
   std::vector<OverlayViewEdge> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
-  for (const OverlayMember &Member : ViewMembers) {
-    std::vector<BlockId> Blocks;
-    if (Member.Kind == OverlayMemberKind::Block) {
-      Blocks.push_back(Member.Block);
-    } else {
-      const Region *MemberRegion = getRegionData(Member.Region);
-      if (MemberRegion != nullptr) {
-        Blocks = MemberRegion->Blocks;
+  auto appendSuccessorEdge = [&](const OverlayMember &Member,
+                                 const OverlayNodeKey &Succ) {
+    if (Succ.isBlock()) {
+      const OverlayMember *SuccMember = memberForBlock(Id, Succ.Block);
+      if (SuccMember != nullptr) {
+        if (sameMember(Member, *SuccMember) &&
+            Member.Kind != OverlayMemberKind::Block) {
+          return;
+        }
+        OverlayViewEdge Edge = {Member, InvalidBlockId, *SuccMember,
+                                InvalidBlockId};
+        if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+          appendUniqueEdge(Result, Edge);
+        }
+        return;
       }
+      if (IncludeSuccessors) {
+        OverlayViewEdge Edge = {Member, InvalidBlockId, {}, Succ.Block};
+        if (!isHiddenFullEdge(Id, Edge)) {
+          appendUniqueEdge(Result, Edge);
+        }
+      }
+      return;
+    }
+
+    auto It = std::find_if(ViewMembers.begin(), ViewMembers.end(),
+                           [&](const OverlayMember &Candidate) {
+                             return nodeKey(Candidate) == Succ;
+                           });
+    if (It != ViewMembers.end()) {
+      OverlayViewEdge Edge = {Member, InvalidBlockId, *It, InvalidBlockId};
+      if (!IncludeSuccessors || !isHiddenFullEdge(Id, Edge)) {
+        appendUniqueEdge(Result, Edge);
+      }
+    }
+  };
+
+  for (const OverlayMember &Member : ViewMembers) {
+    if (Member.Kind != OverlayMemberKind::Region) {
+      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(nodeKey(Member))) {
+        if (Member.Kind == OverlayMemberKind::Block &&
+            Succ.isBlock() && isHiddenEdge(Id, Member.Block, Succ.Block)) {
+          continue;
+        }
+        appendSuccessorEdge(Member, Succ);
+      }
+      continue;
+    }
+
+    std::vector<BlockId> Blocks;
+    const Region *MemberRegion = getRegionData(Member.Region);
+    if (MemberRegion != nullptr) {
+      Blocks = MemberRegion->Blocks;
     }
 
     for (BlockId Block : Blocks) {
