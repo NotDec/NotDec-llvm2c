@@ -1473,6 +1473,82 @@ void testReturnDuplicatorLowCopiesTerminalForkRegion() {
   assert(hasSinglePayload(CopyTrap1->Statements, 19));
 }
 
+void testReturnDuplicatorLowCopiesReturnTailForkRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(branchBlock(2, {3, 5}));
+
+  CFGBlock Tail = block(3, {4});
+  Tail.Statements.push_back({20});
+  Cfg.addBlock(std::move(Tail));
+
+  CFGBlock Ret = block(4, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({21});
+  Cfg.addBlock(std::move(Ret));
+
+  CFGBlock Trap = block(5, {});
+  Trap.Terminator = TerminatorKind::Unreachable;
+  Trap.Statements.push_back({22});
+  Cfg.addBlock(std::move(Trap));
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(2) == nullptr);
+  assert(Result.Output.getBlock(3) == nullptr);
+  assert(Result.Output.getBlock(4) == nullptr);
+  assert(Result.Output.getBlock(5) == nullptr);
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  const CFGBlock *Block1 = Result.Output.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors.size() == 1);
+  assert(Block0->Successors.front() != Block1->Successors.front());
+
+  const CFGBlock *CopyHead0 = Result.Output.getBlock(Block0->Successors.front());
+  const CFGBlock *CopyHead1 = Result.Output.getBlock(Block1->Successors.front());
+  assert(CopyHead0 != nullptr && CopyHead1 != nullptr);
+  assert(CopyHead0->Terminator == TerminatorKind::Branch);
+  assert(CopyHead1->Terminator == TerminatorKind::Branch);
+  assert(CopyHead0->Successors.size() == 2);
+  assert(CopyHead1->Successors.size() == 2);
+
+  const CFGBlock *CopyTail0 = Result.Output.getBlock(CopyHead0->Successors[0]);
+  const CFGBlock *CopyTrap0 = Result.Output.getBlock(CopyHead0->Successors[1]);
+  const CFGBlock *CopyTail1 = Result.Output.getBlock(CopyHead1->Successors[0]);
+  const CFGBlock *CopyTrap1 = Result.Output.getBlock(CopyHead1->Successors[1]);
+  assert(CopyTail0 != nullptr && CopyTrap0 != nullptr);
+  assert(CopyTail1 != nullptr && CopyTrap1 != nullptr);
+  assert(CopyTail0->Successors.size() == 1);
+  assert(CopyTail1->Successors.size() == 1);
+  assert(hasSinglePayload(CopyTail0->Statements, 20));
+  assert(hasSinglePayload(CopyTail1->Statements, 20));
+  assert(CopyTrap0->Terminator == TerminatorKind::Unreachable);
+  assert(CopyTrap1->Terminator == TerminatorKind::Unreachable);
+  assert(hasSinglePayload(CopyTrap0->Statements, 22));
+  assert(hasSinglePayload(CopyTrap1->Statements, 22));
+
+  const CFGBlock *CopyRet0 = Result.Output.getBlock(CopyTail0->Successors.front());
+  const CFGBlock *CopyRet1 = Result.Output.getBlock(CopyTail1->Successors.front());
+  assert(CopyRet0 != nullptr && CopyRet1 != nullptr);
+  assert(CopyRet0->Terminator == TerminatorKind::Return);
+  assert(CopyRet1->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyRet0->Statements, 21));
+  assert(hasSinglePayload(CopyRet1->Statements, 21));
+}
+
 void testReturnDuplicatorLowUsesGotoInReturnTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -4561,6 +4637,7 @@ int main() {
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
+  testReturnDuplicatorLowCopiesReturnTailForkRegion();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterCopiesEntryTailRegion();

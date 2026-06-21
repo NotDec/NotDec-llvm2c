@@ -127,6 +127,54 @@ bool prependTerminalForkRegion(const StructuredCFG &Graph, ReturnRegion &Region,
   return true;
 }
 
+bool prependReturnTailForkRegion(const StructuredCFG &Graph,
+                                 ReturnRegion &Region, BlockId Pred,
+                                 std::set<BlockId> &Seen) {
+  const CFGBlock *PredBlock = Graph.getBlock(Pred);
+  if (PredBlock == nullptr || PredBlock->Terminator != TerminatorKind::Branch ||
+      PredBlock->Successors.size() != 2) {
+    return false;
+  }
+
+  std::vector<BlockId> ForkBlocks;
+  bool ReachesRegionHead = false;
+  for (BlockId Succ : PredBlock->Successors) {
+    if (Succ == Region.Head) {
+      ReachesRegionHead = true;
+      continue;
+    }
+
+    if (Seen.count(Succ) != 0) {
+      return false;
+    }
+
+    const CFGBlock *SuccBlock = Graph.getBlock(Succ);
+    if (SuccBlock == nullptr || !isClosedTerminal(*SuccBlock)) {
+      return false;
+    }
+
+    std::vector<BlockId> SuccPreds = predecessorsOf(Graph, Succ);
+    if (SuccPreds.size() != 1 || SuccPreds.front() != Pred) {
+      return false;
+    }
+
+    ForkBlocks.push_back(Succ);
+  }
+
+  if (!ReachesRegionHead || ForkBlocks.empty()) {
+    return false;
+  }
+
+  Region.Head = Pred;
+  for (BlockId ForkBlock : ForkBlocks) {
+    Region.Blocks.push_back(ForkBlock);
+    Seen.insert(ForkBlock);
+  }
+  Region.Blocks.push_back(Pred);
+  Seen.insert(Pred);
+  return true;
+}
+
 ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
                                     BlockId ReturnBlock) {
   ReturnRegion Region;
@@ -156,9 +204,12 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
     if (prependTerminalForkRegion(Graph, Region, Pred, Seen)) {
       continue;
     }
+    if (prependReturnTailForkRegion(Graph, Region, Pred, Seen)) {
+      continue;
+    }
 
     // Without payload-level Phi/vvar rewriting, only copy straight-line
-    // return tails plus the narrow terminal fork shape used by stack-canary
+    // return tails plus narrow terminal fork shapes used by stack-canary
     // style returns. Branch and switch regions beyond that still need richer
     // shared semantics.
     if (PredBlock == nullptr ||
