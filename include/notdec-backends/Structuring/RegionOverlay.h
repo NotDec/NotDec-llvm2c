@@ -178,6 +178,7 @@ public:
   void setStructuredRoot(RegionId Id, NodeId RootId,
                          const SuccessorSnapshot &Snapshot = {});
   void clearStructuredRoot(RegionId Id);
+  void collapseRegionTo(RegionId Id, NodeId RootId);
 
 private:
   friend class RegionOverlay;
@@ -212,6 +213,7 @@ private:
   void rebuildBlockSuccessorCompatibility();
   void clearHiddenEdge(const OverlayNodeKey &From, const OverlayNodeKey &To);
   void clearEdgeStateForBlock(BlockId Block);
+  std::vector<OverlayNodeKey> memberNodeKeys(const OverlayMember &Member) const;
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
 
@@ -261,6 +263,7 @@ public:
   void addExtraFullEdge(const OverlayEdgeEndpoint &From,
                         const OverlayEdgeEndpoint &To);
   void finalize(NodeId RootId, const SuccessorSnapshot &Snapshot = {});
+  void collapseTo(NodeId RootId);
   void dissolve();
 
 private:

@@ -525,6 +525,26 @@ void OverlayManager::clearEdgeStateForBlock(BlockId Block) {
 }
 
 std::vector<OverlayNodeKey>
+OverlayManager::memberNodeKeys(const OverlayMember &Member) const {
+  if (Member.Kind == OverlayMemberKind::Structured) {
+    return {nodeKey(Member)};
+  }
+  if (Member.Kind == OverlayMemberKind::Block) {
+    return {OverlayNodeKey::block(Member.Block)};
+  }
+
+  std::vector<OverlayNodeKey> Result;
+  const Region *MemberRegion = getRegionData(Member.Region);
+  if (MemberRegion == nullptr) {
+    return Result;
+  }
+  for (BlockId Block : MemberRegion->Blocks) {
+    appendUniqueNodeKey(Result, OverlayNodeKey::block(Block));
+  }
+  return Result;
+}
+
+std::vector<OverlayNodeKey>
 OverlayManager::visibleNodeSuccessors(RegionId Id) const {
   std::vector<OverlayNodeKey> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
@@ -1002,6 +1022,78 @@ void OverlayManager::clearStructuredRoot(RegionId Id) {
   SuccessorSnapshots.erase(Id);
 }
 
+void OverlayManager::collapseRegionTo(RegionId Id, NodeId RootId) {
+  if (RootId == InvalidNodeId) {
+    return;
+  }
+  RegionId ParentId = parentOf(Id);
+  if (ParentId == InvalidRegionId) {
+    return;
+  }
+
+  std::vector<OverlayNodeKey> OldNodes;
+  for (const OverlayMember &Member : members(Id)) {
+    for (const OverlayNodeKey &Key : memberNodeKeys(Member)) {
+      appendUniqueNodeKey(OldNodes, Key);
+    }
+  }
+
+  OverlayNodeKey ResultNode = OverlayNodeKey::structured(RootId, Id);
+  std::vector<OverlayNodeKey> InSources;
+  std::vector<OverlayNodeKey> OutTargets;
+  auto IsOldNode = [&](const OverlayNodeKey &Key) {
+    return std::find(OldNodes.begin(), OldNodes.end(), Key) != OldNodes.end();
+  };
+
+  for (const auto &Entry : SharedNodeSuccessors) {
+    const OverlayNodeKey &From = Entry.first;
+    bool FromInside = IsOldNode(From);
+    for (const OverlayNodeKey &To : Entry.second) {
+      bool ToInside = IsOldNode(To);
+      if (FromInside && !ToInside) {
+        appendUniqueNodeKey(OutTargets, To);
+      } else if (!FromInside && ToInside) {
+        appendUniqueNodeKey(InSources, From);
+      }
+    }
+  }
+
+  for (const OverlayNodeKey &Old : OldNodes) {
+    SharedNodeSuccessors.erase(Old);
+  }
+  for (auto &Entry : SharedNodeSuccessors) {
+    std::vector<OverlayNodeKey> &Succs = Entry.second;
+    Succs.erase(std::remove_if(Succs.begin(), Succs.end(),
+                               [&](const OverlayNodeKey &Succ) {
+                                 return IsOldNode(Succ);
+                               }),
+                Succs.end());
+  }
+  SharedNodeSuccessors[ResultNode];
+  rebuildBlockSuccessorCompatibility();
+
+  for (const OverlayNodeKey &From : InSources) {
+    if (!(From == ResultNode)) {
+      addNodeEdge(From, ResultNode);
+    }
+  }
+  for (const OverlayNodeKey &To : OutTargets) {
+    if (!(To == ResultNode)) {
+      addNodeEdge(ResultNode, To);
+    }
+  }
+
+  StructuredRoots[Id] = RootId;
+  SuccessorSnapshots.erase(Id);
+  Members[Id].clear();
+  finalizeRegionMembers(Id, RootId);
+  for (const OverlayNodeKey &Old : OldNodes) {
+    if (Old.isBlock()) {
+      BlockOwners.erase(Old.Block);
+    }
+  }
+}
+
 RegionOverlay::RegionOverlay(OverlayManager *Manager, RegionId Id)
     : Manager(Manager), Id(Id) {}
 
@@ -1127,11 +1219,17 @@ void RegionOverlay::addExtraFullEdge(const OverlayEdgeEndpoint &From,
 }
 
 void RegionOverlay::finalize(NodeId RootId, const SuccessorSnapshot &Snapshot) {
-  (void)Snapshot;
   if (Manager == nullptr || RootId == InvalidNodeId) {
     return;
   }
   Manager->setStructuredRoot(Id, RootId, Snapshot);
+}
+
+void RegionOverlay::collapseTo(NodeId RootId) {
+  if (Manager == nullptr || RootId == InvalidNodeId) {
+    return;
+  }
+  Manager->collapseRegionTo(Id, RootId);
 }
 
 void RegionOverlay::dissolve() {
