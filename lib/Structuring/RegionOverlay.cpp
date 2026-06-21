@@ -436,14 +436,30 @@ std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
   std::vector<BlockId> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
   for (const OverlayMember &Member : ViewMembers) {
-    std::vector<BlockId> Blocks;
-    if (Member.Kind == OverlayMemberKind::Block) {
-      Blocks.push_back(Member.Block);
-    } else {
-      const Region *MemberRegion = getRegionData(Member.Region);
-      if (MemberRegion != nullptr) {
-        Blocks = MemberRegion->Blocks;
+    if (Member.Kind != OverlayMemberKind::Region) {
+      for (const OverlayNodeKey &Succ : sharedNodeSuccessors(nodeKey(Member))) {
+        if (!Succ.isBlock()) {
+          continue;
+        }
+        if (Member.Kind == OverlayMemberKind::Block &&
+            isHiddenEdge(Id, Member.Block, Succ.Block)) {
+          continue;
+        }
+        if (memberForBlock(Id, Succ.Block) == &Member) {
+          continue;
+        }
+        if (memberForBlock(Id, Succ.Block) != nullptr) {
+          continue;
+        }
+        appendUniqueBlock(Result, Succ.Block);
       }
+      continue;
+    }
+
+    std::vector<BlockId> Blocks;
+    const Region *MemberRegion = getRegionData(Member.Region);
+    if (MemberRegion != nullptr) {
+      Blocks = MemberRegion->Blocks;
     }
 
     for (BlockId Block : Blocks) {
