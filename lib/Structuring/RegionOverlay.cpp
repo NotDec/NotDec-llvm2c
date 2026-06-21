@@ -200,6 +200,14 @@ const std::vector<OverlayMember> &OverlayManager::members(RegionId Id) const {
   return It == Members.end() ? Empty : It->second;
 }
 
+BlockId OverlayManager::representativeBlock(const OverlayMember &Member) const {
+  if (Member.Kind == OverlayMemberKind::Block) {
+    return Member.Block;
+  }
+  const Region *MemberRegion = getRegionData(Member.Region);
+  return MemberRegion == nullptr ? InvalidBlockId : MemberRegion->Head;
+}
+
 const std::vector<BlockId> &OverlayManager::sharedSuccessors(BlockId Id) const {
   static const std::vector<BlockId> Empty;
   auto It = SharedSuccessors.find(Id);

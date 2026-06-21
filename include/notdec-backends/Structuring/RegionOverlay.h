@@ -94,6 +94,7 @@ public:
   RegionId parentOf(RegionId Id) const;
   RegionId ownerOf(BlockId Id) const;
   const std::vector<OverlayMember> &members(RegionId Id) const;
+  BlockId representativeBlock(const OverlayMember &Member) const;
   const std::vector<BlockId> &sharedSuccessors(BlockId Id) const;
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;
   std::vector<OverlayViewEdge> quotientEdges(RegionId Id,

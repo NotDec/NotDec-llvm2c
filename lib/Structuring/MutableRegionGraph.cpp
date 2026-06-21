@@ -465,9 +465,9 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     // Parent overlay views see child regions as single members. If the child
     // was finalized, the same grouped node also carries its structured root.
     GraphNodeId NodeId = Graph.addNode(
-        ChildRegion->Head, Member.Kind == OverlayMemberKind::Structured
-                               ? Member.StructuredRoot
-                               : InvalidNodeId);
+        Overlay.manager()->representativeBlock(Member),
+        Member.Kind == OverlayMemberKind::Structured ? Member.StructuredRoot
+                                                     : InvalidNodeId);
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
       Node->Blocks = ChildRegion->Blocks;
@@ -512,14 +512,7 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     GraphNodeId From = InvalidGraphNodeId;
     BlockId FromBlock = InvalidBlockId;
     if (Edge.sourcesMember()) {
-      const Region *FromRegion =
-          Edge.From.Kind == OverlayMemberKind::Block
-              ? nullptr
-              : Overlay.manager()->getRegionData(Edge.From.Region);
-      FromBlock = Edge.From.Kind == OverlayMemberKind::Block
-                      ? Edge.From.Block
-                      : (FromRegion == nullptr ? InvalidBlockId
-                                               : FromRegion->Head);
+      FromBlock = Overlay.manager()->representativeBlock(Edge.From);
       auto FromIt = BlockToNode.find(FromBlock);
       if (FromIt == BlockToNode.end()) {
         continue;
@@ -541,13 +534,7 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
       continue;
     }
 
-    const Region *ToRegion = Edge.To.Kind == OverlayMemberKind::Block
-                                 ? nullptr
-                                 : Overlay.manager()->getRegionData(Edge.To.Region);
-    BlockId ToBlock = Edge.To.Kind == OverlayMemberKind::Block
-                          ? Edge.To.Block
-                          : (ToRegion == nullptr ? InvalidBlockId
-                                                 : ToRegion->Head);
+    BlockId ToBlock = Overlay.manager()->representativeBlock(Edge.To);
     auto ToIt = BlockToNode.find(ToBlock);
     if (ToIt == BlockToNode.end()) {
       continue;

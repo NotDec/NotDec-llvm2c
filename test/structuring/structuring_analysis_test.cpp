@@ -999,6 +999,7 @@ void testOverlayGraphUsesStructuredMemberSourceRegion() {
   ChildOverlay->finalize(42, SuccessorSnapshot{{2}});
   assert(Manager.members(RootId)[0].Kind == OverlayMemberKind::Structured);
   assert(Manager.members(RootId)[0].Region == ChildId);
+  assert(Manager.representativeBlock(Manager.members(RootId)[0]) == 1);
 
   RegionOverlay *RootOverlay = Manager.root();
   assert(RootOverlay != nullptr);
