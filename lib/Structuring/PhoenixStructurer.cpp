@@ -52,7 +52,8 @@ GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
                                         const std::vector<GraphNodeId> &Members,
                                         BlockId RepresentativeBlock,
                                         NodeId StructuredRoot,
-                                        bool SelfLoop = true);
+                                        bool SelfLoop = true,
+                                        bool DropRefinementMarks = false);
 
 bool foldTrailingContinueBreakIfToDoWhile(StructuredNode &LoopNode,
                                           StructuredTree &Tree) {
@@ -816,7 +817,9 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     Members.push_back(HeaderId);
     Members.insert(Members.end(), BodyIds.begin(), BodyIds.end());
     collapseNodesAndSyncOverlay(Graph, Overlay, Members, Header->Block,
-                                Tree.addNode(std::move(WhileNode)));
+                                Tree.addNode(std::move(WhileNode)),
+                                /*SelfLoop=*/true,
+                                /*DropRefinementMarks=*/true);
     return true;
   }
   return false;
@@ -885,7 +888,9 @@ bool reduceLinearWhileWithBreakOnce(const StructuredCFG &Cfg,
       Members.push_back(BreakSite.ExitNode);
     }
     collapseNodesAndSyncOverlay(Graph, Overlay, Members, Header->Block,
-                                Tree.addNode(std::move(WhileNode)));
+                                Tree.addNode(std::move(WhileNode)),
+                                /*SelfLoop=*/true,
+                                /*DropRefinementMarks=*/true);
     return true;
   }
   return false;
@@ -994,7 +999,9 @@ bool reduceLinearDoWhileOnce(const StructuredCFG &Cfg,
     DoWhileNode.ConditionNegated = NegateCondition;
     DoWhileNode.Body = buildSequenceNode(Cfg, BodyNodes, Tree);
     collapseNodesAndSyncOverlay(Graph, Overlay, BodyIds, Entry->Block,
-                                Tree.addNode(std::move(DoWhileNode)));
+                                Tree.addNode(std::move(DoWhileNode)),
+                                /*SelfLoop=*/true,
+                                /*DropRefinementMarks=*/true);
     return true;
   }
   return false;
@@ -1044,7 +1051,9 @@ bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
 
     foldTrailingContinueBreakIfToDoWhile(LoopNode, Tree);
     collapseNodesAndSyncOverlay(Graph, Overlay, {HeaderId}, Header->Block,
-                                Tree.addNode(std::move(LoopNode)));
+                                Tree.addNode(std::move(LoopNode)),
+                                /*SelfLoop=*/true,
+                                /*DropRefinementMarks=*/true);
     return true;
   }
   return false;
@@ -1167,7 +1176,8 @@ GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
                                         const std::vector<GraphNodeId> &Members,
                                         BlockId RepresentativeBlock,
                                         NodeId StructuredRoot,
-                                        bool SelfLoop) {
+                                        bool SelfLoop,
+                                        bool DropRefinementMarks) {
   std::vector<OverlayNodeKey> SourceNodes =
       Overlay == nullptr ? std::vector<OverlayNodeKey>{}
                          : collectSourceNodesForCollapse(Graph, Members);
@@ -1181,6 +1191,11 @@ GraphNodeId collapseNodesAndSyncOverlay(MutableRegionGraph &Graph,
   syncVirtualEdgesToOverlay(Graph, *Overlay);
   if (!isSameStructuredSource(SourceNodes, Overlay->id(), StructuredRoot)) {
     Overlay->replaceNodes(SourceNodes, StructuredRoot, SelfLoop);
+  }
+  if (DropRefinementMarks) {
+    Overlay->dropEdgeMarksFrom(
+        OverlayNodeKey::structured(StructuredRoot, Overlay->id()),
+        "cyclic_refinement_outgoing");
   }
 
   // After the shared graph has been replaced, the next reducer step must refer
@@ -2462,7 +2477,9 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
       LoopNode = makeGraphInfiniteLoop(Cfg, Graph, Members, LoopRegion, Tree);
     }
     collapseNodesAndSyncOverlay(Graph, Overlay, Members, LoopRegion.Head,
-                                Tree.addNode(std::move(LoopNode)));
+                                Tree.addNode(std::move(LoopNode)),
+                                /*SelfLoop=*/true,
+                                /*DropRefinementMarks=*/true);
     return true;
   }
   return false;
@@ -2528,7 +2545,9 @@ bool reduceNaturalLoopFallbackOnce(const StructuredCFG &Cfg,
     LoopNode.Block = Loop->Head;
     LoopNode.Body = Tree.addNode(std::move(Body));
     collapseNodesAndSyncOverlay(Graph, Overlay, Members, Loop->Head,
-                                Tree.addNode(std::move(LoopNode)));
+                                Tree.addNode(std::move(LoopNode)),
+                                /*SelfLoop=*/true,
+                                /*DropRefinementMarks=*/true);
     return true;
   }
   return false;

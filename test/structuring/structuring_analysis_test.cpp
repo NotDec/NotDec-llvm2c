@@ -1613,6 +1613,56 @@ void testRefineCyclicReducesGraphNaturalLoop() {
   assert(FoundLoop);
 }
 
+void testRefineCyclicDropsOverlayRefinementMarksAfterCollapse() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {0}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  RootOverlay->markEdge(OverlayEdgeEndpoint::member(OverlayMember::block(0)),
+                        OverlayEdgeEndpoint::member(OverlayMember::block(2)),
+                        "cyclic_refinement_outgoing");
+
+  StructuredTree Tree;
+  TestPhoenixStructurer Structurer;
+  assert(Structurer.refineCyclic(Cfg, Manager.regionTree(), *RootOverlay->region(),
+                                 Graph, Tree, RootOverlay));
+
+  const std::vector<OverlayMember> &Members = Manager.members(RootId);
+  auto StructuredIt =
+      std::find_if(Members.begin(), Members.end(), [](const OverlayMember &Member) {
+        return Member.Kind == OverlayMemberKind::Structured;
+      });
+  assert(StructuredIt != Members.end());
+  OverlayNodeKey Structured = Manager.nodeKey(*StructuredIt);
+
+  std::vector<OverlayViewEdge> Edges =
+      Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
+  bool HasFollowEdge =
+      std::find_if(Edges.begin(), Edges.end(),
+                   [&](const OverlayViewEdge &Edge) {
+                     return Edge.sourcesMember() &&
+                            Manager.nodeKey(Edge.From) == Structured &&
+                            Edge.targetsMember() &&
+                            Edge.To.Kind == OverlayMemberKind::Block &&
+                            Edge.To.Block == 2;
+                   }) != Edges.end();
+  assert(HasFollowEdge);
+}
+
 void testRefineCyclicMergesMultipleLatches() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2139,6 +2189,7 @@ int main() {
   testFinalizedChildSnapshotSkipsParentLoopHead();
   testMergedNaturalLoopKeepsAllLatchPaths();
   testRefineCyclicReducesGraphNaturalLoop();
+  testRefineCyclicDropsOverlayRefinementMarksAfterCollapse();
   testRefineCyclicMergesMultipleLatches();
   testRefineCyclicVirtualizesExtraContinues();
   testRefineCyclicSkipsSwitchSourceContinueRewrite();
