@@ -83,6 +83,56 @@ bool isBlacklistedEdge(const OverlayNodeKey &From, const OverlayNodeKey &To,
                       }) != BlacklistedEdges.end();
 }
 
+bool containsNodeKey(const std::set<OverlayNodeKey> &Values,
+                     const OverlayNodeKey &Key) {
+  return Values.find(Key) != Values.end();
+}
+
+void collectScc(const OverlayNodeKey &Node,
+                const std::map<OverlayNodeKey, std::vector<OverlayNodeKey>> &Adj,
+                unsigned &NextIndex, std::map<OverlayNodeKey, unsigned> &Index,
+                std::map<OverlayNodeKey, unsigned> &LowLink,
+                std::vector<OverlayNodeKey> &Stack,
+                std::set<OverlayNodeKey> &OnStack,
+                std::vector<std::vector<OverlayNodeKey>> &Sccs) {
+  Index[Node] = NextIndex;
+  LowLink[Node] = NextIndex;
+  ++NextIndex;
+  Stack.push_back(Node);
+  OnStack.insert(Node);
+
+  auto It = Adj.find(Node);
+  if (It != Adj.end()) {
+    std::vector<OverlayNodeKey> Succs = It->second;
+    std::sort(Succs.begin(), Succs.end());
+    for (const OverlayNodeKey &Succ : Succs) {
+      if (Index.find(Succ) == Index.end()) {
+        collectScc(Succ, Adj, NextIndex, Index, LowLink, Stack, OnStack, Sccs);
+        LowLink[Node] = std::min(LowLink[Node], LowLink[Succ]);
+      } else if (containsNodeKey(OnStack, Succ)) {
+        LowLink[Node] = std::min(LowLink[Node], Index[Succ]);
+      }
+    }
+  }
+
+  if (LowLink[Node] != Index[Node]) {
+    return;
+  }
+
+  std::vector<OverlayNodeKey> Component;
+  while (!Stack.empty()) {
+    OverlayNodeKey Member = Stack.back();
+    Stack.pop_back();
+    OnStack.erase(Member);
+    Component.push_back(Member);
+    if (Member == Node) {
+      break;
+    }
+  }
+  std::sort(Component.begin(), Component.end());
+  Sccs.push_back(std::move(Component));
+}
+
 void appendUniqueEdge(std::vector<OverlayViewEdge> &Edges,
                       const OverlayViewEdge &Edge) {
   auto It = std::find_if(Edges.begin(), Edges.end(),
@@ -916,6 +966,120 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors,
         appendUniqueEdge(Result, Edge);
       }
     }
+  }
+  return Result;
+}
+
+std::map<OverlayNodeKey, unsigned>
+OverlayManager::quasiTopologicalNodeOrder(RegionId Id,
+                                          bool IncludeMarkedEdges) const {
+  std::set<OverlayNodeKey> Nodes;
+  std::map<OverlayNodeKey, std::vector<OverlayNodeKey>> Adj;
+
+  for (const OverlayMember &Member : members(Id)) {
+    OverlayNodeKey Key = nodeKey(Member);
+    Nodes.insert(Key);
+    Adj[Key];
+  }
+
+  for (const OverlayViewEdge &Edge :
+       quotientEdges(Id, /*IncludeSuccessors=*/true, IncludeMarkedEdges)) {
+    OverlayNodeKey From =
+        Edge.sourcesMember() ? nodeKey(Edge.From) : Edge.sourceNode();
+    OverlayNodeKey To =
+        Edge.targetsMember() ? nodeKey(Edge.To) : Edge.targetNode();
+    if (From == OverlayNodeKey{} || To == OverlayNodeKey{}) {
+      continue;
+    }
+    Nodes.insert(From);
+    Nodes.insert(To);
+    appendUniqueNodeKey(Adj[From], To);
+    Adj[To];
+  }
+
+  std::vector<std::vector<OverlayNodeKey>> Sccs;
+  std::map<OverlayNodeKey, unsigned> Index;
+  std::map<OverlayNodeKey, unsigned> LowLink;
+  std::vector<OverlayNodeKey> Stack;
+  std::set<OverlayNodeKey> OnStack;
+  unsigned NextIndex = 0;
+  for (const OverlayNodeKey &Node : Nodes) {
+    if (Index.find(Node) == Index.end()) {
+      collectScc(Node, Adj, NextIndex, Index, LowLink, Stack, OnStack, Sccs);
+    }
+  }
+
+  std::map<OverlayNodeKey, unsigned> ComponentOf;
+  std::vector<OverlayNodeKey> ComponentHeads;
+  for (unsigned Component = 0; Component < Sccs.size(); ++Component) {
+    std::vector<OverlayNodeKey> &Members = Sccs[Component];
+    auto HeadIt = Members.begin();
+    const Region *R = getRegionData(Id);
+    if (R != nullptr) {
+      OverlayNodeKey HeadBlock = OverlayNodeKey::block(R->Head);
+      auto It = std::find(Members.begin(), Members.end(), HeadBlock);
+      if (It != Members.end()) {
+        HeadIt = It;
+      }
+    }
+    if (HeadIt != Members.begin()) {
+      std::rotate(Members.begin(), HeadIt, std::next(HeadIt));
+    }
+    ComponentHeads.push_back(Members.front());
+    for (const OverlayNodeKey &Node : Members) {
+      ComponentOf[Node] = Component;
+    }
+  }
+
+  std::map<unsigned, std::set<unsigned>> ComponentSuccs;
+  std::map<unsigned, unsigned> InDegree;
+  for (unsigned Component = 0; Component < Sccs.size(); ++Component) {
+    InDegree[Component];
+    ComponentSuccs[Component];
+  }
+  for (const auto &Entry : Adj) {
+    unsigned FromComponent = ComponentOf[Entry.first];
+    for (const OverlayNodeKey &Succ : Entry.second) {
+      unsigned ToComponent = ComponentOf[Succ];
+      if (FromComponent == ToComponent) {
+        continue;
+      }
+      if (ComponentSuccs[FromComponent].insert(ToComponent).second) {
+        ++InDegree[ToComponent];
+      }
+    }
+  }
+
+  auto LessComponent = [&](unsigned Lhs, unsigned Rhs) {
+    return ComponentHeads[Lhs] < ComponentHeads[Rhs];
+  };
+  std::vector<unsigned> Ready;
+  for (const auto &Entry : InDegree) {
+    if (Entry.second == 0) {
+      Ready.push_back(Entry.first);
+    }
+  }
+  std::sort(Ready.begin(), Ready.end(), LessComponent);
+
+  std::map<OverlayNodeKey, unsigned> Result;
+  unsigned Order = 0;
+  while (!Ready.empty()) {
+    unsigned Component = Ready.front();
+    Ready.erase(Ready.begin());
+    for (const OverlayNodeKey &Node : Sccs[Component]) {
+      Result[Node] = Order++;
+    }
+    for (unsigned SuccComponent : ComponentSuccs[Component]) {
+      auto It = InDegree.find(SuccComponent);
+      if (It == InDegree.end() || It->second == 0) {
+        continue;
+      }
+      --It->second;
+      if (It->second == 0) {
+        Ready.push_back(SuccComponent);
+      }
+    }
+    std::sort(Ready.begin(), Ready.end(), LessComponent);
   }
   return Result;
 }

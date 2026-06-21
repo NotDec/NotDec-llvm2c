@@ -160,6 +160,9 @@ public:
   std::vector<OverlayViewEdge>
   quotientEdges(RegionId Id, bool IncludeSuccessors,
                 bool IncludeMarkedEdges = false) const;
+  std::map<OverlayNodeKey, unsigned>
+  quasiTopologicalNodeOrder(RegionId Id,
+                            bool IncludeMarkedEdges = false) const;
   std::vector<OverlayNodeKey> visibleNodeSuccessorsBlacklisted(
       RegionId Id, const std::vector<OverlayHiddenEdge> &BlacklistedEdges,
       bool IncludeMarkedEdges = false) const;

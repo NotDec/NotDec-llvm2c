@@ -731,16 +731,16 @@ void testOverlayAcyclicViewsFilterBackEdgesByOrder() {
   Regions.setRoot(RootId);
 
   OverlayManager Manager(std::move(Regions), Cfg);
-  std::map<OverlayNodeKey, unsigned> NodeOrder = {
-      {OverlayNodeKey::block(0), 0},
-      {OverlayNodeKey::block(1), 1},
-      {OverlayNodeKey::block(2), 2},
-  };
+  std::map<OverlayNodeKey, unsigned> DerivedOrder =
+      Manager.quasiTopologicalNodeOrder(RootId);
+  assert(DerivedOrder[OverlayNodeKey::block(0)] == 0);
+  assert(DerivedOrder[OverlayNodeKey::block(1)] == 1);
+  assert(DerivedOrder[OverlayNodeKey::block(2)] == 2);
 
   std::vector<OverlayViewEdge> RawEdges =
       Manager.quotientEdges(RootId, /*IncludeSuccessors=*/false);
   std::vector<OverlayViewEdge> AcyclicEdges = Manager.quotientEdgesAcyclic(
-      RootId, /*IncludeSuccessors=*/false, NodeOrder);
+      RootId, /*IncludeSuccessors=*/false, DerivedOrder);
   assert(RawEdges.size() == 3);
   assert(AcyclicEdges.size() == 2);
   auto HasBackEdge =
@@ -795,6 +795,10 @@ void testOverlayAcyclicViewsFilterBackEdgesByOrder() {
       {OverlayNodeKey::block(2), 0},
   };
   assert(ChildManager.visibleSuccessorsAcyclic(ChildId, ChildOrder).empty());
+  std::map<OverlayNodeKey, unsigned> DerivedChildOrder =
+      ChildManager.quasiTopologicalNodeOrder(ChildId);
+  assert(DerivedChildOrder[OverlayNodeKey::block(1)] == 0);
+  assert(DerivedChildOrder[OverlayNodeKey::block(2)] == 1);
 }
 
 void testOverlayGraphBuildsEdgesFromQuotientView() {
