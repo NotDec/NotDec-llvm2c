@@ -61,6 +61,19 @@ protected:
                   const StructuringEvaluation &Current) override;
 };
 
+class LoweredSwitchSimplifier : public StructuringOptimizationPass {
+public:
+  static StructuringOptimizationOptions defaultOptions();
+
+  explicit LoweredSwitchSimplifier(
+      StructuringOptimizationOptions Options = defaultOptions())
+      : StructuringOptimizationPass(Options) {}
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override;
+};
+
 class CrossJumpReverter : public StructuringOptimizationPass {
 public:
   static StructuringOptimizationOptions defaultOptions();

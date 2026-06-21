@@ -66,6 +66,11 @@ struct ReturnRegion {
   std::vector<BlockId> Blocks;
 };
 
+struct LinearRegion {
+  BlockId Head = InvalidBlockId;
+  std::vector<BlockId> Blocks;
+};
+
 std::vector<BlockId> externalPredecessorsOf(const StructuredCFG &Graph,
                                             const ReturnRegion &Region) {
   std::vector<BlockId> Preds;
@@ -304,6 +309,68 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
   return true;
 }
 
+LinearRegion findLinearCopyRegion(const StructuredCFG &Graph, BlockId Head) {
+  LinearRegion Region;
+  const CFGBlock *HeadBlock = Graph.getBlock(Head);
+  if (HeadBlock == nullptr) {
+    return Region;
+  }
+
+  Region.Head = Head;
+  Region.Blocks.push_back(Head);
+
+  std::set<BlockId> Seen;
+  Seen.insert(Head);
+  while (true) {
+    const CFGBlock *TailBlock = Graph.getBlock(Region.Blocks.back());
+    if (TailBlock == nullptr || TailBlock->Successors.size() != 1) {
+      break;
+    }
+
+    BlockId Succ = TailBlock->Successors.front();
+    if (Seen.count(Succ) != 0) {
+      break;
+    }
+
+    const CFGBlock *SuccBlock = Graph.getBlock(Succ);
+    if (SuccBlock == nullptr || predecessorsOf(Graph, Succ).size() != 1) {
+      break;
+    }
+    if (SuccBlock->Terminator == TerminatorKind::Switch) {
+      break;
+    }
+
+    Region.Blocks.push_back(Succ);
+    Seen.insert(Succ);
+  }
+
+  return Region;
+}
+
+bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
+                                     const LinearRegion &Region,
+                                     const std::vector<BlockId> &Preds,
+                                     std::vector<BlockId> &OutCopies) {
+  std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
+  if (!CopyRegion.has_value()) {
+    return false;
+  }
+
+  BlockId CopyHead = CopyRegion->copyOf(Region.Head);
+  if (CopyHead == InvalidBlockId ||
+      !Graph.redirectPredecessors(Region.Head, CopyHead, Preds)) {
+    for (const auto &[_, Copy] : CopyRegion->Blocks) {
+      Graph.removeBlock(Copy);
+    }
+    return false;
+  }
+
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    OutCopies.push_back(Copy);
+  }
+  return true;
+}
+
 } // namespace
 
 StructuringOptimizationOptions SwitchReusedEntryRewriter::defaultOptions() {
@@ -373,6 +440,85 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       }
 
       Changed = true;
+    }
+  }
+
+  return Changed;
+}
+
+StructuringOptimizationOptions LoweredSwitchSimplifier::defaultOptions() {
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  Options.MaxOptIters = 2;
+  return Options;
+}
+
+bool LoweredSwitchSimplifier::runOnGraph(
+    StructuredCFG &Graph, const StructuringEvaluation &Current) {
+  (void)Current;
+
+  std::vector<BlockId> TargetIds;
+  TargetIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    TargetIds.push_back(Block.Id);
+  }
+
+  bool Changed = false;
+  for (BlockId TargetId : TargetIds) {
+    const CFGBlock *Target = Graph.getBlock(TargetId);
+    if (Target == nullptr) {
+      continue;
+    }
+
+    std::vector<BlockId> Preds;
+    for (const CFGBlock &PredBlock : Graph.blocks()) {
+      if (PredBlock.Terminator != TerminatorKind::Switch ||
+          !Graph.hasEdge(PredBlock.Id, TargetId)) {
+        continue;
+      }
+      Preds.push_back(PredBlock.Id);
+    }
+
+    if (Preds.size() <= 1) {
+      continue;
+    }
+
+    std::vector<BlockId> AllPreds = predecessorsOf(Graph, TargetId);
+    bool AllSwitchPreds = true;
+    for (BlockId Pred : AllPreds) {
+      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr || PredBlock->Terminator != TerminatorKind::Switch) {
+        AllSwitchPreds = false;
+        break;
+      }
+    }
+    if (!AllSwitchPreds) {
+      continue;
+    }
+
+    LinearRegion Region = findLinearCopyRegion(Graph, TargetId);
+    if (Region.Blocks.size() <= 1) {
+      continue;
+    }
+
+    std::vector<std::vector<BlockId>> PredComponents =
+        connectedPredecessorComponents(Graph, Preds);
+    std::vector<BlockId> UpdatedPreds;
+    std::vector<BlockId> Copies;
+    for (const std::vector<BlockId> &Component : PredComponents) {
+      if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
+        continue;
+      }
+      UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(), Component.end());
+      Changed = true;
+    }
+
+    if (sameBlockSet(AllPreds, UpdatedPreds)) {
+      for (BlockId Block : Region.Blocks) {
+        Graph.removeBlock(Block);
+      }
     }
   }
 
@@ -681,6 +827,7 @@ StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline() {
   StructuringOptimizationPipeline Pipeline;
   Pipeline.addPass(std::make_unique<DuplicationReverter>());
   Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
+  Pipeline.addPass(std::make_unique<LoweredSwitchSimplifier>());
   Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
   Pipeline.addPass(std::make_unique<SwitchDefaultCaseDuplicator>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
