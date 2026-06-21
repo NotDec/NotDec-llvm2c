@@ -19,6 +19,7 @@ namespace {
 
 class HintStructurer : public PhoenixStructurer {
 public:
+  using PhoenixStructurer::lastResortRefinement;
   using PhoenixStructurer::virtualizeOneEdge;
 
   HintStructurer(GraphNodeId From, GraphNodeId To) : From(From), To(To) {}
@@ -1143,6 +1144,45 @@ void testPhoenixOverlayPathSyncsRepeatedReducerCollapses() {
   assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(2)).empty());
 }
 
+void testPhoenixOverlayLastResortDetachesVirtualizedEdge() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  GraphNodeId From = Graph.getNodeForBlock(0);
+  GraphNodeId To = Graph.getNodeForBlock(1);
+  assert(From != InvalidGraphNodeId);
+  assert(To != InvalidGraphNodeId);
+  assert(Graph.hasEdge(From, To));
+  assert(Manager.sharedNodeSuccessors(OverlayNodeKey::block(0)).size() == 2);
+
+  HintStructurer Structurer(From, To);
+  StructuredTree Tree;
+  assert(Structurer.lastResortRefinement(Cfg, Root, Graph, Tree, RootOverlay));
+
+  assert(!Graph.hasEdge(From, To));
+  const std::vector<OverlayNodeKey> &Succs =
+      Manager.sharedNodeSuccessors(OverlayNodeKey::block(0));
+  assert(std::find(Succs.begin(), Succs.end(), OverlayNodeKey::block(1)) ==
+         Succs.end());
+  assert(std::find(Succs.begin(), Succs.end(), OverlayNodeKey::block(2)) !=
+         Succs.end());
+}
+
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -1947,6 +1987,7 @@ int main() {
   testOverlayReplaceNodesRewiresSharedGraphAndBookkeeping();
   testPhoenixOverlayPathSyncsReducerCollapseToOverlay();
   testPhoenixOverlayPathSyncsRepeatedReducerCollapses();
+  testPhoenixOverlayLastResortDetachesVirtualizedEdge();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();

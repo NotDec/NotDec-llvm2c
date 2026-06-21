@@ -1121,13 +1121,16 @@ groupVirtualEdgesBySource(const MutableRegionGraph &Graph) {
 
 void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
                                RegionOverlay &Overlay) {
+  OverlayManager *Manager = Overlay.manager();
+  if (Manager == nullptr) {
+    return;
+  }
   for (const VirtualEdge &Edge : Graph.virtualEdges()) {
     if (Edge.FromBlock == InvalidBlockId || Edge.ToBlock == InvalidBlockId) {
       continue;
     }
-    Overlay.removeEdgeWithSuccessorsOnly(
-        OverlayEdgeEndpoint::external(Edge.FromBlock),
-        OverlayEdgeEndpoint::external(Edge.ToBlock));
+    Manager->detachNodeEdge(OverlayNodeKey::block(Edge.FromBlock),
+                            OverlayNodeKey::block(Edge.ToBlock));
   }
 }
 
@@ -2639,11 +2642,25 @@ bool PhoenixStructurer::refineCyclic(const StructuredCFG &Cfg,
 bool PhoenixStructurer::lastResortRefinement(const StructuredCFG &Cfg,
                                              const Region &R,
                                              MutableRegionGraph &Graph,
-                                             StructuredTree &Tree) const {
+                                             StructuredTree &Tree,
+                                             RegionOverlay *Overlay) const {
   if (Graph.activeNodes().size() <= 1) {
     return false;
   }
-  return virtualizeOneEdge(Cfg, R, Graph, Tree);
+  std::size_t OverlayCheckpoint =
+      Overlay == nullptr ? 0 : Overlay->manager()->checkpoint();
+  if (virtualizeOneEdge(Cfg, R, Graph, Tree)) {
+    if (Overlay != nullptr) {
+      syncVirtualEdgesToOverlay(Graph, *Overlay);
+      Overlay->manager()->commit(OverlayCheckpoint);
+    }
+    return true;
+  }
+  if (Overlay != nullptr) {
+    Overlay->manager()->rollback(OverlayCheckpoint);
+    Overlay->manager()->commit(OverlayCheckpoint);
+  }
+  return false;
 }
 
 bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
@@ -2794,7 +2811,7 @@ NodeId PhoenixStructurer::structureRegion(const StructuredCFG &Cfg,
         refineCyclic(Cfg, VisibleRegions, *R, Graph, Tree, &Overlay)) {
       Changed = true;
     }
-    if (!Changed && lastResortRefinement(Cfg, *R, Graph, Tree)) {
+    if (!Changed && lastResortRefinement(Cfg, *R, Graph, Tree, &Overlay)) {
       Changed = true;
     }
     ++Iterations;

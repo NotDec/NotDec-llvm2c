@@ -42,7 +42,8 @@ protected:
                             RegionOverlay *Overlay = nullptr) const;
   virtual bool lastResortRefinement(const StructuredCFG &Cfg, const Region &R,
                                     MutableRegionGraph &Graph,
-                                    StructuredTree &Tree) const;
+                                    StructuredTree &Tree,
+                                    RegionOverlay *Overlay = nullptr) const;
   virtual bool useImprovedCyclicSchemas() const { return false; }
   virtual bool preprocessRegionGraph(const StructuredCFG &Cfg, const Region &R,
                                      MutableRegionGraph &Graph) const {
