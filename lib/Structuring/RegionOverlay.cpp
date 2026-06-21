@@ -975,6 +975,26 @@ void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId,
   }
   SuccessorSnapshots[Id] = std::move(StoredSnapshot);
   finalizeRegionMembers(Id, RootId);
+
+  OverlayNodeKey ResultNode = OverlayNodeKey::structured(RootId, Id);
+  detachNodeEdge(ResultNode, ResultNode);
+
+  RegionId ParentId = parentOf(Id);
+  const Region *Parent = getRegionData(ParentId);
+  BlockId ParentLoopHead =
+      Parent != nullptr && Parent->Kind == RegionKind::NaturalLoop
+          ? Parent->Head
+          : InvalidBlockId;
+  const SuccessorSnapshot &FinalSnapshot = SuccessorSnapshots[Id];
+  for (const OverlayNodeKey &Succ : FinalSnapshot.NodeSuccessors) {
+    if (Succ == ResultNode) {
+      continue;
+    }
+    if (Succ.isBlock() && Succ.Block == ParentLoopHead) {
+      continue;
+    }
+    addNodeEdge(ResultNode, Succ);
+  }
 }
 
 void OverlayManager::clearStructuredRoot(RegionId Id) {

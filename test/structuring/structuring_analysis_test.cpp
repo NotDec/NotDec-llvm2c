@@ -1028,6 +1028,9 @@ void testFinalizedChildSnapshotAddsParentVisibleSuccessor() {
   RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
   assert(ChildOverlay != nullptr);
   ChildOverlay->finalize(42, SuccessorSnapshot{{1}});
+  OverlayNodeKey ChildKey = Manager.nodeKey(Manager.members(RootId)[0]);
+  assert(Manager.sharedNodeSuccessors(ChildKey) ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(1)}));
 
   RegionOverlay *RootOverlay = Manager.root();
   assert(RootOverlay != nullptr);
@@ -1075,7 +1078,8 @@ void testOverlayGraphUsesStructuredMemberSourceRegion() {
   assert(ChildKey.StructuredRoot == 42);
   assert(ChildKey.Region == ChildId);
   assert(Manager.representativeBlock(Manager.members(RootId)[0]) == 1);
-  Manager.addNodeEdge(ChildKey, OverlayNodeKey::block(2));
+  assert(Manager.sharedNodeSuccessors(ChildKey) ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(2)}));
   assert(Manager.visibleSuccessors(RootId).empty());
   Manager.addNodeEdge(ChildKey, OverlayNodeKey::block(3));
   assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({3}));
@@ -1138,6 +1142,9 @@ void testFinalizedChildSnapshotSkipsParentLoopHead() {
   RegionOverlay *ChildOverlay = Manager.getRegion(ChildId);
   assert(ChildOverlay != nullptr);
   ChildOverlay->finalize(42, SuccessorSnapshot{{0, 2}});
+  OverlayNodeKey ChildKey = Manager.nodeKey(Manager.members(ParentLoopId)[0]);
+  assert(Manager.sharedNodeSuccessors(ChildKey) ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(2)}));
 
   RegionOverlay *ParentOverlay = Manager.root();
   assert(ParentOverlay != nullptr);
