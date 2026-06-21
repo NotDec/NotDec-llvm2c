@@ -6,6 +6,7 @@ add_library(notdec-backend-structuring STATIC
     MutableRegionGraph.cpp
     RecursiveStructurer.cpp
     StructurerRegistry.cpp
+    GotoManager.cpp
     GotoStructurer.cpp
     PhoenixStructurer.cpp
     SAILRStructurer.cpp

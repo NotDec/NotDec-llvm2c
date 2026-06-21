@@ -1,4 +1,5 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
+#include "notdec-backends/Structuring/GotoManager.h"
 #include "notdec-backends/Structuring/GotoStructurer.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
@@ -418,6 +419,56 @@ void testStructurerRegistryNames() {
   assert(Sailr != nullptr);
   assert(StructuredPhoenix != nullptr);
   assert(Missing == nullptr);
+}
+
+void testGotoManagerCollectsSequenceGotoSources() {
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::BasicBlock;
+  Body.Block = 10;
+  Root.Children.push_back(Tree.addNode(std::move(Body)));
+
+  StructuredNode Goto;
+  Goto.Kind = StructuredNodeKind::Goto;
+  Goto.Target = 20;
+  Root.Children.push_back(Tree.addNode(std::move(Goto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  GotoManager Manager = GotoManager::collect(Tree);
+  assert(Manager.size() == 1);
+  assert(Manager.isGotoEdge(10, 20));
+  assert(!Manager.isGotoEdge(20, 10));
+  std::vector<StructuredGoto> Gotos = Manager.gotosInBlock(10);
+  assert(Gotos.size() == 1);
+  assert(Gotos.front().Source == 10);
+  assert(Gotos.front().Target == 20);
+}
+
+void testGotoManagerCollectsIfGotoSources() {
+  StructuredTree Tree;
+  StructuredNode Goto;
+  Goto.Kind = StructuredNodeKind::Goto;
+  Goto.Target = 30;
+  NodeId GotoId = Tree.addNode(std::move(Goto));
+
+  StructuredNode IfNode;
+  IfNode.Kind = StructuredNodeKind::If;
+  IfNode.Block = 11;
+  IfNode.Then = GotoId;
+
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+  Root.Children.push_back(Tree.addNode(std::move(IfNode)));
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  GotoManager Manager = GotoManager::collect(Tree);
+  assert(Manager.size() == 1);
+  assert(Manager.isGotoEdge(11, 30));
+  assert(Manager.gotosInBlock(10).empty());
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -2781,6 +2832,8 @@ int main() {
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
+  testGotoManagerCollectsSequenceGotoSources();
+  testGotoManagerCollectsIfGotoSources();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();
