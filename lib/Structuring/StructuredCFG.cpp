@@ -27,6 +27,12 @@ void replaceTarget(CFGBlock &Block, BlockId OldTarget, BlockId NewTarget) {
   }
 }
 
+void appendUniqueTarget(std::vector<BlockId> &Targets, BlockId Target) {
+  if (std::find(Targets.begin(), Targets.end(), Target) == Targets.end()) {
+    Targets.push_back(Target);
+  }
+}
+
 } // namespace
 
 BlockId StructuredCFG::addBlock(CFGBlock Block) {
@@ -100,10 +106,10 @@ std::vector<BlockId> StructuredCFG::successorsOf(BlockId From) const {
   }
   Succs.reserve(Block->Successors.size() + Block->Cases.size());
   for (BlockId Succ : Block->Successors) {
-    Succs.push_back(Succ);
+    appendUniqueTarget(Succs, Succ);
   }
   for (const SwitchCase &Case : Block->Cases) {
-    Succs.push_back(Case.Target);
+    appendUniqueTarget(Succs, Case.Target);
   }
   return Succs;
 }
