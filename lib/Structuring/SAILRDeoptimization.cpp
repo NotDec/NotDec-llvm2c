@@ -309,6 +309,41 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
   return true;
 }
 
+bool appendTerminalForkRegion(const StructuredCFG &Graph, LinearRegion &Region,
+                              BlockId Branch, std::set<BlockId> &Seen) {
+  const CFGBlock *BranchBlock = Graph.getBlock(Branch);
+  if (BranchBlock == nullptr ||
+      BranchBlock->Terminator != TerminatorKind::Branch ||
+      BranchBlock->Successors.size() != 2) {
+    return false;
+  }
+
+  std::vector<BlockId> ForkBlocks;
+  for (BlockId Succ : BranchBlock->Successors) {
+    if (Seen.count(Succ) != 0) {
+      return false;
+    }
+
+    const CFGBlock *SuccBlock = Graph.getBlock(Succ);
+    if (SuccBlock == nullptr || !isClosedTerminal(*SuccBlock)) {
+      return false;
+    }
+
+    std::vector<BlockId> SuccPreds = predecessorsOf(Graph, Succ);
+    if (SuccPreds.size() != 1 || SuccPreds.front() != Branch) {
+      return false;
+    }
+
+    ForkBlocks.push_back(Succ);
+  }
+
+  for (BlockId ForkBlock : ForkBlocks) {
+    Region.Blocks.push_back(ForkBlock);
+    Seen.insert(ForkBlock);
+  }
+  return true;
+}
+
 LinearRegion findLinearCopyRegion(const StructuredCFG &Graph, BlockId Head) {
   LinearRegion Region;
   const CFGBlock *HeadBlock = Graph.getBlock(Head);
@@ -323,7 +358,13 @@ LinearRegion findLinearCopyRegion(const StructuredCFG &Graph, BlockId Head) {
   Seen.insert(Head);
   while (true) {
     const CFGBlock *TailBlock = Graph.getBlock(Region.Blocks.back());
-    if (TailBlock == nullptr || TailBlock->Successors.size() != 1) {
+    if (TailBlock == nullptr) {
+      break;
+    }
+    if (appendTerminalForkRegion(Graph, Region, TailBlock->Id, Seen)) {
+      break;
+    }
+    if (TailBlock->Successors.size() != 1) {
       break;
     }
 

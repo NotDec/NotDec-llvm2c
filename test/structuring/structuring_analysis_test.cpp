@@ -1457,6 +1457,82 @@ void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
   assert(hasSinglePayload(Copy1Ret->Statements, 33));
 }
 
+void testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {10, 20}));
+  Cfg.addBlock(switchBlock(1, {10, 30}));
+
+  CFGBlock CaseHead = block(10, {11});
+  CaseHead.Statements.push_back({41});
+  Cfg.addBlock(std::move(CaseHead));
+
+  CFGBlock Fork = branchBlock(11, {12, 13});
+  Fork.Statements.push_back({42});
+  Cfg.addBlock(std::move(Fork));
+
+  CFGBlock Ret = block(12, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({43});
+  Cfg.addBlock(std::move(Ret));
+
+  CFGBlock Trap = block(13, {});
+  Trap.Terminator = TerminatorKind::Unreachable;
+  Trap.Statements.push_back({44});
+  Cfg.addBlock(std::move(Trap));
+
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(30, {}));
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(10) == nullptr);
+  assert(Cfg.getBlock(11) == nullptr);
+  assert(Cfg.getBlock(12) == nullptr);
+  assert(Cfg.getBlock(13) == nullptr);
+
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch1 = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch1 != nullptr);
+
+  const CFGBlock *Copy0Head = Cfg.getBlock(Switch0->Successors.front());
+  const CFGBlock *Copy1Head = Cfg.getBlock(Switch1->Successors.front());
+  assert(Copy0Head != nullptr && Copy1Head != nullptr);
+  assert(Copy0Head->Successors.size() == 1);
+  assert(Copy1Head->Successors.size() == 1);
+  assert(hasSinglePayload(Copy0Head->Statements, 41));
+  assert(hasSinglePayload(Copy1Head->Statements, 41));
+
+  const CFGBlock *Copy0Fork = Cfg.getBlock(Copy0Head->Successors.front());
+  const CFGBlock *Copy1Fork = Cfg.getBlock(Copy1Head->Successors.front());
+  assert(Copy0Fork != nullptr && Copy1Fork != nullptr);
+  assert(Copy0Fork->Terminator == TerminatorKind::Branch);
+  assert(Copy1Fork->Terminator == TerminatorKind::Branch);
+  assert(Copy0Fork->Successors.size() == 2);
+  assert(Copy1Fork->Successors.size() == 2);
+  assert(hasSinglePayload(Copy0Fork->Statements, 42));
+  assert(hasSinglePayload(Copy1Fork->Statements, 42));
+
+  const CFGBlock *Copy0Ret = Cfg.getBlock(Copy0Fork->Successors[0]);
+  const CFGBlock *Copy0Trap = Cfg.getBlock(Copy0Fork->Successors[1]);
+  const CFGBlock *Copy1Ret = Cfg.getBlock(Copy1Fork->Successors[0]);
+  const CFGBlock *Copy1Trap = Cfg.getBlock(Copy1Fork->Successors[1]);
+  assert(Copy0Ret != nullptr && Copy0Trap != nullptr);
+  assert(Copy1Ret != nullptr && Copy1Trap != nullptr);
+  assert(Copy0Ret->Terminator == TerminatorKind::Return);
+  assert(Copy1Ret->Terminator == TerminatorKind::Return);
+  assert(Copy0Trap->Terminator == TerminatorKind::Unreachable);
+  assert(Copy1Trap->Terminator == TerminatorKind::Unreachable);
+  assert(hasSinglePayload(Copy0Ret->Statements, 43));
+  assert(hasSinglePayload(Copy1Ret->Statements, 43));
+  assert(hasSinglePayload(Copy0Trap->Statements, 44));
+  assert(hasSinglePayload(Copy1Trap->Statements, 44));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -4010,6 +4086,7 @@ int main() {
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
+  testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
