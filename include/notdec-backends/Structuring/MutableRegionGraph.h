@@ -41,6 +41,10 @@ struct MutableRegionNode {
   BlockId TailBlock = InvalidBlockId;
   std::vector<BlockId> Blocks;
   NodeId StructuredRoot = InvalidNodeId;
+  // Overlay source nodes keep the reducer graph tied back to Angr-style
+  // RegionOverlay nodes. Phoenix still reduces this mutable graph today; later
+  // adapter code uses these keys to mirror each reduction into OverlayManager.
+  std::vector<OverlayNodeKey> SourceNodes;
   // Child-region reducers still need to see successor shape that leaves the
   // current region. We model those exits as placeholder nodes in the mutable
   // graph, but they must never be rendered as region-local statements.

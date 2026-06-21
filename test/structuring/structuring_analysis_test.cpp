@@ -168,6 +168,11 @@ void testMutableRegionGraphCheckpointRestoresMutations() {
                       42);
   assert(Graph.virtualEdges().size() == 1);
   assert(Graph.activeNodes().size() == 2);
+  const MutableRegionNode *Collapsed = Graph.getNode(Graph.getNodeForBlock(1));
+  assert(Collapsed != nullptr);
+  assert(Collapsed->SourceNodes ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(1),
+                                      OverlayNodeKey::block(2)}));
 
   Graph.rollback(Checkpoint);
   Graph.commit(Checkpoint);
@@ -1245,6 +1250,7 @@ void testOverlayGraphUsesStructuredMemberSourceRegion() {
   assert(ChildNode != nullptr);
   assert(ChildNode->StructuredRoot == 42);
   assert(ChildNode->Blocks == std::vector<BlockId>({1}));
+  assert(ChildNode->SourceNodes == std::vector<OverlayNodeKey>({ChildKey}));
   assert(ChildNode->hasExternalSuccessor(2));
 }
 

@@ -140,6 +140,13 @@ static void appendUniqueBlock(std::vector<BlockId> &Values, BlockId Id) {
   }
 }
 
+static void appendUniqueNodeKey(std::vector<OverlayNodeKey> &Values,
+                                const OverlayNodeKey &Id) {
+  if (std::find(Values.begin(), Values.end(), Id) == Values.end()) {
+    Values.push_back(Id);
+  }
+}
+
 static bool containsBlock(const std::vector<BlockId> &Values, BlockId Id) {
   return std::find(Values.begin(), Values.end(), Id) != Values.end();
 }
@@ -377,6 +384,7 @@ GraphNodeId MutableRegionGraph::addNode(BlockId Block, NodeId StructuredRoot,
   Node.ExternalPlaceholder = ExternalPlaceholder;
   if (Block != InvalidBlockId) {
     Node.Blocks.push_back(Block);
+    Node.SourceNodes.push_back(OverlayNodeKey::block(Block));
   }
   Node.StructuredRoot = StructuredRoot;
   Nodes.push_back(std::move(Node));
@@ -471,6 +479,7 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
       Node->Blocks = ChildRegion->Blocks;
+      Node->SourceNodes = {Overlay.manager()->nodeKey(Member)};
       if (Member.Kind == OverlayMemberKind::Structured) {
         auto SnapshotIt = Overlay.manager()->finalizedChildren(Overlay.id());
         for (const FinalizedChildRegion &Child : SnapshotIt) {
@@ -731,12 +740,16 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
   std::set<GraphNodeId> Succs;
   std::vector<BlockId> ExternalSuccs;
   std::vector<BlockId> Blocks;
+  std::vector<OverlayNodeKey> SourceNodes;
   BlockId TailBlock = InvalidBlockId;
   bool FoundOutgoingTail = false;
   bool FoundBackedgeTail = false;
   for (GraphNodeId Id : MemberSet) {
     const MutableRegionNode *Node = getNode(Id);
     Blocks.insert(Blocks.end(), Node->Blocks.begin(), Node->Blocks.end());
+    for (const OverlayNodeKey &Key : Node->SourceNodes) {
+      appendUniqueNodeKey(SourceNodes, Key);
+    }
     if (!FoundOutgoingTail && Node->TailBlock != InvalidBlockId) {
       TailBlock = Node->TailBlock;
     }
@@ -780,6 +793,7 @@ MutableRegionGraph::collapseNodes(const std::vector<GraphNodeId> &Members,
   GraphNodeId Collapsed = addNode(RepresentativeBlock, StructuredRoot);
   MutableRegionNode *CollapsedNode = getNode(Collapsed);
   CollapsedNode->Blocks = std::move(Blocks);
+  CollapsedNode->SourceNodes = std::move(SourceNodes);
   CollapsedNode->TailBlock = TailBlock;
   CollapsedNode->ExternalSuccs = std::move(ExternalSuccs);
   for (GraphNodeId Pred : Preds) {
