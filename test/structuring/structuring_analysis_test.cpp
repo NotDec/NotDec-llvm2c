@@ -746,6 +746,24 @@ void testGotoStructurerRendersVirtualBlockBodySource() {
   assert(FoundVirtualBody);
 }
 
+void testGotoStructurerRendersSyntheticForwarder() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(10, {}));
+  BlockId Synthetic = Cfg.createSyntheticBlock({10});
+
+  StructuredTree Tree = GotoStructurer().structure(Cfg);
+  bool FoundSyntheticBody = false;
+  for (const StructuredNode &Node : Tree.nodes()) {
+    if (Node.Kind == StructuredNodeKind::BasicBlock &&
+        Node.Block == Synthetic) {
+      FoundSyntheticBody = true;
+      assert(Node.Statements.empty());
+    }
+  }
+
+  assert(FoundSyntheticBody);
+}
+
 void testSolidityBodyBuilderRendersVirtualBlockBodySource() {
   std::vector<std::string> Payloads = {"copy-body"};
   StructuredTree Tree;
@@ -770,6 +788,37 @@ void testSolidityBodyBuilderRendersVirtualBlockBodySource() {
       notdec::backend::solidity::BodyBuilder::renderStructuredBody(Tree, Payloads);
   assert(std::find(Out.begin(), Out.end(), "// block_20:") != Out.end());
   assert(std::find(Out.begin(), Out.end(), "copy-body") != Out.end());
+}
+
+void testSolidityBodyBuilderRendersSyntheticForwarder() {
+  std::vector<std::string> Payloads;
+  StructuredTree Tree;
+
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Label;
+  Label.Kind = StructuredNodeKind::Label;
+  Label.Block = 20;
+  Root.Children.push_back(Tree.addNode(std::move(Label)));
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::BasicBlock;
+  Body.Block = 20;
+  Root.Children.push_back(Tree.addNode(std::move(Body)));
+
+  StructuredNode Goto;
+  Goto.Kind = StructuredNodeKind::Goto;
+  Goto.Target = 10;
+  Root.Children.push_back(Tree.addNode(std::move(Goto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  std::vector<std::string> Out =
+      notdec::backend::solidity::BodyBuilder::renderStructuredBody(Tree, Payloads);
+  assert(std::find(Out.begin(), Out.end(), "// block_20:") != Out.end());
+  assert(std::find(Out.begin(), Out.end(), "// goto block_10") != Out.end());
+  assert(std::find(Out.begin(), Out.end(), "unknown") == Out.end());
 }
 
 void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
@@ -4335,7 +4384,9 @@ int main() {
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
   testGotoStructurerRendersVirtualBlockBodySource();
+  testGotoStructurerRendersSyntheticForwarder();
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
+  testSolidityBodyBuilderRendersSyntheticForwarder();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRedirectPredecessorsIsAtomic();
   testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();
