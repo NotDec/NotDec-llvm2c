@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace notdec::backend::structuring {
@@ -21,6 +22,26 @@ struct FinalizedChildRegion {
   const Region *RegionData = nullptr;
   NodeId StructuredRoot = InvalidNodeId;
   SuccessorSnapshot Snapshot;
+};
+
+enum class OverlayMemberKind {
+  Block,
+  Region,
+  Structured,
+};
+
+// One member visible in a RegionOverlay. Angr stores either graph nodes or child
+// RegionOverlay objects in the same member set. NotDec keeps stable ids here so
+// the existing BlockId/NodeId based reducers can migrate in small steps.
+struct OverlayMember {
+  OverlayMemberKind Kind = OverlayMemberKind::Block;
+  BlockId Block = InvalidBlockId;
+  RegionId Region = InvalidRegionId;
+  NodeId StructuredRoot = InvalidNodeId;
+
+  static OverlayMember block(BlockId Id);
+  static OverlayMember region(RegionId Id);
+  static OverlayMember structured(NodeId Id);
 };
 
 // Angr's OverlayManager owns one mutable graph and makes every RegionOverlay a
@@ -41,6 +62,9 @@ public:
   const Region *getRegionData(RegionId Id) const;
   const RegionTree &regionTree() const { return Regions; }
   RegionTree visibleRegionTree() const;
+  RegionId parentOf(RegionId Id) const;
+  RegionId ownerOf(BlockId Id) const;
+  const std::vector<OverlayMember> &members(RegionId Id) const;
   NodeId getStructuredRoot(RegionId Id) const;
   bool isRegionFinalized(RegionId Id) const;
   std::vector<FinalizedChildRegion> finalizedChildren(RegionId Id) const;
@@ -55,10 +79,17 @@ private:
   struct CheckpointState {
     std::map<RegionId, NodeId> StructuredRoots;
     std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
+    std::map<RegionId, std::vector<OverlayMember>> Members;
+    std::map<BlockId, RegionId> BlockOwners;
   };
+
+  void initializeOverlayState();
 
   RegionTree Regions;
   std::map<RegionId, RegionOverlay> Overlays;
+  std::map<RegionId, RegionId> ParentRegions;
+  std::map<RegionId, std::vector<OverlayMember>> Members;
+  std::map<BlockId, RegionId> BlockOwners;
   std::map<RegionId, NodeId> StructuredRoots;
   std::map<RegionId, SuccessorSnapshot> SuccessorSnapshots;
   std::vector<CheckpointState> StructuredRootCheckpoints;

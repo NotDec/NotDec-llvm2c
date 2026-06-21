@@ -1,10 +1,68 @@
 #include "notdec-backends/Structuring/RegionOverlay.h"
 
+#include <algorithm>
+#include <set>
+#include <utility>
+
 namespace notdec::backend::structuring {
+
+OverlayMember OverlayMember::block(BlockId Id) {
+  OverlayMember Member;
+  Member.Kind = OverlayMemberKind::Block;
+  Member.Block = Id;
+  return Member;
+}
+
+OverlayMember OverlayMember::region(RegionId Id) {
+  OverlayMember Member;
+  Member.Kind = OverlayMemberKind::Region;
+  Member.Region = Id;
+  return Member;
+}
+
+OverlayMember OverlayMember::structured(NodeId Id) {
+  OverlayMember Member;
+  Member.Kind = OverlayMemberKind::Structured;
+  Member.StructuredRoot = Id;
+  return Member;
+}
 
 OverlayManager::OverlayManager(RegionTree Regions) : Regions(std::move(Regions)) {
   for (const Region &R : this->Regions.regions()) {
     Overlays.emplace(R.Id, RegionOverlay(this, R.Id));
+  }
+  initializeOverlayState();
+}
+
+void OverlayManager::initializeOverlayState() {
+  ParentRegions.clear();
+  Members.clear();
+  BlockOwners.clear();
+
+  for (const Region &R : Regions.regions()) {
+    Members[R.Id];
+    for (RegionId ChildId : R.Children) {
+      ParentRegions[ChildId] = R.Id;
+    }
+  }
+
+  for (const Region &R : Regions.regions()) {
+    std::set<BlockId> ChildBlocks;
+    for (RegionId ChildId : R.Children) {
+      const Region *Child = getRegionData(ChildId);
+      if (Child != nullptr) {
+        ChildBlocks.insert(Child->Blocks.begin(), Child->Blocks.end());
+      }
+      Members[R.Id].push_back(OverlayMember::region(ChildId));
+    }
+
+    for (BlockId Block : R.Blocks) {
+      if (ChildBlocks.count(Block) != 0) {
+        continue;
+      }
+      Members[R.Id].push_back(OverlayMember::block(Block));
+      BlockOwners[Block] = R.Id;
+    }
   }
 }
 
@@ -32,6 +90,22 @@ Region *OverlayManager::getRegionData(RegionId Id) {
 
 const Region *OverlayManager::getRegionData(RegionId Id) const {
   return Regions.getRegion(Id);
+}
+
+RegionId OverlayManager::parentOf(RegionId Id) const {
+  auto It = ParentRegions.find(Id);
+  return It == ParentRegions.end() ? InvalidRegionId : It->second;
+}
+
+RegionId OverlayManager::ownerOf(BlockId Id) const {
+  auto It = BlockOwners.find(Id);
+  return It == BlockOwners.end() ? InvalidRegionId : It->second;
+}
+
+const std::vector<OverlayMember> &OverlayManager::members(RegionId Id) const {
+  static const std::vector<OverlayMember> Empty;
+  auto It = Members.find(Id);
+  return It == Members.end() ? Empty : It->second;
 }
 
 RegionTree OverlayManager::visibleRegionTree() const {
@@ -83,7 +157,8 @@ OverlayManager::finalizedChildren(RegionId Id) const {
 }
 
 std::size_t OverlayManager::checkpoint() {
-  StructuredRootCheckpoints.push_back({StructuredRoots, SuccessorSnapshots});
+  StructuredRootCheckpoints.push_back(
+      {StructuredRoots, SuccessorSnapshots, Members, BlockOwners});
   return StructuredRootCheckpoints.size() - 1;
 }
 
@@ -94,6 +169,8 @@ void OverlayManager::rollback(std::size_t Checkpoint) {
   StructuredRoots = StructuredRootCheckpoints[Checkpoint].StructuredRoots;
   SuccessorSnapshots =
       StructuredRootCheckpoints[Checkpoint].SuccessorSnapshots;
+  Members = StructuredRootCheckpoints[Checkpoint].Members;
+  BlockOwners = StructuredRootCheckpoints[Checkpoint].BlockOwners;
 }
 
 void OverlayManager::commit(std::size_t Checkpoint) {

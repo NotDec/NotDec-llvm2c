@@ -399,6 +399,45 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   assert(Manager.finalizedChildren(RootId).empty());
 }
 
+void testOverlayManagerInitialMembersMatchRegionTree() {
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1, 2};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions));
+  assert(Manager.parentOf(ChildId) == RootId);
+  assert(Manager.ownerOf(0) == RootId);
+  assert(Manager.ownerOf(1) == ChildId);
+  assert(Manager.ownerOf(2) == ChildId);
+  assert(Manager.ownerOf(3) == RootId);
+
+  const std::vector<OverlayMember> &RootMembers = Manager.members(RootId);
+  assert(RootMembers.size() == 3);
+  assert(RootMembers[0].Kind == OverlayMemberKind::Region);
+  assert(RootMembers[0].Region == ChildId);
+  assert(RootMembers[1].Kind == OverlayMemberKind::Block);
+  assert(RootMembers[1].Block == 0);
+  assert(RootMembers[2].Kind == OverlayMemberKind::Block);
+  assert(RootMembers[2].Block == 3);
+
+  const std::vector<OverlayMember> &ChildMembers = Manager.members(ChildId);
+  assert(ChildMembers.size() == 2);
+  assert(ChildMembers[0].Kind == OverlayMemberKind::Block);
+  assert(ChildMembers[0].Block == 1);
+  assert(ChildMembers[1].Kind == OverlayMemberKind::Block);
+  assert(ChildMembers[1].Block == 2);
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1071,6 +1110,7 @@ int main() {
   testRecursiveStructurerVisitsChildBeforeParent();
   testGotoRegionSkipsChildBlocks();
   testVisibleRegionTreeOnlyIncludesFinalizedChildren();
+  testOverlayManagerInitialMembersMatchRegionTree();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testFinalizedChildSnapshotSkipsParentLoopHead();
