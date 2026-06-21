@@ -885,7 +885,21 @@ void OverlayManager::setStructuredRoot(RegionId Id, NodeId RootId,
     return;
   }
   StructuredRoots[Id] = RootId;
-  SuccessorSnapshots[Id] = Snapshot;
+  SuccessorSnapshot StoredSnapshot = Snapshot;
+  if (StoredSnapshot.NodeSuccessors.empty()) {
+    for (BlockId Succ : StoredSnapshot.Successors) {
+      appendUniqueNodeKey(StoredSnapshot.NodeSuccessors,
+                          OverlayNodeKey::block(Succ));
+    }
+  }
+  if (StoredSnapshot.Successors.empty()) {
+    for (const OverlayNodeKey &Succ : StoredSnapshot.NodeSuccessors) {
+      if (Succ.isBlock()) {
+        appendUniqueBlock(StoredSnapshot.Successors, Succ.Block);
+      }
+    }
+  }
+  SuccessorSnapshots[Id] = std::move(StoredSnapshot);
   finalizeRegionMembers(Id, RootId);
 }
 
@@ -954,7 +968,13 @@ NodeId RegionOverlay::structuredRoot() const {
 SuccessorSnapshot RegionOverlay::snapshotSuccessors() const {
   SuccessorSnapshot Snapshot;
   if (Manager != nullptr) {
+    Snapshot.NodeSuccessors = Manager->visibleNodeSuccessors(Id);
     Snapshot.Successors = Manager->visibleSuccessors(Id);
+  }
+  if (Snapshot.NodeSuccessors.empty()) {
+    for (BlockId Succ : successors()) {
+      appendUniqueNodeKey(Snapshot.NodeSuccessors, OverlayNodeKey::block(Succ));
+    }
   }
   if (Snapshot.Successors.empty()) {
     Snapshot.Successors = successors();

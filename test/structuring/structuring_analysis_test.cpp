@@ -385,6 +385,7 @@ void testGotoRegionSkipsChildBlocks() {
 
   SuccessorSnapshot Snapshot = LoopOverlay->snapshotSuccessors();
   assert(Snapshot.Successors.empty());
+  assert(Snapshot.NodeSuccessors.empty());
   LoopOverlay->finalize(LoopRoot, Snapshot);
   NodeId RootRoot = Structurer.structureRegion(Cfg, *RootOverlay, Tree);
   const StructuredNode *RootNode = Tree.getNode(RootRoot);
@@ -431,6 +432,8 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   SuccessorSnapshot FirstChildSnapshot =
       FirstChildOverlay->snapshotSuccessors();
   assert(FirstChildSnapshot.Successors == std::vector<BlockId>({3}));
+  assert(FirstChildSnapshot.NodeSuccessors ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(3)}));
   FirstChildOverlay->finalize(42, FirstChildSnapshot);
   std::vector<FinalizedChildRegion> Finalized = Manager.finalizedChildren(RootId);
   assert(Finalized.size() == 1);
@@ -438,6 +441,8 @@ void testVisibleRegionTreeOnlyIncludesFinalizedChildren() {
   assert(Finalized.front().RegionData->Id == FirstChildId);
   assert(Finalized.front().StructuredRoot == 42);
   assert(Finalized.front().Snapshot.Successors == std::vector<BlockId>({3}));
+  assert(Finalized.front().Snapshot.NodeSuccessors ==
+         std::vector<OverlayNodeKey>({OverlayNodeKey::block(3)}));
 
   RegionTree Visible = Manager.visibleRegionTree();
   const Region *VisibleRoot = Visible.getRegion(RootId);

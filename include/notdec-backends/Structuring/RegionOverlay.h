@@ -13,17 +13,6 @@ namespace notdec::backend::structuring {
 
 class RegionOverlay;
 
-struct SuccessorSnapshot {
-  std::vector<BlockId> Successors;
-};
-
-struct FinalizedChildRegion {
-  const RegionOverlay *Overlay = nullptr;
-  const Region *RegionData = nullptr;
-  NodeId StructuredRoot = InvalidNodeId;
-  SuccessorSnapshot Snapshot;
-};
-
 enum class OverlayMemberKind {
   Block,
   Region,
@@ -56,6 +45,21 @@ struct OverlayNodeKey {
   bool isStructured() const { return Kind == OverlayNodeKind::Structured; }
   bool operator<(const OverlayNodeKey &Other) const;
   bool operator==(const OverlayNodeKey &Other) const;
+};
+
+struct SuccessorSnapshot {
+  // Block successors are kept for the current renderer-facing graph builder.
+  // Node successors preserve Angr-style overlay node identity across child
+  // finalize so SAILR/deoptimization can stop depending on block-only state.
+  std::vector<BlockId> Successors;
+  std::vector<OverlayNodeKey> NodeSuccessors;
+};
+
+struct FinalizedChildRegion {
+  const RegionOverlay *Overlay = nullptr;
+  const Region *RegionData = nullptr;
+  NodeId StructuredRoot = InvalidNodeId;
+  SuccessorSnapshot Snapshot;
 };
 
 // One member visible in a RegionOverlay. Angr stores either graph nodes or child
