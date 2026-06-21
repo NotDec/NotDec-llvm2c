@@ -7,6 +7,7 @@
 #include "notdec-backends/Structuring/RegionOverlay.h"
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
+#include "notdec-backends/Structuring/StructuringEvaluator.h"
 
 #include <algorithm>
 #include <cassert>
@@ -164,6 +165,30 @@ public:
 
   BlockId FailingHead = InvalidBlockId;
   std::vector<BlockId> SeenHeads;
+};
+
+class GotoEmittingRegionStructurer : public RegionStructurer {
+public:
+  NodeId structureRegion(const StructuredCFG &Cfg, const Region &R,
+                         StructuredTree &Tree) override {
+    (void)Cfg;
+    StructuredNode Root;
+    Root.Kind = StructuredNodeKind::Sequence;
+
+    StructuredNode Body;
+    Body.Kind = StructuredNodeKind::BasicBlock;
+    Body.Block = R.Head;
+    Root.Children.push_back(Tree.addNode(std::move(Body)));
+
+    StructuredNode Goto;
+    Goto.Kind = StructuredNodeKind::Goto;
+    Goto.Target = Target;
+    Root.Children.push_back(Tree.addNode(std::move(Goto)));
+
+    return Tree.addNode(std::move(Root));
+  }
+
+  BlockId Target = InvalidBlockId;
 };
 
 class GotoRegionTester : public GotoStructurer {
@@ -469,6 +494,21 @@ void testGotoManagerCollectsIfGotoSources() {
   assert(Manager.size() == 1);
   assert(Manager.isGotoEdge(11, 30));
   assert(Manager.gotosInBlock(10).empty());
+}
+
+void testStructuringEvaluatorCollectsGotoSummary() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  GotoEmittingRegionStructurer Structurer;
+  Structurer.Target = 1;
+  StructuringEvaluation Result =
+      StructuringEvaluator().evaluate(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Tree.root() != InvalidNodeId);
+  assert(Result.Gotos.isGotoEdge(0, 1));
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -2834,6 +2874,7 @@ int main() {
   testStructurerRegistryNames();
   testGotoManagerCollectsSequenceGotoSources();
   testGotoManagerCollectsIfGotoSources();
+  testStructuringEvaluatorCollectsGotoSummary();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();

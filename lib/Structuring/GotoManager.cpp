@@ -41,8 +41,7 @@ void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
   for (NodeId Child : Node->Children) {
     collectGotos(Tree, Child, Source, Gotos);
     const StructuredNode *ChildNode = Tree.getNode(Child);
-    if (ChildNode != nullptr && ChildNode->Block != InvalidBlockId &&
-        ChildNode->Kind != StructuredNodeKind::Label) {
+    if (ChildNode != nullptr && ChildNode->Block != InvalidBlockId) {
       Source = ChildNode->Block;
     }
   }
