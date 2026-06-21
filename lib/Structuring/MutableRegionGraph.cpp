@@ -452,7 +452,8 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
       continue;
     }
 
-    if (Member.Kind != OverlayMemberKind::Structured) {
+    if (Member.Kind != OverlayMemberKind::Region &&
+        Member.Kind != OverlayMemberKind::Structured) {
       continue;
     }
 
@@ -461,31 +462,34 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
       continue;
     }
 
-    // Angr's finalize() replaces a reduced child region with its result node
-    // in the parent overlay view. The overlay member table now records that
-    // replacement; the graph builder turns it into one grouped reducer node.
-    GraphNodeId NodeId =
-        Graph.addNode(ChildRegion->Head, Member.StructuredRoot);
+    // Parent overlay views see child regions as single members. If the child
+    // was finalized, the same grouped node also carries its structured root.
+    GraphNodeId NodeId = Graph.addNode(
+        ChildRegion->Head, Member.Kind == OverlayMemberKind::Structured
+                               ? Member.StructuredRoot
+                               : InvalidNodeId);
     MutableRegionNode *Node = Graph.getNode(NodeId);
     if (Node != nullptr) {
       Node->Blocks = ChildRegion->Blocks;
-      auto SnapshotIt = Overlay.manager()->finalizedChildren(Overlay.id());
-      for (const FinalizedChildRegion &Child : SnapshotIt) {
-        if (Child.RegionData == nullptr ||
-            Child.RegionData->Id != ChildRegion->Id) {
-          continue;
-        }
-        for (BlockId Succ : Child.Snapshot.Successors) {
-          if (containsBlock(ChildRegion->Blocks, Succ)) {
+      if (Member.Kind == OverlayMemberKind::Structured) {
+        auto SnapshotIt = Overlay.manager()->finalizedChildren(Overlay.id());
+        for (const FinalizedChildRegion &Child : SnapshotIt) {
+          if (Child.RegionData == nullptr ||
+              Child.RegionData->Id != ChildRegion->Id) {
             continue;
           }
-          // Angr's finalize() does not reconnect a child continue edge to the
-          // enclosing loop head; exposing it here would add a fake parent edge.
-          if (R->Kind == RegionKind::NaturalLoop && Succ == R->Head) {
-            continue;
+          for (BlockId Succ : Child.Snapshot.Successors) {
+            if (containsBlock(ChildRegion->Blocks, Succ)) {
+              continue;
+            }
+            // Angr's finalize() does not reconnect a child continue edge to the
+            // enclosing loop head; exposing it here would add a fake parent edge.
+            if (R->Kind == RegionKind::NaturalLoop && Succ == R->Head) {
+              continue;
+            }
+            appendUniqueBlock(Node->ExternalSuccs, Succ);
+            PendingSnapshotSuccs.push_back({NodeId, Succ});
           }
-          appendUniqueBlock(Node->ExternalSuccs, Succ);
-          PendingSnapshotSuccs.push_back({NodeId, Succ});
         }
       }
     }
@@ -502,26 +506,44 @@ MutableRegionGraph MutableRegionGraph::build(const StructuredCFG &Cfg,
     }
   }
 
-  for (BlockId Block : R->Blocks) {
-    const CFGBlock *CfgBlock = Cfg.getBlock(Block);
-    if (CfgBlock == nullptr) {
+  (void)Cfg;
+  for (const OverlayViewEdge &Edge :
+       Overlay.manager()->quotientEdges(Overlay.id(), /*IncludeSuccessors=*/true)) {
+    const Region *FromRegion = Edge.From.Kind == OverlayMemberKind::Block
+                                   ? nullptr
+                                   : Overlay.manager()->getRegionData(Edge.From.Region);
+    BlockId FromBlock = Edge.From.Kind == OverlayMemberKind::Block
+                            ? Edge.From.Block
+                            : (FromRegion == nullptr ? InvalidBlockId
+                                                     : FromRegion->Head);
+    auto FromIt = BlockToNode.find(FromBlock);
+    if (FromIt == BlockToNode.end()) {
       continue;
     }
 
-    GraphNodeId From = BlockToNode.at(Block);
-    for (BlockId Succ : CfgBlock->Successors) {
-      auto It = BlockToNode.find(Succ);
-      if (It == BlockToNode.end()) {
-        MutableRegionNode *FromNode = Graph.getNode(From);
-        if (FromNode != nullptr) {
-          appendUniqueBlock(FromNode->ExternalSuccs, Succ);
-        }
-        Graph.addEdge(From, getOrCreateExternalPlaceholder(Succ));
-        continue;
+    GraphNodeId From = FromIt->second;
+    if (!Edge.targetsMember()) {
+      MutableRegionNode *FromNode = Graph.getNode(From);
+      if (FromNode != nullptr) {
+        appendUniqueBlock(FromNode->ExternalSuccs, Edge.ExternalSuccessor);
       }
-      if (From != It->second || Succ == Block) {
-        Graph.addEdge(From, It->second);
-      }
+      Graph.addEdge(From, getOrCreateExternalPlaceholder(Edge.ExternalSuccessor));
+      continue;
+    }
+
+    const Region *ToRegion = Edge.To.Kind == OverlayMemberKind::Block
+                                 ? nullptr
+                                 : Overlay.manager()->getRegionData(Edge.To.Region);
+    BlockId ToBlock = Edge.To.Kind == OverlayMemberKind::Block
+                          ? Edge.To.Block
+                          : (ToRegion == nullptr ? InvalidBlockId
+                                                 : ToRegion->Head);
+    auto ToIt = BlockToNode.find(ToBlock);
+    if (ToIt == BlockToNode.end()) {
+      continue;
+    }
+    if (From != ToIt->second || ToBlock == FromBlock) {
+      Graph.addEdge(From, ToIt->second);
     }
   }
 

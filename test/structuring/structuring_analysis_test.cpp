@@ -646,6 +646,45 @@ void testOverlayManagerQuotientKeepsBlockSelfLoop() {
   assert(HasExternalFollow);
 }
 
+void testOverlayGraphBuildsEdgesFromQuotientView() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {1, 3}));
+  Cfg.addBlock(block(3, {}));
+
+  RegionTree Regions;
+  Region Child;
+  Child.Kind = RegionKind::NaturalLoop;
+  Child.Head = 1;
+  Child.Blocks = {1, 2};
+  RegionId ChildId = Regions.addRegion(Child);
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3};
+  Root.Children = {ChildId};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+
+  GraphNodeId EntryId = Graph.getNodeForBlock(0);
+  GraphNodeId ChildHeadId = Graph.getNodeForBlock(1);
+  GraphNodeId FollowId = Graph.getNodeForBlock(3);
+  GraphNodeId ChildTailId = Graph.getNodeForBlock(2);
+  assert(EntryId != InvalidGraphNodeId);
+  assert(ChildHeadId != InvalidGraphNodeId);
+  assert(FollowId != InvalidGraphNodeId);
+  assert(ChildTailId == ChildHeadId);
+  assert(Graph.hasEdge(EntryId, ChildHeadId));
+  assert(Graph.hasEdge(ChildHeadId, FollowId));
+  assert(!Graph.hasEdge(ChildHeadId, ChildHeadId));
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1364,6 +1403,7 @@ int main() {
   testSnapshotSuccessorsFallsBackWithoutSharedCFG();
   testOverlayManagerDerivesQuotientEdges();
   testOverlayManagerQuotientKeepsBlockSelfLoop();
+  testOverlayGraphBuildsEdgesFromQuotientView();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();
