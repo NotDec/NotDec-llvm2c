@@ -1089,17 +1089,87 @@ collectVirtualizableEdges(const Region &R, const MutableRegionGraph &Graph) {
   return Edges;
 }
 
+std::vector<VirtualEdge> collectOverlayVirtualizableEdges(
+    const Region &R, const MutableRegionGraph &Graph,
+    const RegionOverlay *Overlay) {
+  if (Overlay == nullptr || Overlay->manager() == nullptr) {
+    return collectVirtualizableEdges(R, Graph);
+  }
+
+  std::map<OverlayNodeKey, GraphNodeId> NodeBySource;
+  for (const MutableRegionNode &Node : Graph.nodes()) {
+    if (!Node.Active) {
+      continue;
+    }
+    for (const OverlayNodeKey &Source : Node.SourceNodes) {
+      NodeBySource.emplace(Source, Node.Id);
+    }
+  }
+
+  std::vector<VirtualEdge> Edges;
+  std::map<OverlayNodeKey, unsigned> NodeOrder =
+      Overlay->manager()->quasiTopologicalNodeOrder(Overlay->id());
+  for (const OverlayViewEdge &Edge :
+       Overlay->manager()->quotientEdgesAcyclic(
+           Overlay->id(), /*IncludeSuccessors=*/true, NodeOrder)) {
+    if (!Edge.sourcesMember()) {
+      continue;
+    }
+    OverlayNodeKey FromNode = Overlay->manager()->nodeKey(Edge.From);
+    auto FromIt = NodeBySource.find(FromNode);
+    if (FromIt == NodeBySource.end()) {
+      continue;
+    }
+
+    OverlayNodeKey ToNode =
+        Edge.targetsMember() ? Overlay->manager()->nodeKey(Edge.To)
+                             : Edge.targetNode();
+    auto ToIt = NodeBySource.find(ToNode);
+    if (ToIt == NodeBySource.end()) {
+      continue;
+    }
+
+    const MutableRegionNode *FromGraphNode = Graph.getNode(FromIt->second);
+    const MutableRegionNode *ToGraphNode = Graph.getNode(ToIt->second);
+    if (FromGraphNode == nullptr || ToGraphNode == nullptr ||
+        FromGraphNode->ExternalPlaceholder || !FromGraphNode->Active ||
+        !ToGraphNode->Active) {
+      continue;
+    }
+    if (!Graph.hasEdge(FromGraphNode->Id, ToGraphNode->Id)) {
+      continue;
+    }
+
+    BlockId FromBlock = FromGraphNode->Blocks.empty()
+                            ? InvalidBlockId
+                            : FromGraphNode->Blocks.back();
+    BlockId ToBlock = ToGraphNode->Blocks.empty()
+                          ? InvalidBlockId
+                          : ToGraphNode->Blocks.front();
+    VirtualEdgeKind Kind = VirtualEdgeKind::Goto;
+    if (R.Kind == RegionKind::NaturalLoop && ToBlock == R.Head) {
+      Kind = VirtualEdgeKind::Continue;
+    }
+    Edges.push_back(
+        {FromGraphNode->Id, ToGraphNode->Id, FromBlock, ToBlock, Kind});
+  }
+
+  return Edges;
+}
+
 std::vector<VirtualEdge>
 filterByAngrLastResortPriority(const Region &R,
                                const MutableRegionGraphAnalysis &Analysis,
-                               const std::vector<VirtualEdge> &Edges) {
+                               const std::vector<VirtualEdge> &Edges,
+                               bool IncludeAcyclicDroppedEdges = true) {
   // Match Angr Phoenix's last-resort buckets: prefer edges where neither end
-  // dominates the other, then edges whose source does not dominate the target.
-  // If the root acyclic view had to drop cycle-closing edges, use them only
-  // after the normal buckets are empty. The final per-bucket order is still
-  // delegated to Phoenix/SAILR.
+  // dominates the other, then edges whose source does not dominate the target,
+  // then the remaining edges. If the root acyclic view had to drop
+  // cycle-closing edges, use them only after the Angr buckets are empty. The
+  // final per-bucket order is still delegated to Phoenix/SAILR.
   std::vector<VirtualEdge> NoDominanceEdges;
   std::vector<VirtualEdge> SecondaryEdges;
+  std::vector<VirtualEdge> OtherEdges;
 
   for (const VirtualEdge &Edge : Edges) {
     bool FromDominatesTo = Analysis.dominates(Edge.From, Edge.To);
@@ -1108,6 +1178,8 @@ filterByAngrLastResortPriority(const Region &R,
       NoDominanceEdges.push_back(Edge);
     } else if (!FromDominatesTo) {
       SecondaryEdges.push_back(Edge);
+    } else {
+      OtherEdges.push_back(Edge);
     }
   }
 
@@ -1117,7 +1189,10 @@ filterByAngrLastResortPriority(const Region &R,
   if (!SecondaryEdges.empty()) {
     return SecondaryEdges;
   }
-  if (R.Kind == RegionKind::Root) {
+  if (!OtherEdges.empty()) {
+    return OtherEdges;
+  }
+  if (IncludeAcyclicDroppedEdges && R.Kind == RegionKind::Root) {
     return Analysis.AcyclicDroppedEdges;
   }
   return {};
@@ -2754,8 +2829,13 @@ bool PhoenixStructurer::virtualizeOneEdge(const StructuredCFG &Cfg,
     }
   }
 
-  std::vector<VirtualEdge> Candidates = filterByAngrLastResortPriority(
-      R, Analysis, collectVirtualizableEdges(R, Graph));
+  std::vector<VirtualEdge> CandidateEdges =
+      Overlay == nullptr ? collectVirtualizableEdges(R, Graph)
+                         : collectOverlayVirtualizableEdges(R, Graph, Overlay);
+  std::vector<VirtualEdge> Candidates =
+      filterByAngrLastResortPriority(
+          R, Analysis, CandidateEdges,
+          /*IncludeAcyclicDroppedEdges=*/Overlay == nullptr);
   std::vector<VirtualEdge> Edges =
       orderVirtualizableEdges(Cfg, Graph, Analysis, std::move(Candidates));
   if (Edges.empty()) {

@@ -67,10 +67,12 @@ public:
     (void)Cfg;
     (void)Graph;
     CapturedOrder = Analysis.NodeOrder;
+    CapturedEdges = Edges;
     return {};
   }
 
   mutable std::map<GraphNodeId, unsigned> CapturedOrder;
+  mutable std::vector<VirtualEdge> CapturedEdges;
 };
 
 class RecordingRegionStructurer : public RegionStructurer {
@@ -858,6 +860,38 @@ void testPhoenixOverlayPathUsesOverlayNodeOrder() {
   assert(OverlayPath.CapturedOrder[1] == 1);
   assert(OverlayPath.CapturedOrder[2] == 2);
   assert(OverlayPath.CapturedOrder != Analysis.NodeOrder);
+}
+
+void testPhoenixOverlayLastResortUsesOverlayAcyclicCandidates() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {0, 2}));
+  Cfg.addBlock(block(2, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+
+  RegionTree Regions;
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, *RootOverlay);
+  OrderCaptureStructurer Structurer;
+  StructuredTree Tree;
+  assert(!Structurer.virtualizeOneEdge(Cfg, Root, Graph, Tree, RootOverlay));
+
+  bool HasBackEdge =
+      std::find_if(Structurer.CapturedEdges.begin(),
+                   Structurer.CapturedEdges.end(), [](const VirtualEdge &Edge) {
+                     return Edge.FromBlock == 1 && Edge.ToBlock == 0;
+                   }) != Structurer.CapturedEdges.end();
+  assert(!Structurer.CapturedEdges.empty());
+  assert(!HasBackEdge);
 }
 
 void testOverlayGraphBuildsEdgesFromQuotientView() {
@@ -2404,6 +2438,7 @@ int main() {
   testOverlayManagerQuotientKeepsBlockSelfLoop();
   testOverlayAcyclicViewsFilterBackEdgesByOrder();
   testPhoenixOverlayPathUsesOverlayNodeOrder();
+  testPhoenixOverlayLastResortUsesOverlayAcyclicCandidates();
   testOverlayGraphBuildsEdgesFromQuotientView();
   testOverlayFullViewAddsLoopSuccessorEdges();
   testOverlayViewOnlyMutationsAffectQuotientEdges();
