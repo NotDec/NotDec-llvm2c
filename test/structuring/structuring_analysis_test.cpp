@@ -849,6 +849,18 @@ void testStructuredCFGFindsCaseOnlyPredecessors() {
   assert(Cfg.predecessorsOf(2) == std::vector<BlockId>{0});
 }
 
+void testStructuredCFGSuccessorsOfIncludesCaseTargets() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {9});
+  Switch.Cases.push_back({{}, 2});
+  Cfg.addBlock(std::move(Switch));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(9, {}));
+
+  assert(Cfg.successorsOf(0) == std::vector<BlockId>({9, 2}));
+}
+
 void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -3854,6 +3866,7 @@ int main() {
   testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();
   testStructuredCFGReplaceEdgeUpdatesSwitchCases();
   testStructuredCFGFindsCaseOnlyPredecessors();
+  testStructuredCFGSuccessorsOfIncludesCaseTargets();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();

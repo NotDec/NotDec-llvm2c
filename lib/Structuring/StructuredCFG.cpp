@@ -92,6 +92,22 @@ bool StructuredCFG::hasEdge(BlockId From, BlockId To) const {
   return Block != nullptr && hasTarget(*Block, To);
 }
 
+std::vector<BlockId> StructuredCFG::successorsOf(BlockId From) const {
+  std::vector<BlockId> Succs;
+  const CFGBlock *Block = getBlock(From);
+  if (Block == nullptr) {
+    return Succs;
+  }
+  Succs.reserve(Block->Successors.size() + Block->Cases.size());
+  for (BlockId Succ : Block->Successors) {
+    Succs.push_back(Succ);
+  }
+  for (const SwitchCase &Case : Block->Cases) {
+    Succs.push_back(Case.Target);
+  }
+  return Succs;
+}
+
 std::vector<BlockId> StructuredCFG::predecessorsOf(BlockId Target) const {
   std::vector<BlockId> Preds;
   for (const CFGBlock &Block : Blocks) {

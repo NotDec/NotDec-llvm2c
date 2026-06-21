@@ -214,11 +214,7 @@ connectedPredecessorComponents(const StructuredCFG &Graph,
         }
       }
 
-      const CFGBlock *Block = Graph.getBlock(Current);
-      if (Block == nullptr) {
-        continue;
-      }
-      for (BlockId Succ : Block->Successors) {
+      for (BlockId Succ : Graph.successorsOf(Current)) {
         if (NodeSet.count(Succ) != 0 && Visited.count(Succ) == 0) {
           Stack.push_back(Succ);
         }
@@ -234,16 +230,13 @@ connectedPredecessorComponents(const StructuredCFG &Graph,
   return Components;
 }
 
-bool switchReachesBlock(const CFGBlock &Block, BlockId Target) {
+bool switchReachesBlock(const StructuredCFG &Graph, const CFGBlock &Block,
+                        BlockId Target) {
   if (Block.Terminator != TerminatorKind::Switch) {
     return false;
   }
-  if (std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
-      Block.Successors.end()) {
-    return true;
-  }
-  for (const SwitchCase &Case : Block.Cases) {
-    if (Case.Target == Target) {
+  for (BlockId Succ : Graph.successorsOf(Block.Id)) {
+    if (Succ == Target) {
       return true;
     }
   }
@@ -273,12 +266,16 @@ bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
   return false;
 }
 
-BlockId defaultSwitchSuccessor(const CFGBlock &Block) {
-  if (Block.Terminator != TerminatorKind::Switch ||
-      Block.Successors.empty()) {
+BlockId defaultSwitchSuccessor(const StructuredCFG &Graph,
+                              const CFGBlock &Block) {
+  if (Block.Terminator != TerminatorKind::Switch) {
     return InvalidBlockId;
   }
-  return Block.Successors.front();
+  std::vector<BlockId> Succs = Graph.successorsOf(Block.Id);
+  if (Succs.empty()) {
+    return InvalidBlockId;
+  }
+  return Succs.front();
 }
 
 // Copy the whole return region once, then retarget every predecessor in the
@@ -368,7 +365,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
 
     std::vector<BlockId> SwitchPreds;
     for (const CFGBlock &PredBlock : Graph.blocks()) {
-      if (switchReachesBlock(PredBlock, EntryId)) {
+      if (switchReachesBlock(Graph, PredBlock, EntryId)) {
         SwitchPreds.push_back(PredBlock.Id);
       }
     }
@@ -381,11 +378,11 @@ bool SwitchReusedEntryRewriter::runOnGraph(
     SwitchPreds.erase(std::unique(SwitchPreds.begin(), SwitchPreds.end()),
                       SwitchPreds.end());
 
-    if (Entry->Successors.empty()) {
+    if (Graph.successorsOf(EntryId).empty()) {
       continue;
     }
 
-    std::vector<BlockId> EntrySuccessors = Entry->Successors;
+    std::vector<BlockId> EntrySuccessors = Graph.successorsOf(EntryId);
     bool First = true;
     for (BlockId Pred : SwitchPreds) {
       if (First) {
@@ -430,13 +427,14 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
   std::map<BlockId, std::vector<BlockId>> ToUpdate;
 
   for (const CFGBlock &Block : Graph.blocks()) {
-    BlockId DefaultTarget = defaultSwitchSuccessor(Block);
+    BlockId DefaultTarget = defaultSwitchSuccessor(Graph, Block);
     if (DefaultTarget == InvalidBlockId) {
       continue;
     }
 
     const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
-    if (DefaultBlock == nullptr || DefaultBlock->Successors.size() != 1) {
+    if (DefaultBlock == nullptr ||
+        Graph.successorsOf(DefaultTarget).size() != 1) {
       continue;
     }
 
@@ -462,10 +460,11 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     }
 
     const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
-    if (DefaultBlock == nullptr || DefaultBlock->Successors.size() != 1) {
+    if (DefaultBlock == nullptr ||
+        Graph.successorsOf(DefaultTarget).size() != 1) {
       continue;
     }
-    std::vector<BlockId> DefaultSuccessors = DefaultBlock->Successors;
+    std::vector<BlockId> DefaultSuccessors = Graph.successorsOf(DefaultTarget);
 
     for (BlockId Pred : PredsToUpdate) {
       if (!Graph.hasEdge(Pred, DefaultTarget)) {
@@ -652,7 +651,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     }
 
     const CFGBlock *TargetBlock = Graph.getBlock(Target);
-    if (TargetBlock == nullptr || TargetBlock->Successors.size() != 1) {
+    if (TargetBlock == nullptr || Graph.successorsOf(Target).size() != 1) {
       continue;
     }
     if (TargetBlock->Statements.size() > MaxDuplicatedStatements) {
@@ -674,7 +673,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     if (TargetBlock == nullptr) {
       continue;
     }
-    std::vector<BlockId> TargetSuccessors = TargetBlock->Successors;
+    std::vector<BlockId> TargetSuccessors = Graph.successorsOf(Target);
 
     std::vector<BlockId> CurrentPreds = predecessorsOf(Graph, Target);
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
