@@ -835,6 +835,41 @@ void testOverlayViewOnlyMutationsAffectQuotientEdges() {
   assert(Manager.visibleSuccessors(LoopId) == std::vector<BlockId>({1, 2}));
 }
 
+void testOverlaySharedEdgeMutationsUpdateViews() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+  Cfg.addBlock(block(2, {}));
+
+  RegionTree Regions;
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0};
+  RegionId RootId = Regions.addRegion(Root);
+  Regions.setRoot(RootId);
+
+  OverlayManager Manager(std::move(Regions), Cfg);
+  RegionOverlay *RootOverlay = Manager.root();
+  assert(RootOverlay != nullptr);
+  std::size_t Checkpoint = Manager.checkpoint();
+
+  RootOverlay->hideEdge(0, 1);
+  assert(Manager.visibleSuccessors(RootId).empty());
+  RootOverlay->addEdge(0, 1);
+  assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({1}));
+
+  RootOverlay->addEdge(0, 2);
+  assert(Manager.visibleSuccessors(RootId) ==
+         std::vector<BlockId>({1, 2}));
+  RootOverlay->detachEdge(0, 1);
+  assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({2}));
+
+  Manager.rollback(Checkpoint);
+  Manager.commit(Checkpoint);
+  assert(Manager.visibleSuccessors(RootId) == std::vector<BlockId>({1}));
+}
+
 void testChildOverlayGraphKeepsExternalFollowPlaceholder() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {0, 1}));
@@ -1557,6 +1592,7 @@ int main() {
   testOverlayGraphBuildsEdgesFromQuotientView();
   testOverlayFullViewAddsLoopSuccessorEdges();
   testOverlayViewOnlyMutationsAffectQuotientEdges();
+  testOverlaySharedEdgeMutationsUpdateViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
   testOverlayGraphUsesStructuredMemberSourceRegion();

@@ -288,6 +288,17 @@ bool OverlayManager::isHiddenFullEdge(RegionId Id,
                       }) != It->second.end();
 }
 
+void OverlayManager::clearHiddenEdge(BlockId From, BlockId To) {
+  for (auto &Entry : HiddenEdges) {
+    std::vector<OverlayHiddenEdge> &Edges = Entry.second;
+    Edges.erase(std::remove_if(Edges.begin(), Edges.end(),
+                               [&](const OverlayHiddenEdge &Edge) {
+                                 return Edge.From == From && Edge.To == To;
+                               }),
+                Edges.end());
+  }
+}
+
 std::vector<BlockId> OverlayManager::visibleSuccessors(RegionId Id) const {
   std::vector<BlockId> Result;
   const std::vector<OverlayMember> &ViewMembers = members(Id);
@@ -401,6 +412,21 @@ OverlayManager::quotientEdges(RegionId Id, bool IncludeSuccessors) const {
     }
   }
   return Result;
+}
+
+void OverlayManager::addEdge(BlockId From, BlockId To) {
+  appendUniqueBlock(SharedSuccessors[From], To);
+  clearHiddenEdge(From, To);
+}
+
+void OverlayManager::detachEdge(BlockId From, BlockId To) {
+  auto It = SharedSuccessors.find(From);
+  if (It == SharedSuccessors.end()) {
+    return;
+  }
+  std::vector<BlockId> &Succs = It->second;
+  Succs.erase(std::remove(Succs.begin(), Succs.end(), To), Succs.end());
+  clearHiddenEdge(From, To);
 }
 
 void OverlayManager::hideEdge(RegionId Id, BlockId From, BlockId To) {
@@ -647,6 +673,18 @@ SuccessorSnapshot RegionOverlay::snapshotSuccessors() const {
     Snapshot.Successors = successors();
   }
   return Snapshot;
+}
+
+void RegionOverlay::addEdge(BlockId From, BlockId To) {
+  if (Manager != nullptr) {
+    Manager->addEdge(From, To);
+  }
+}
+
+void RegionOverlay::detachEdge(BlockId From, BlockId To) {
+  if (Manager != nullptr) {
+    Manager->detachEdge(From, To);
+  }
 }
 
 void RegionOverlay::hideEdge(BlockId From, BlockId To) {

@@ -98,6 +98,8 @@ public:
   std::vector<BlockId> visibleSuccessors(RegionId Id) const;
   std::vector<OverlayViewEdge> quotientEdges(RegionId Id,
                                              bool IncludeSuccessors) const;
+  void addEdge(BlockId From, BlockId To);
+  void detachEdge(BlockId From, BlockId To);
   void hideEdge(RegionId Id, BlockId From, BlockId To);
   void hideEdgeToSuccessor(RegionId Id, BlockId Successor);
   void removeEdgeWithSuccessorsOnly(RegionId Id,
@@ -141,6 +143,7 @@ private:
       const OverlayEdgeEndpoint &To) const;
   bool isHiddenEdge(RegionId Id, BlockId From, BlockId To) const;
   bool isHiddenFullEdge(RegionId Id, const OverlayViewEdge &Edge) const;
+  void clearHiddenEdge(BlockId From, BlockId To);
   void finalizeRegionMembers(RegionId Id, NodeId RootId);
   void dissolveRegionMembers(RegionId Id);
 
@@ -178,6 +181,8 @@ public:
   bool isCollapsed() const;
   NodeId structuredRoot() const;
   SuccessorSnapshot snapshotSuccessors() const;
+  void addEdge(BlockId From, BlockId To);
+  void detachEdge(BlockId From, BlockId To);
   void hideEdge(BlockId From, BlockId To);
   void hideEdgeToSuccessor(BlockId Successor);
   void removeEdgeWithSuccessorsOnly(const OverlayEdgeEndpoint &From,
