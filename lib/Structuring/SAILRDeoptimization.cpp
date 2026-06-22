@@ -820,13 +820,13 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     if (DefaultTarget == InvalidBlockId) {
       continue;
     }
-    SwitchPredsByDefault[DefaultTarget].push_back(Block.Id);
 
     const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
     if (DefaultBlock == nullptr ||
         Graph.successorsOf(DefaultTarget).size() != 1) {
       continue;
     }
+    SwitchPredsByDefault[DefaultTarget].push_back(Block.Id);
 
     std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
     if (Preds.size() <= 1) {
