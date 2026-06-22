@@ -298,13 +298,12 @@ connectedPredecessorComponents(const StructuredCFG &Graph,
   return Components;
 }
 
-bool switchReachesBlock(const StructuredCFG &Graph, const CFGBlock &Block,
-                        BlockId Target) {
+bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (Block.Terminator != TerminatorKind::Switch) {
     return false;
   }
-  for (BlockId Succ : Graph.successorsOf(Block.Id)) {
-    if (Succ == Target) {
+  for (const SwitchCase &Case : Block.Cases) {
+    if (Case.Target == Target) {
       return true;
     }
   }
@@ -647,7 +646,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
 
     std::vector<BlockId> SwitchPreds;
     for (const CFGBlock &PredBlock : Graph.blocks()) {
-      if (switchReachesBlock(Graph, PredBlock, EntryId)) {
+      if (switchCaseReachesBlock(PredBlock, EntryId)) {
         SwitchPreds.push_back(PredBlock.Id);
       }
     }

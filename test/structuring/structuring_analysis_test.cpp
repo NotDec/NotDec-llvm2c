@@ -2105,9 +2105,9 @@ void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
 
 void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
   StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {1, 3}));
+  Cfg.addBlock(switchBlock(0, {3, 1}));
   Cfg.addBlock(block(1, {4}));
-  Cfg.addBlock(switchBlock(2, {1, 5}));
+  Cfg.addBlock(switchBlock(2, {5, 1}));
   Cfg.addBlock(block(3, {4}));
   Cfg.addBlock(block(4, {}));
   Cfg.addBlock(block(5, {}));
@@ -2126,11 +2126,11 @@ void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
   const CFGBlock *Switch2 = Cfg.getBlock(2);
   const CFGBlock *EntryBlock = Cfg.getBlock(1);
   assert(Switch0 != nullptr && Switch2 != nullptr && EntryBlock != nullptr);
-  assert(Switch0->Successors.front() == 1);
-  assert(Switch2->Successors.front() != 1);
+  assert(Switch0->Cases.front().Target == 1);
+  assert(Switch2->Cases.front().Target != 1);
   assert(hasSinglePayload(EntryBlock->Statements, 21));
 
-  BlockId CopyId = Switch2->Successors.front();
+  BlockId CopyId = Switch2->Cases.front().Target;
   const CFGBlock *Copy = Cfg.getBlock(CopyId);
   assert(Copy != nullptr);
   assert(Copy->Successors == std::vector<BlockId>{4});
@@ -2142,9 +2142,9 @@ void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
 
 void testSwitchReusedEntryRewriterCopiesEntryTailRegion() {
   StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {1, 3}));
+  Cfg.addBlock(switchBlock(0, {3, 1}));
   Cfg.addBlock(block(1, {4}));
-  Cfg.addBlock(switchBlock(2, {1, 5}));
+  Cfg.addBlock(switchBlock(2, {5, 1}));
   Cfg.addBlock(block(3, {6}));
   Cfg.addBlock(block(4, {6}));
   Cfg.addBlock(block(5, {}));
@@ -2166,11 +2166,11 @@ void testSwitchReusedEntryRewriterCopiesEntryTailRegion() {
   const CFGBlock *Switch2 = Cfg.getBlock(2);
   const CFGBlock *EntryBlock = Cfg.getBlock(1);
   assert(Switch0 != nullptr && Switch2 != nullptr && EntryBlock != nullptr);
-  assert(Switch0->Successors.front() == 1);
-  assert(Switch2->Successors.front() != 1);
+  assert(Switch0->Cases.front().Target == 1);
+  assert(Switch2->Cases.front().Target != 1);
   assert(hasSinglePayload(EntryBlock->Statements, 22));
 
-  const CFGBlock *Copy = Cfg.getBlock(Switch2->Successors.front());
+  const CFGBlock *Copy = Cfg.getBlock(Switch2->Cases.front().Target);
   assert(Copy != nullptr);
   assert(Copy->Successors.size() == 1);
   assert(Copy->SourceBlock == 1);
@@ -2189,10 +2189,10 @@ void testSwitchReusedEntryRewriterCopiesEntryTailRegion() {
 
 void testSwitchReusedEntryRewriterCopiesConnectedPredsOnce() {
   StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {1, 6}));
+  Cfg.addBlock(switchBlock(0, {6, 1}));
   Cfg.addBlock(block(1, {4}));
   Cfg.addBlock(switchBlock(2, {3, 1}));
-  Cfg.addBlock(switchBlock(3, {1, 7}));
+  Cfg.addBlock(switchBlock(3, {7, 1}));
   Cfg.addBlock(block(4, {8}));
   Cfg.addBlock(block(6, {8}));
   Cfg.addBlock(block(7, {8}));
@@ -2215,13 +2215,13 @@ void testSwitchReusedEntryRewriterCopiesConnectedPredsOnce() {
   const CFGBlock *Switch2 = Cfg.getBlock(2);
   const CFGBlock *Switch3 = Cfg.getBlock(3);
   assert(Switch0 != nullptr && Switch2 != nullptr && Switch3 != nullptr);
-  assert(Switch0->Successors.front() == 1);
+  assert(Switch0->Cases.front().Target == 1);
   assert(Switch2->Successors.size() == 2);
   assert(Switch3->Successors.size() == 2);
   assert(Switch2->Successors.front() == 3);
-  assert(Switch2->Successors[1] == Switch3->Successors.front());
+  assert(Switch2->Cases.front().Target == Switch3->Cases.front().Target);
 
-  const CFGBlock *Copy = Cfg.getBlock(Switch3->Successors.front());
+  const CFGBlock *Copy = Cfg.getBlock(Switch3->Cases.front().Target);
   assert(Copy != nullptr);
   assert(Copy->Successors.size() == 1);
   assert(Copy->SourceBlock == 1);
@@ -2285,12 +2285,34 @@ void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   assert(hasSinglePayload(Copy->Statements, 23));
 }
 
+void testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 3}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(switchBlock(2, {1, 5}));
+  Cfg.addBlock(block(3, {}));
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch2 = Cfg.getBlock(2);
+  assert(Switch0 != nullptr && Switch2 != nullptr);
+  assert(Switch0->Successors.front() == 1);
+  assert(Switch2->Successors.front() == 1);
+}
+
 void testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit() {
   StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {1, 10}));
+  Cfg.addBlock(switchBlock(0, {10, 1}));
   Cfg.addBlock(block(1, {20}));
-  Cfg.addBlock(switchBlock(2, {1, 11}));
-  Cfg.addBlock(switchBlock(3, {1, 12}));
+  Cfg.addBlock(switchBlock(2, {11, 1}));
+  Cfg.addBlock(switchBlock(3, {12, 1}));
   Cfg.addBlock(block(10, {}));
   Cfg.addBlock(block(11, {}));
   Cfg.addBlock(block(12, {}));
@@ -2303,19 +2325,19 @@ void testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit() {
   bool Changed = Pass.runOnGraph(Cfg, Current);
 
   assert(!Changed);
-  assert(Cfg.getBlock(0)->Successors.front() == 1);
-  assert(Cfg.getBlock(2)->Successors.front() == 1);
-  assert(Cfg.getBlock(3)->Successors.front() == 1);
+  assert(Cfg.getBlock(0)->Cases.front().Target == 1);
+  assert(Cfg.getBlock(2)->Cases.front().Target == 1);
+  assert(Cfg.getBlock(3)->Cases.front().Target == 1);
 }
 
 void testSwitchReusedEntryRewriterSkipsTooManyReusedEntries() {
   StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {1, 10}));
+  Cfg.addBlock(switchBlock(0, {10, 1}));
   Cfg.addBlock(block(1, {20}));
-  Cfg.addBlock(switchBlock(2, {1, 11}));
-  Cfg.addBlock(switchBlock(3, {4, 12}));
+  Cfg.addBlock(switchBlock(2, {11, 1}));
+  Cfg.addBlock(switchBlock(3, {12, 4}));
   Cfg.addBlock(block(4, {21}));
-  Cfg.addBlock(switchBlock(5, {4, 13}));
+  Cfg.addBlock(switchBlock(5, {13, 4}));
   Cfg.addBlock(block(10, {}));
   Cfg.addBlock(block(11, {}));
   Cfg.addBlock(block(12, {}));
@@ -2330,10 +2352,10 @@ void testSwitchReusedEntryRewriterSkipsTooManyReusedEntries() {
   bool Changed = Pass.runOnGraph(Cfg, Current);
 
   assert(!Changed);
-  assert(Cfg.getBlock(0)->Successors.front() == 1);
-  assert(Cfg.getBlock(2)->Successors.front() == 1);
-  assert(Cfg.getBlock(3)->Successors.front() == 4);
-  assert(Cfg.getBlock(5)->Successors.front() == 4);
+  assert(Cfg.getBlock(0)->Cases.front().Target == 1);
+  assert(Cfg.getBlock(2)->Cases.front().Target == 1);
+  assert(Cfg.getBlock(3)->Cases.front().Target == 4);
+  assert(Cfg.getBlock(5)->Cases.front().Target == 4);
 }
 
 void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
@@ -5059,6 +5081,7 @@ int main() {
   testSwitchReusedEntryRewriterCopiesEntryTailRegion();
   testSwitchReusedEntryRewriterCopiesConnectedPredsOnce();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
+  testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets();
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
   testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
