@@ -2662,6 +2662,9 @@ void testLoweredSwitchSimplifierSkipsDefaultOnlyTargets() {
   DefaultTail.Statements.push_back({36});
   Cfg.addBlock(std::move(DefaultTail));
 
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(30, {}));
+
   TestLoweredSwitchSimplifier Pass(
       LoweredSwitchSimplifier::defaultOptions());
   StructuringEvaluation Current;
