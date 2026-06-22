@@ -167,6 +167,9 @@ bool StructuredCFG::materializeBlockBody(BlockId Id) {
   if (Body == nullptr) {
     return false;
   }
+  if (Block->Cases.size() != Body->Cases.size()) {
+    return false;
+  }
 
   // Materializing copies renderer payload from the body source. CFG identity
   // stays on this block: successors and switch targets must keep any copied
@@ -174,10 +177,8 @@ bool StructuredCFG::materializeBlockBody(BlockId Id) {
   Block->Statements = Body->Statements;
   Block->Terminator = Body->Terminator;
   Block->Condition = Body->Condition;
-  if (Block->Cases.size() == Body->Cases.size()) {
-    for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
-      Block->Cases[I].Value = Body->Cases[I].Value;
-    }
+  for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
+    Block->Cases[I].Value = Body->Cases[I].Value;
   }
 
   Block->BodyBlock = Id;
