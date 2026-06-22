@@ -1235,7 +1235,15 @@ void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
 
   assert(!Cfg.duplicateRegion({0, 99}).has_value());
   assert(Cfg.blocks().size() == 1);
-  assert(Cfg.getBlock(0) != nullptr);
+  const CFGBlock *Original = Cfg.getBlock(0);
+  assert(Original != nullptr);
+  assert(Original->Origin == CFGBlockOrigin::Original);
+  assert(Original->SourceBlock == 0);
+  assert(Original->CopyKind == CFGBlockCopyKind::None);
+  assert(Original->CreatedBy == CFGBlockCreator::Input);
+  assert(Original->BodyBlock == 0);
+  assert(Original->BodyMaterialized);
+  assert(Original->Successors == std::vector<BlockId>{1});
 }
 
 void testStructuredCFGCreateSyntheticBlock() {
