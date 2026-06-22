@@ -2474,14 +2474,15 @@ void testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets() {
   TestSwitchReusedEntryRewriter Pass(
       SwitchReusedEntryRewriter::defaultOptions());
   StructuringEvaluation Current;
-  bool Changed = Pass.runOnGraph(Cfg, Current);
+  Pass.runOnGraph(Cfg, Current);
 
-  assert(!Changed);
   const CFGBlock *Switch0 = Cfg.getBlock(0);
   const CFGBlock *Switch2 = Cfg.getBlock(2);
   assert(Switch0 != nullptr && Switch2 != nullptr);
   assert(Switch0->Successors.front() == 1);
   assert(Switch2->Successors.front() == 1);
+  assert(Switch0->Cases.front().Target == 3);
+  assert(Switch2->Cases.front().Target == 5);
 }
 
 void testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit() {

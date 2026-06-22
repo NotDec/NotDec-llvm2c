@@ -697,7 +697,8 @@ bool SwitchReusedEntryRewriter::runOnGraph(
     for (const std::vector<BlockId> &Component : PredComponents) {
       bool AllStillReachEntry = true;
       for (BlockId Pred : Component) {
-        if (!Graph.hasEdge(Pred, EntryId)) {
+        const CFGBlock *PredBlock = Graph.getBlock(Pred);
+        if (PredBlock == nullptr || !switchCaseReachesBlock(*PredBlock, EntryId)) {
           AllStillReachEntry = false;
           break;
         }
