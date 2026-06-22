@@ -374,6 +374,40 @@ bool replaceDefaultSwitchSuccessor(StructuredCFG &Graph, BlockId SwitchId,
   return true;
 }
 
+bool reachesBlock(const StructuredCFG &Graph, BlockId Start, BlockId Target) {
+  std::set<BlockId> Seen;
+  std::vector<BlockId> Worklist = {Start};
+  while (!Worklist.empty()) {
+    BlockId Current = Worklist.back();
+    Worklist.pop_back();
+    if (!Seen.insert(Current).second) {
+      continue;
+    }
+    if (Current == Target) {
+      return true;
+    }
+    for (BlockId Succ : Graph.successorsOf(Current)) {
+      Worklist.push_back(Succ);
+    }
+  }
+  return false;
+}
+
+bool reachesBlockFromNonDefaultSwitchSuccessor(const StructuredCFG &Graph,
+                                               const CFGBlock &Switch,
+                                               BlockId DefaultTarget,
+                                               BlockId Target) {
+  for (BlockId Succ : Graph.successorsOf(Switch.Id)) {
+    if (Succ == DefaultTarget) {
+      continue;
+    }
+    if (reachesBlock(Graph, Succ, Target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Copy the whole return region once, then retarget every predecessor in the
 // component to the copied head block. The shared CFG keeps the copied body
 // separate from the original body through BodyBlock.
@@ -835,12 +869,19 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
       continue;
     }
 
+    const CFGBlock *KeepSwitch = Graph.getBlock(KeepPred);
     std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
     std::vector<BlockId> PredsToUpdate;
     for (BlockId Pred : Preds) {
-      if (Pred != KeepPred) {
-        PredsToUpdate.push_back(Pred);
+      if (Pred == KeepPred) {
+        continue;
       }
+      if (KeepSwitch != nullptr &&
+          reachesBlockFromNonDefaultSwitchSuccessor(Graph, *KeepSwitch,
+                                                    DefaultTarget, Pred)) {
+        continue;
+      }
+      PredsToUpdate.push_back(Pred);
     }
     if (PredsToUpdate.empty()) {
       continue;

@@ -1885,6 +1885,40 @@ void testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse() {
   assert(hasSinglePayload(DefaultBlock->Statements, 24));
 }
 
+void testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({27});
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock CaseHead = block(2, {3});
+  CaseHead.Statements.push_back({28});
+  Cfg.addBlock(std::move(CaseHead));
+
+  CFGBlock CaseTail = block(3, {1});
+  CaseTail.Statements.push_back({29});
+  Cfg.addBlock(std::move(CaseTail));
+
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  const CFGBlock *CaseTailBlock = Cfg.getBlock(3);
+  assert(Switch != nullptr && DefaultBlock != nullptr && CaseTailBlock != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(CaseTailBlock->Successors == std::vector<BlockId>{1});
+  assert(DefaultBlock->Successors == std::vector<BlockId>{5});
+  assert(hasSinglePayload(DefaultBlock->Statements, 27));
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -4903,6 +4937,7 @@ int main() {
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
+  testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
