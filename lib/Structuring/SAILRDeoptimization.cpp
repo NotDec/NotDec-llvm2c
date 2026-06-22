@@ -747,7 +747,7 @@ bool LoweredSwitchSimplifier::runOnGraph(
     std::vector<BlockId> Preds;
     for (const CFGBlock &PredBlock : Graph.blocks()) {
       if (PredBlock.Terminator != TerminatorKind::Switch ||
-          !Graph.hasEdge(PredBlock.Id, TargetId)) {
+          !switchCaseReachesBlock(PredBlock, TargetId)) {
         continue;
       }
       Preds.push_back(PredBlock.Id);

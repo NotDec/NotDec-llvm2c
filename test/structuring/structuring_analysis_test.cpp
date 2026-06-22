@@ -2538,8 +2538,8 @@ void testSwitchReusedEntryRewriterSkipsTooManyReusedEntries() {
 void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
   StructuredCFG Cfg;
 
-  Cfg.addBlock(switchBlock(0, {10, 20}));
-  Cfg.addBlock(switchBlock(1, {10, 30}));
+  Cfg.addBlock(switchBlock(0, {20, 10}));
+  Cfg.addBlock(switchBlock(1, {30, 10}));
 
   CFGBlock CaseHead = block(10, {11});
   CaseHead.Statements.push_back({31});
@@ -2570,10 +2570,12 @@ void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
   const CFGBlock *Switch0 = Cfg.getBlock(0);
   const CFGBlock *Switch1 = Cfg.getBlock(1);
   assert(Switch0 != nullptr && Switch1 != nullptr);
-  assert(Switch0->Successors.front() != Switch1->Successors.front());
-
-  const CFGBlock *Copy0Head = Cfg.getBlock(Switch0->Successors.front());
-  const CFGBlock *Copy1Head = Cfg.getBlock(Switch1->Successors.front());
+  assert(Switch0->Successors.front() == 20);
+  assert(Switch1->Successors.front() == 30);
+  assert(Switch0->Cases.size() == 1);
+  assert(Switch1->Cases.size() == 1);
+  const CFGBlock *Copy0Head = Cfg.getBlock(Switch0->Cases.front().Target);
+  const CFGBlock *Copy1Head = Cfg.getBlock(Switch1->Cases.front().Target);
   assert(Copy0Head != nullptr && Copy1Head != nullptr);
   assert(Copy0Head->BodyBlock == Copy0Head->Id);
   assert(Copy1Head->BodyBlock == Copy1Head->Id);
@@ -2606,8 +2608,8 @@ void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
 void testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion() {
   StructuredCFG Cfg;
 
-  Cfg.addBlock(switchBlock(0, {10, 20}));
-  Cfg.addBlock(switchBlock(1, {10, 30}));
+  Cfg.addBlock(switchBlock(0, {20, 10}));
+  Cfg.addBlock(switchBlock(1, {30, 10}));
 
   CFGBlock CaseHead = block(10, {11});
   CaseHead.Statements.push_back({34});
@@ -2640,17 +2642,45 @@ void testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion() {
   assert(Cfg.getBlock(10) != nullptr);
   assert(Cfg.getBlock(11) != nullptr);
   assert(Cfg.getBlock(40) != nullptr);
-  assert(Cfg.getBlock(0)->Successors.front() == 10);
-  assert(Cfg.getBlock(1)->Successors.front() == 10);
+  assert(Cfg.getBlock(0)->Cases.front().Target == 10);
+  assert(Cfg.getBlock(1)->Cases.front().Target == 10);
   assert(!Cfg.getBlock(40)->BodyMaterialized);
   assert(Cfg.getBlock(40)->BodyBlock == 11);
+}
+
+void testLoweredSwitchSimplifierSkipsDefaultOnlyTargets() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {10, 20}));
+  Cfg.addBlock(switchBlock(1, {10, 30}));
+
+  CFGBlock DefaultHead = block(10, {11});
+  DefaultHead.Statements.push_back({35});
+  Cfg.addBlock(std::move(DefaultHead));
+
+  CFGBlock DefaultTail = block(11, {});
+  DefaultTail.Statements.push_back({36});
+  Cfg.addBlock(std::move(DefaultTail));
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(10) != nullptr);
+  assert(Cfg.getBlock(11) != nullptr);
+  assert(Cfg.getBlock(0)->Successors.front() == 10);
+  assert(Cfg.getBlock(1)->Successors.front() == 10);
+  assert(Cfg.getBlock(0)->Cases.front().Target == 20);
+  assert(Cfg.getBlock(1)->Cases.front().Target == 30);
 }
 
 void testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion() {
   StructuredCFG Cfg;
 
-  Cfg.addBlock(switchBlock(0, {10, 20}));
-  Cfg.addBlock(switchBlock(1, {10, 30}));
+  Cfg.addBlock(switchBlock(0, {20, 10}));
+  Cfg.addBlock(switchBlock(1, {30, 10}));
 
   CFGBlock CaseHead = block(10, {11});
   CaseHead.Statements.push_back({41});
@@ -2688,8 +2718,13 @@ void testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion() {
   const CFGBlock *Switch1 = Cfg.getBlock(1);
   assert(Switch0 != nullptr && Switch1 != nullptr);
 
-  const CFGBlock *Copy0Head = Cfg.getBlock(Switch0->Successors.front());
-  const CFGBlock *Copy1Head = Cfg.getBlock(Switch1->Successors.front());
+  assert(Switch0->Successors.front() == 20);
+  assert(Switch1->Successors.front() == 30);
+  assert(Switch0->Cases.size() == 1);
+  assert(Switch1->Cases.size() == 1);
+
+  const CFGBlock *Copy0Head = Cfg.getBlock(Switch0->Cases.front().Target);
+  const CFGBlock *Copy1Head = Cfg.getBlock(Switch1->Cases.front().Target);
   assert(Copy0Head != nullptr && Copy1Head != nullptr);
   assert(Copy0Head->Successors.size() == 1);
   assert(Copy1Head->Successors.size() == 1);
@@ -5327,6 +5362,7 @@ int main() {
   testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
   testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion();
+  testLoweredSwitchSimplifierSkipsDefaultOnlyTargets();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
