@@ -776,29 +776,35 @@ bool LoweredSwitchSimplifier::runOnGraph(
       continue;
     }
 
+    StructuredCFG Candidate = Graph;
     std::vector<std::vector<BlockId>> PredComponents =
         connectedPredecessorComponents(Graph, Preds);
     std::vector<BlockId> UpdatedPreds;
     std::vector<BlockId> Copies;
     bool DeleteOriginal = sameBlockSet(AllPreds, Preds);
     if (DeleteOriginal) {
-      StructuredCFG DeletionProbe = Graph;
+      StructuredCFG DeletionProbe = Candidate;
       if (!DeletionProbe.removeBlocks(Region.Blocks)) {
         continue;
       }
     }
     for (const std::vector<BlockId> &Component : PredComponents) {
-      if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
+      if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
+                                           Copies)) {
         continue;
       }
       UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(), Component.end());
-      Changed = true;
     }
 
     if (DeleteOriginal && sameBlockSet(AllPreds, UpdatedPreds)) {
-      if (!Graph.removeBlocks(Region.Blocks)) {
+      if (!Candidate.removeBlocks(Region.Blocks)) {
         return false;
       }
+    }
+
+    if (!Copies.empty()) {
+      Graph = std::move(Candidate);
+      Changed = true;
     }
   }
 
@@ -850,43 +856,42 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
   }
 
   bool Changed = false;
-  std::set<BlockId> RewrittenDefaults;
   for (const auto &[DefaultTarget, SwitchPreds] : SwitchPredsByDefault) {
     if (SwitchPreds.size() <= 1) {
       continue;
     }
 
+    StructuredCFG Candidate = Graph;
     bool RewroteDefault = false;
+    bool Failed = false;
     for (BlockId SwitchPred : SwitchPreds) {
-      if (!Graph.hasEdge(SwitchPred, DefaultTarget)) {
-        continue;
+      if (!Candidate.hasEdge(SwitchPred, DefaultTarget)) {
+        Failed = true;
+        break;
       }
 
-      BlockId Forwarder = Graph.createSyntheticBlock(
+      BlockId Forwarder = Candidate.createSyntheticBlock(
           {DefaultTarget}, CFGBlockCreator::SAILRDeoptimization);
       if (Forwarder == InvalidBlockId ||
-          !replaceDefaultSwitchSuccessor(Graph, SwitchPred, DefaultTarget,
+          !replaceDefaultSwitchSuccessor(Candidate, SwitchPred, DefaultTarget,
                                          Forwarder)) {
         if (Forwarder != InvalidBlockId) {
-          Graph.removeBlock(Forwarder);
+          Candidate.removeBlock(Forwarder);
         }
-        continue;
+        Failed = true;
+        break;
       }
 
       RewroteDefault = true;
-      Changed = true;
     }
 
-    if (RewroteDefault) {
-      RewrittenDefaults.insert(DefaultTarget);
+    if (RewroteDefault && !Failed) {
+      Graph = std::move(Candidate);
+      Changed = true;
     }
   }
 
   for (const auto &[DefaultTarget, KeepPred] : KeepPredForDefault) {
-    if (RewrittenDefaults.count(DefaultTarget) != 0) {
-      continue;
-    }
-
     const CFGBlock *KeepSwitch = Graph.getBlock(KeepPred);
     std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
     std::vector<BlockId> PredsToUpdate;
@@ -912,13 +917,25 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
 
     const LinearRegion &Region = RegionIt->second;
 
+    StructuredCFG Candidate = Graph;
     std::vector<BlockId> Copies;
     std::vector<std::vector<BlockId>> PredComponents =
         connectedPredecessorComponents(Graph, PredsToUpdate);
+    bool Failed = false;
     for (const std::vector<BlockId> &Component : PredComponents) {
-      if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
-        continue;
+      if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
+                                           Copies)) {
+        Failed = true;
+        break;
       }
+    }
+
+    if (Failed) {
+      continue;
+    }
+
+    if (!Copies.empty()) {
+      Graph = std::move(Candidate);
       Changed = true;
     }
   }
@@ -1036,8 +1053,9 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     PredsToUpdate.erase(std::unique(PredsToUpdate.begin(), PredsToUpdate.end()),
                         PredsToUpdate.end());
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
+    StructuredCFG Candidate = Graph;
     if (DeleteOriginal) {
-      StructuredCFG DeletionProbe = Graph;
+      StructuredCFG DeletionProbe = Candidate;
       if (!DeletionProbe.removeBlocks(Region.Blocks)) {
         continue;
       }
@@ -1048,19 +1066,23 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
         connectedPredecessorComponents(Graph, PredsToUpdate);
     std::vector<BlockId> UpdatedPreds;
     for (const std::vector<BlockId> &Component : PredComponents) {
-      if (!copyRegionForPredecessors(Graph, Region, Component, Copies)) {
+      if (!copyRegionForPredecessors(Candidate, Region, Component, Copies)) {
         continue;
       }
       UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(),
                           Component.end());
-      Changed = true;
     }
 
     if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
         sameBlockSet(CurrentPreds, UpdatedPreds)) {
-      if (!Graph.removeBlocks(Region.Blocks)) {
+      if (!Candidate.removeBlocks(Region.Blocks)) {
         return false;
       }
+    }
+
+    if (!Copies.empty()) {
+      Graph = std::move(Candidate);
+      Changed = true;
     }
   }
 
@@ -1118,8 +1140,9 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
     std::vector<BlockId> CurrentPreds = predecessorsOf(Graph, Target);
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
+    StructuredCFG Candidate = Graph;
     if (DeleteOriginal) {
-      StructuredCFG DeletionProbe = Graph;
+      StructuredCFG DeletionProbe = Candidate;
       if (!DeletionProbe.removeBlocks(Region.Blocks)) {
         continue;
       }
@@ -1131,7 +1154,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     for (const std::vector<BlockId> &Component : PredComponents) {
       bool AllStillReachTarget = true;
       for (BlockId Pred : Component) {
-        if (!Graph.hasEdge(Pred, Target)) {
+        if (!Candidate.hasEdge(Pred, Target)) {
           AllStillReachTarget = false;
           break;
         }
@@ -1141,21 +1164,25 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
       }
 
       std::vector<BlockId> RegionCopies;
-      if (!copyLinearRegionForPredecessors(Graph, Region, Component,
+      if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
                                            RegionCopies)) {
         continue;
       }
 
       UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(),
                           Component.end());
-      Changed = true;
     }
 
     if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
         sameBlockSet(CurrentPreds, UpdatedPreds)) {
-      if (!Graph.removeBlocks(Region.Blocks)) {
+      if (!Candidate.removeBlocks(Region.Blocks)) {
         return false;
       }
+    }
+
+    if (!UpdatedPreds.empty()) {
+      Graph = std::move(Candidate);
+      Changed = true;
     }
   }
 
