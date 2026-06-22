@@ -51,6 +51,17 @@ bool sameBlockShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
          samePayloads(Lhs.Statements, Rhs.Statements);
 }
 
+bool sameBlockIdentityKind(const CFGBlock &Lhs, const CFGBlock &Rhs) {
+  if (Lhs.Origin != Rhs.Origin || Lhs.CopyKind != Rhs.CopyKind ||
+      Lhs.CreatedBy != Rhs.CreatedBy) {
+    return false;
+  }
+  if (Lhs.Origin == CFGBlockOrigin::Original) {
+    return true;
+  }
+  return Lhs.SourceBlock == Rhs.SourceBlock;
+}
+
 std::vector<BlockId> predecessorsOf(const StructuredCFG &Graph,
                                     BlockId Target) {
   return Graph.predecessorsOf(Target);
@@ -937,7 +948,8 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
     for (std::size_t J = I + 1; J < BlockIds.size(); ++J) {
       BlockId DropId = BlockIds[J];
       const CFGBlock *Drop = Graph.getBlock(DropId);
-      if (Drop == nullptr || !sameBlockShape(*Keep, *Drop)) {
+      if (Drop == nullptr || !sameBlockIdentityKind(*Keep, *Drop) ||
+          !sameBlockShape(*Keep, *Drop)) {
         continue;
       }
       if (Graph.hasEdge(Keep->Id, DropId) || Graph.hasEdge(DropId, Keep->Id)) {
