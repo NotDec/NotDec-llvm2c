@@ -1447,7 +1447,9 @@ void testReturnDuplicatorLowUsesParentGotoSource() {
   const CFGBlock *Copy = Cfg.getBlock(Block1->Successors.front());
   assert(Copy != nullptr);
   assert(Copy->Terminator == TerminatorKind::Return);
-  assert(Copy->BodyBlock == 2);
+  assert(Copy->SourceBlock == 2);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 15));
 
   const CFGBlock *OriginalRet = Cfg.getBlock(2);
@@ -1511,7 +1513,9 @@ void testReturnDuplicatorLowSkipsBranchParentGotoSource() {
   const CFGBlock *Copy = Cfg.getBlock(Block2->Successors.front());
   assert(Copy != nullptr);
   assert(Copy->Terminator == TerminatorKind::Return);
-  assert(Copy->BodyBlock == 4);
+  assert(Copy->SourceBlock == 4);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 16));
   assert(hasSinglePayload(OriginalRet->Statements, 16));
 }
@@ -1766,7 +1770,9 @@ void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   const CFGBlock *Copy = Cfg.getBlock(CopyId);
   assert(Copy != nullptr);
   assert(Copy->Successors == std::vector<BlockId>{4});
-  assert(Copy->BodyBlock == 1);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 11));
 }
 
@@ -1907,7 +1913,9 @@ void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
   const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
   assert(CopyTail != nullptr);
   assert(CopyTail->Successors == std::vector<BlockId>{5});
-  assert(CopyTail->BodyBlock == 4);
+  assert(CopyTail->SourceBlock == 4);
+  assert(CopyTail->BodyMaterialized);
+  assert(CopyTail->BodyBlock == CopyTail->Id);
   assert(hasSinglePayload(CopyTail->Statements, 32));
   assert(hasSinglePayload(Cfg.getBlock(5)->Statements, 33));
 }
@@ -1943,7 +1951,9 @@ void testSwitchReusedEntryRewriterCopiesReusedEntryBlock() {
   const CFGBlock *Copy = Cfg.getBlock(CopyId);
   assert(Copy != nullptr);
   assert(Copy->Successors == std::vector<BlockId>{4});
-  assert(Copy->BodyBlock == 1);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 21));
 }
 
@@ -1980,13 +1990,17 @@ void testSwitchReusedEntryRewriterCopiesEntryTailRegion() {
   const CFGBlock *Copy = Cfg.getBlock(Switch2->Successors.front());
   assert(Copy != nullptr);
   assert(Copy->Successors.size() == 1);
-  assert(Copy->BodyBlock == 1);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 22));
 
   const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
   assert(CopyTail != nullptr);
   assert(CopyTail->Successors == std::vector<BlockId>{6});
-  assert(CopyTail->BodyBlock == 4);
+  assert(CopyTail->SourceBlock == 4);
+  assert(CopyTail->BodyMaterialized);
+  assert(CopyTail->BodyBlock == CopyTail->Id);
   assert(hasSinglePayload(CopyTail->Statements, 24));
 }
 
@@ -2027,13 +2041,17 @@ void testSwitchReusedEntryRewriterCopiesConnectedPredsOnce() {
   const CFGBlock *Copy = Cfg.getBlock(Switch3->Successors.front());
   assert(Copy != nullptr);
   assert(Copy->Successors.size() == 1);
-  assert(Copy->BodyBlock == 1);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 25));
 
   const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
   assert(CopyTail != nullptr);
   assert(CopyTail->Successors == std::vector<BlockId>{8});
-  assert(CopyTail->BodyBlock == 4);
+  assert(CopyTail->SourceBlock == 4);
+  assert(CopyTail->BodyMaterialized);
+  assert(CopyTail->BodyBlock == CopyTail->Id);
   assert(hasSinglePayload(CopyTail->Statements, 26));
 }
 
@@ -2078,7 +2096,9 @@ void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   const CFGBlock *Copy = Cfg.getBlock(Switch2Block->Cases.front().Target);
   assert(Copy != nullptr);
   assert(Copy->Successors == std::vector<BlockId>{4});
-  assert(Copy->BodyBlock == 1);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 23));
 }
 
