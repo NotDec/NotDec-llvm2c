@@ -960,11 +960,16 @@ void testStructuredCFGDuplicateRegionRewritesInternalEdges() {
 
   std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({10, 11});
   assert(CopyRegion.has_value());
+  assert(CopyRegion->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(CopyRegion->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
 
   BlockId CopySwitchId = CopyRegion->copyOf(10);
   BlockId CopyBodyId = CopyRegion->copyOf(11);
   assert(CopySwitchId != InvalidBlockId);
   assert(CopyBodyId != InvalidBlockId);
+  assert(CopyRegion->originalOf(CopySwitchId) == 10);
+  assert(CopyRegion->originalOf(CopyBodyId) == 11);
+  assert(CopyRegion->originalOf(12) == InvalidBlockId);
 
   const CFGBlock *CopySwitch = Cfg.getBlock(CopySwitchId);
   const CFGBlock *CopyBody = Cfg.getBlock(CopyBodyId);

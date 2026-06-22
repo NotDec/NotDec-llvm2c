@@ -100,6 +100,14 @@ BlockId DuplicatedRegion::copyOf(BlockId Original) const {
   return It == Blocks.end() ? InvalidBlockId : It->second;
 }
 
+BlockId DuplicatedRegion::originalOf(BlockId Copy) const {
+  auto It = std::find_if(Blocks.begin(), Blocks.end(),
+                         [Copy](const std::pair<BlockId, BlockId> &Entry) {
+                           return Entry.second == Copy;
+                         });
+  return It == Blocks.end() ? InvalidBlockId : It->first;
+}
+
 const CFGBlock *StructuredCFG::getBlock(BlockId Id) const {
   for (const auto &Block : Blocks) {
     if (Block.Id == Id) {
@@ -162,14 +170,18 @@ std::vector<BlockId> StructuredCFG::predecessorsOf(BlockId Target) const {
 }
 
 std::optional<DuplicatedRegion>
-StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks) {
+StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
+                               CFGBlockCopyKind Kind,
+                               CFGBlockCreator Creator) {
   DuplicatedRegion Region;
   std::vector<BlockId> Copies;
+  Region.CopyKind = Kind;
+  Region.CreatedBy = Creator;
   Region.Blocks.reserve(RegionBlocks.size());
   Copies.reserve(RegionBlocks.size());
 
   for (BlockId Original : RegionBlocks) {
-    BlockId Copy = duplicateBlock(Original, {});
+    BlockId Copy = duplicateBlock(Original, {}, Kind, Creator);
     if (Copy == InvalidBlockId) {
       for (BlockId OldCopy : Copies) {
         removeBlock(OldCopy);

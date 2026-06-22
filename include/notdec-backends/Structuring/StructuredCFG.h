@@ -91,9 +91,12 @@ struct CFGBlock {
 // can duplicate blocks once and then retarget the new copy graph in a uniform
 // way.
 struct DuplicatedRegion {
+  CFGBlockCopyKind CopyKind = CFGBlockCopyKind::RegionCopy;
+  CFGBlockCreator CreatedBy = CFGBlockCreator::SAILRDeoptimization;
   std::vector<std::pair<BlockId, BlockId>> Blocks;
 
   BlockId copyOf(BlockId Original) const;
+  BlockId originalOf(BlockId Copy) const;
 };
 
 class StructuredCFG {
@@ -106,8 +109,10 @@ public:
       BlockId Source, std::vector<BlockId> Successors,
       CFGBlockCopyKind CopyKind = CFGBlockCopyKind::RegionCopy,
       CFGBlockCreator Creator = CFGBlockCreator::SAILRDeoptimization);
-  std::optional<DuplicatedRegion>
-  duplicateRegion(const std::vector<BlockId> &RegionBlocks);
+  std::optional<DuplicatedRegion> duplicateRegion(
+      const std::vector<BlockId> &RegionBlocks,
+      CFGBlockCopyKind CopyKind = CFGBlockCopyKind::RegionCopy,
+      CFGBlockCreator Creator = CFGBlockCreator::SAILRDeoptimization);
 
   const std::vector<CFGBlock> &blocks() const { return Blocks; }
   std::vector<CFGBlock> &blocks() { return Blocks; }
