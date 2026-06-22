@@ -46,22 +46,32 @@ BlockId StructuredCFG::addBlock(CFGBlock Block) {
   if (Block.BodyBlock == InvalidBlockId) {
     Block.BodyBlock = Block.Id;
   }
+  if (Block.SourceBlock == InvalidBlockId) {
+    Block.SourceBlock = Block.Id;
+  }
   BlockId Id = Block.Id;
   Blocks.push_back(std::move(Block));
   return Id;
 }
 
-BlockId StructuredCFG::createSyntheticBlock(std::vector<BlockId> Successors) {
+BlockId StructuredCFG::createSyntheticBlock(std::vector<BlockId> Successors,
+                                            CFGBlockCreator Creator) {
   CFGBlock Block;
   Block.Id = nextBlockId();
   Block.BodyBlock = Block.Id;
+  Block.Origin = CFGBlockOrigin::Synthetic;
+  Block.SourceBlock = Block.Id;
+  Block.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Block.CreatedBy = Creator;
   Block.Terminator = TerminatorKind::Fallthrough;
   Block.Successors = std::move(Successors);
   return addBlock(std::move(Block));
 }
 
 BlockId StructuredCFG::duplicateBlock(BlockId Source,
-                                      std::vector<BlockId> Successors) {
+                                      std::vector<BlockId> Successors,
+                                      CFGBlockCopyKind Kind,
+                                      CFGBlockCreator Creator) {
   const CFGBlock *SourceBlock = getBlock(Source);
   if (SourceBlock == nullptr) {
     return InvalidBlockId;
@@ -69,6 +79,12 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
 
   CFGBlock Copy = *SourceBlock;
   Copy.Id = nextBlockId();
+  Copy.Origin = CFGBlockOrigin::Copied;
+  Copy.SourceBlock = SourceBlock->SourceBlock == InvalidBlockId
+                         ? SourceBlock->Id
+                         : SourceBlock->SourceBlock;
+  Copy.CopyKind = Kind;
+  Copy.CreatedBy = Creator;
   Copy.BodyBlock = SourceBlock->BodyBlock == InvalidBlockId
                        ? SourceBlock->Id
                        : SourceBlock->BodyBlock;
@@ -228,6 +244,9 @@ bool StructuredCFG::removeBlock(BlockId Id) {
   for (CFGBlock &Block : Blocks) {
     if (Block.BodyBlock == Id) {
       Block.BodyBlock = Block.Id;
+      Block.SourceBlock = Block.Id;
+      Block.Origin = CFGBlockOrigin::Original;
+      Block.CopyKind = CFGBlockCopyKind::None;
     }
     Block.Successors.erase(
         std::remove(Block.Successors.begin(), Block.Successors.end(), Id),

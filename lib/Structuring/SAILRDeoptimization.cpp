@@ -776,7 +776,8 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
         continue;
       }
 
-      BlockId Forwarder = Graph.createSyntheticBlock({DefaultTarget});
+      BlockId Forwarder = Graph.createSyntheticBlock(
+          {DefaultTarget}, CFGBlockCreator::SAILRDeoptimization);
       if (Forwarder == InvalidBlockId ||
           !replaceDefaultSwitchSuccessor(Graph, SwitchPred, DefaultTarget,
                                          Forwarder)) {

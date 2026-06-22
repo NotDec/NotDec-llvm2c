@@ -35,6 +35,24 @@ enum class TerminatorKind {
   Unreachable,
 };
 
+enum class CFGBlockOrigin {
+  Original,
+  Copied,
+  Synthetic,
+};
+
+enum class CFGBlockCopyKind {
+  None,
+  RegionCopy,
+  SyntheticForwarder,
+};
+
+enum class CFGBlockCreator {
+  Input,
+  StructuredCFG,
+  SAILRDeoptimization,
+};
+
 struct SwitchCase {
   PayloadRef Value;
   BlockId Target = InvalidBlockId;
@@ -48,6 +66,14 @@ struct StructuredSwitchCase {
 
 struct CFGBlock {
   BlockId Id = InvalidBlockId;
+
+  // These fields describe control-flow identity, not renderer behavior.
+  // BodyBlock only says where statements come from. Origin/SourceBlock/CopyKind
+  // keep copied and synthetic CFG nodes distinct for later SAILR passes.
+  CFGBlockOrigin Origin = CFGBlockOrigin::Original;
+  BlockId SourceBlock = InvalidBlockId;
+  CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
+  CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
 
   // SAILR deoptimization can duplicate or synthesize control-flow blocks.
   // BodyBlock keeps the backend-neutral identity of the block whose statements
@@ -73,8 +99,13 @@ struct DuplicatedRegion {
 class StructuredCFG {
 public:
   BlockId addBlock(CFGBlock Block);
-  BlockId createSyntheticBlock(std::vector<BlockId> Successors);
-  BlockId duplicateBlock(BlockId Source, std::vector<BlockId> Successors);
+  BlockId createSyntheticBlock(
+      std::vector<BlockId> Successors,
+      CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
+  BlockId duplicateBlock(
+      BlockId Source, std::vector<BlockId> Successors,
+      CFGBlockCopyKind CopyKind = CFGBlockCopyKind::RegionCopy,
+      CFGBlockCreator Creator = CFGBlockCreator::SAILRDeoptimization);
   std::optional<DuplicatedRegion>
   duplicateRegion(const std::vector<BlockId> &RegionBlocks);
 

@@ -114,6 +114,8 @@ void renderStructuredNode(const StructuredTree &Tree,
     }
     break;
   case StructuredNodeKind::Label:
+    Out.push_back(indent(Depth) + "// block_" + std::to_string(Node->Block) +
+                  ":");
     break;
   case StructuredNodeKind::BasicBlock:
     for (PayloadRef Ref : Node->Statements) {
@@ -165,6 +167,8 @@ void renderStructuredNode(const StructuredTree &Tree,
     Out.push_back(indent(Depth) + "}");
     break;
   case StructuredNodeKind::Goto:
+    Out.push_back(indent(Depth) + "// goto block_" +
+                  std::to_string(Node->Target));
     break;
   case StructuredNodeKind::Return:
     break;
