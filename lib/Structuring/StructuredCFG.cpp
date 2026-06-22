@@ -310,11 +310,19 @@ bool StructuredCFG::removeBlock(BlockId Id) {
     return false;
   }
 
-  for (CFGBlock &Block : Blocks) {
+  std::vector<BlockId> BodyUsers;
+  for (const CFGBlock &Block : Blocks) {
     if (Block.Id != Id && Block.BodyBlock == Id) {
-      if (!materializeBlockBody(Block.Id)) {
+      if (Block.Cases.size() != It->Cases.size()) {
         return false;
       }
+      BodyUsers.push_back(Block.Id);
+    }
+  }
+
+  for (BlockId BodyUser : BodyUsers) {
+    if (!materializeBlockBody(BodyUser)) {
+      return false;
     }
   }
 

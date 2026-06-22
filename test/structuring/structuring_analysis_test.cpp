@@ -899,6 +899,47 @@ void testStructuredCFGRemoveBlockRejectsUnmaterializedCopy() {
   assert(CopyBlock->Successors == std::vector<BlockId>{11});
 }
 
+void testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure() {
+  StructuredCFG Cfg;
+
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  CFGBlock GoodCopy = switchBlock(20, {11, 12});
+  GoodCopy.Origin = CFGBlockOrigin::Copied;
+  GoodCopy.SourceBlock = 10;
+  GoodCopy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  GoodCopy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  GoodCopy.BodyBlock = 10;
+  GoodCopy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(GoodCopy));
+
+  CFGBlock BadCopy = switchBlock(30, {11});
+  BadCopy.Origin = CFGBlockOrigin::Copied;
+  BadCopy.SourceBlock = 10;
+  BadCopy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  BadCopy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  BadCopy.BodyBlock = 10;
+  BadCopy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(BadCopy));
+
+  assert(!Cfg.removeBlock(10));
+
+  const CFGBlock *SourceBlock = Cfg.getBlock(10);
+  const CFGBlock *GoodCopyBlock = Cfg.getBlock(20);
+  const CFGBlock *BadCopyBlock = Cfg.getBlock(30);
+  assert(SourceBlock != nullptr && GoodCopyBlock != nullptr &&
+         BadCopyBlock != nullptr);
+  assert(!GoodCopyBlock->BodyMaterialized);
+  assert(GoodCopyBlock->BodyBlock == 10);
+  assert(GoodCopyBlock->Condition.Id == InvalidPayloadId);
+  assert(!BadCopyBlock->BodyMaterialized);
+  assert(BadCopyBlock->BodyBlock == 10);
+}
+
 void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   StructuredCFG Cfg;
 
@@ -5126,6 +5167,7 @@ int main() {
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();
+  testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure();
   testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets();
   testStructuredCFGMaterializeRejectsMismatchedSwitchCases();
   testStructuredCFGRejectsInconsistentCopiedSwitchSuccessors();
