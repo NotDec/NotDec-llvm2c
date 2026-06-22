@@ -362,6 +362,18 @@ BlockId defaultSwitchSuccessor(const StructuredCFG &Graph,
   return Succs.front();
 }
 
+bool replaceDefaultSwitchSuccessor(StructuredCFG &Graph, BlockId SwitchId,
+                                   BlockId OldTarget, BlockId NewTarget) {
+  CFGBlock *Block = Graph.getBlock(SwitchId);
+  if (Block == nullptr || Block->Terminator != TerminatorKind::Switch ||
+      Block->Successors.empty() || Block->Successors.front() != OldTarget) {
+    return false;
+  }
+
+  Block->Successors.front() = NewTarget;
+  return true;
+}
+
 // Copy the whole return region once, then retarget every predecessor in the
 // component to the copied head block. The shared CFG keeps the copied body
 // separate from the original body through BodyBlock.
@@ -766,7 +778,8 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
 
       BlockId Forwarder = Graph.createSyntheticBlock({DefaultTarget});
       if (Forwarder == InvalidBlockId ||
-          !Graph.replaceEdge(SwitchPred, DefaultTarget, Forwarder)) {
+          !replaceDefaultSwitchSuccessor(Graph, SwitchPred, DefaultTarget,
+                                         Forwarder)) {
         if (Forwarder != InvalidBlockId) {
           Graph.removeBlock(Forwarder);
         }

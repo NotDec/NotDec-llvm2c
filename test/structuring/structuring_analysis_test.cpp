@@ -1712,6 +1712,44 @@ void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   assert(Forwarder1->Successors == std::vector<BlockId>{1});
 }
 
+void testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch0 = switchBlock(0, {1});
+  Switch0.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch0));
+
+  CFGBlock Switch3 = switchBlock(3, {1, 4});
+  Cfg.addBlock(std::move(Switch3));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({24});
+  Cfg.addBlock(std::move(Default));
+
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *Switch0Block = Cfg.getBlock(0);
+  const CFGBlock *Switch3Block = Cfg.getBlock(3);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  assert(Switch0Block != nullptr && Switch3Block != nullptr &&
+         DefaultBlock != nullptr);
+  assert(Switch0Block->Successors.front() != 1);
+  assert(Switch0Block->Cases.size() == 1);
+  assert(Switch0Block->Cases.front().Target == 1);
+  assert(Switch3Block->Successors.front() != 1);
+  assert(Switch3Block->Successors.front() != Switch0Block->Successors.front());
+  assert(DefaultBlock->Successors == std::vector<BlockId>{5});
+  assert(hasSinglePayload(DefaultBlock->Statements, 24));
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -4647,6 +4685,7 @@ int main() {
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
+  testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
