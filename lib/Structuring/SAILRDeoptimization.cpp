@@ -779,6 +779,13 @@ bool LoweredSwitchSimplifier::runOnGraph(
         connectedPredecessorComponents(Graph, Preds);
     std::vector<BlockId> UpdatedPreds;
     std::vector<BlockId> Copies;
+    bool DeleteOriginal = sameBlockSet(AllPreds, Preds);
+    if (DeleteOriginal) {
+      StructuredCFG DeletionProbe = Graph;
+      if (!DeletionProbe.removeBlocks(Region.Blocks)) {
+        continue;
+      }
+    }
     for (const std::vector<BlockId> &Component : PredComponents) {
       if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
         continue;
@@ -787,9 +794,9 @@ bool LoweredSwitchSimplifier::runOnGraph(
       Changed = true;
     }
 
-    if (sameBlockSet(AllPreds, UpdatedPreds)) {
-      for (BlockId Block : Region.Blocks) {
-        Graph.removeBlock(Block);
+    if (DeleteOriginal && sameBlockSet(AllPreds, UpdatedPreds)) {
+      if (!Graph.removeBlocks(Region.Blocks)) {
+        return false;
       }
     }
   }
@@ -1026,6 +1033,12 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     PredsToUpdate.erase(std::unique(PredsToUpdate.begin(), PredsToUpdate.end()),
                         PredsToUpdate.end());
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
+    if (DeleteOriginal) {
+      StructuredCFG DeletionProbe = Graph;
+      if (!DeletionProbe.removeBlocks(Region.Blocks)) {
+        continue;
+      }
+    }
 
     std::vector<BlockId> Copies;
     std::vector<std::vector<BlockId>> PredComponents =
@@ -1042,8 +1055,8 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
 
     if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
         sameBlockSet(CurrentPreds, UpdatedPreds)) {
-      for (BlockId Block : Region.Blocks) {
-        Graph.removeBlock(Block);
+      if (!Graph.removeBlocks(Region.Blocks)) {
+        return false;
       }
     }
   }
@@ -1102,6 +1115,12 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
     std::vector<BlockId> CurrentPreds = predecessorsOf(Graph, Target);
     bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
+    if (DeleteOriginal) {
+      StructuredCFG DeletionProbe = Graph;
+      if (!DeletionProbe.removeBlocks(Region.Blocks)) {
+        continue;
+      }
+    }
 
     std::vector<BlockId> UpdatedPreds;
     std::vector<std::vector<BlockId>> PredComponents =
@@ -1131,8 +1150,8 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
     if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
         sameBlockSet(CurrentPreds, UpdatedPreds)) {
-      for (BlockId Block : Region.Blocks) {
-        Graph.removeBlock(Block);
+      if (!Graph.removeBlocks(Region.Blocks)) {
+        return false;
       }
     }
   }

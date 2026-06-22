@@ -345,6 +345,18 @@ bool StructuredCFG::removeBlock(BlockId Id) {
   return true;
 }
 
+bool StructuredCFG::removeBlocks(const std::vector<BlockId> &Ids) {
+  StructuredCFG Candidate = *this;
+  for (BlockId Id : Ids) {
+    if (!Candidate.removeBlock(Id)) {
+      return false;
+    }
+  }
+
+  Blocks = std::move(Candidate.Blocks);
+  return true;
+}
+
 BlockId StructuredCFG::nextBlockId() const {
   BlockId Next = 0;
   for (const CFGBlock &Block : Blocks) {

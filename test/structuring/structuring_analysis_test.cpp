@@ -940,6 +940,37 @@ void testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure() {
   assert(BadCopyBlock->BodyBlock == 10);
 }
 
+void testStructuredCFGRemoveBlocksIsAtomicOnLaterFailure() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(block(10, {11}));
+  CFGBlock Source = switchBlock(11, {12, 13});
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(13, {}));
+
+  CFGBlock BadCopy = switchBlock(20, {12});
+  BadCopy.Origin = CFGBlockOrigin::Copied;
+  BadCopy.SourceBlock = 11;
+  BadCopy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  BadCopy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  BadCopy.BodyBlock = 11;
+  BadCopy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(BadCopy));
+
+  assert(!Cfg.removeBlocks({10, 11}));
+
+  const CFGBlock *First = Cfg.getBlock(10);
+  const CFGBlock *SourceBlock = Cfg.getBlock(11);
+  const CFGBlock *BadCopyBlock = Cfg.getBlock(20);
+  assert(First != nullptr && SourceBlock != nullptr && BadCopyBlock != nullptr);
+  assert(First->Successors == std::vector<BlockId>{11});
+  assert(!BadCopyBlock->BodyMaterialized);
+  assert(BadCopyBlock->BodyBlock == 11);
+  assert(BadCopyBlock->Condition.Id == InvalidPayloadId);
+}
+
 void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   StructuredCFG Cfg;
 
@@ -2523,6 +2554,49 @@ void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
   assert(Copy1Ret->Terminator == TerminatorKind::Return);
   assert(hasSinglePayload(Copy0Ret->Statements, 33));
   assert(hasSinglePayload(Copy1Ret->Statements, 33));
+}
+
+void testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {10, 20}));
+  Cfg.addBlock(switchBlock(1, {10, 30}));
+
+  CFGBlock CaseHead = block(10, {11});
+  CaseHead.Statements.push_back({34});
+  Cfg.addBlock(std::move(CaseHead));
+
+  CFGBlock CaseTail = switchBlock(11, {12, 13});
+  CaseTail.Cases.front().Value = {74};
+  Cfg.addBlock(std::move(CaseTail));
+
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(13, {}));
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(30, {}));
+
+  CFGBlock BadCopy = switchBlock(40, {12});
+  BadCopy.Origin = CFGBlockOrigin::Copied;
+  BadCopy.SourceBlock = 11;
+  BadCopy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  BadCopy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  BadCopy.BodyBlock = 11;
+  BadCopy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(BadCopy));
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(10) != nullptr);
+  assert(Cfg.getBlock(11) != nullptr);
+  assert(Cfg.getBlock(40) != nullptr);
+  assert(Cfg.getBlock(0)->Successors.front() == 10);
+  assert(Cfg.getBlock(1)->Successors.front() == 10);
+  assert(!Cfg.getBlock(40)->BodyMaterialized);
+  assert(Cfg.getBlock(40)->BodyBlock == 11);
 }
 
 void testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion() {
@@ -5168,6 +5242,7 @@ int main() {
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();
   testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure();
+  testStructuredCFGRemoveBlocksIsAtomicOnLaterFailure();
   testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets();
   testStructuredCFGMaterializeRejectsMismatchedSwitchCases();
   testStructuredCFGRejectsInconsistentCopiedSwitchSuccessors();
@@ -5203,6 +5278,7 @@ int main() {
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
   testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
+  testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();

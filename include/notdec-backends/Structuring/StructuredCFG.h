@@ -130,6 +130,7 @@ public:
   bool redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
                             const std::vector<BlockId> &Preds);
   bool removeBlock(BlockId Id);
+  bool removeBlocks(const std::vector<BlockId> &Ids);
 
 private:
   BlockId nextBlockId() const;
