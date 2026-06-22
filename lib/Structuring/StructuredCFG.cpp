@@ -311,8 +311,16 @@ bool StructuredCFG::removeBlock(BlockId Id) {
   }
 
   for (CFGBlock &Block : Blocks) {
-    if (Block.BodyBlock == Id) {
-      materializeBlockBody(Block.Id);
+    if (Block.Id != Id && Block.BodyBlock == Id) {
+      if (!materializeBlockBody(Block.Id)) {
+        return false;
+      }
+    }
+  }
+
+  for (CFGBlock &Block : Blocks) {
+    if (Block.Id != Id && Block.BodyBlock == Id) {
+      return false;
     }
     Block.Successors.erase(
         std::remove(Block.Successors.begin(), Block.Successors.end(), Id),

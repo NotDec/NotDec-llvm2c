@@ -871,6 +871,34 @@ void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
   assert(hasSinglePayload(Copy->Statements, 7));
 }
 
+void testStructuredCFGRemoveBlockRejectsUnmaterializedCopy() {
+  StructuredCFG Cfg;
+
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  CFGBlock Copy = switchBlock(20, {11});
+  Copy.Origin = CFGBlockOrigin::Copied;
+  Copy.SourceBlock = 10;
+  Copy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  Copy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  Copy.BodyBlock = 10;
+  Copy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(Copy));
+
+  assert(!Cfg.removeBlock(10));
+
+  const CFGBlock *SourceBlock = Cfg.getBlock(10);
+  const CFGBlock *CopyBlock = Cfg.getBlock(20);
+  assert(SourceBlock != nullptr && CopyBlock != nullptr);
+  assert(CopyBlock->BodyBlock == 10);
+  assert(!CopyBlock->BodyMaterialized);
+  assert(CopyBlock->Successors == std::vector<BlockId>{11});
+}
+
 void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   StructuredCFG Cfg;
 
@@ -5097,6 +5125,7 @@ int main() {
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
+  testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();
   testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets();
   testStructuredCFGMaterializeRejectsMismatchedSwitchCases();
   testStructuredCFGRejectsInconsistentCopiedSwitchSuccessors();
