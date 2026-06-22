@@ -79,6 +79,10 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
   if (SourceBlock == nullptr) {
     return InvalidBlockId;
   }
+  if (SourceBlock->Terminator == TerminatorKind::Switch &&
+      Successors != SourceBlock->Successors) {
+    return InvalidBlockId;
+  }
 
   CFGBlock Copy = *SourceBlock;
   Copy.Id = nextBlockId();
@@ -224,7 +228,16 @@ StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
   Copies.reserve(RegionBlocks.size());
 
   for (BlockId Original : RegionBlocks) {
-    BlockId Copy = duplicateBlock(Original, {}, Kind, Creator);
+    const CFGBlock *OriginalBlock = getBlock(Original);
+    if (OriginalBlock == nullptr) {
+      for (BlockId OldCopy : Copies) {
+        removeBlock(OldCopy);
+      }
+      return std::nullopt;
+    }
+
+    BlockId Copy = duplicateBlock(Original, OriginalBlock->Successors, Kind,
+                                  Creator);
     if (Copy == InvalidBlockId) {
       for (BlockId OldCopy : Copies) {
         removeBlock(OldCopy);

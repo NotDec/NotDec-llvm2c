@@ -914,6 +914,24 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   assert(CopySwitch->Cases[1].Target == CopyBodyId);
 }
 
+void testStructuredCFGRejectsInconsistentCopiedSwitchSuccessors() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(10, {11, 12});
+  Cfg.addBlock(std::move(Switch));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(13, {}));
+
+  assert(Cfg.duplicateBlock(10, {13}) == InvalidBlockId);
+
+  const CFGBlock *Original = Cfg.getBlock(10);
+  assert(Original != nullptr);
+  assert(Original->Successors == std::vector<BlockId>({11, 12}));
+  assert(Original->Cases.size() == 1);
+  assert(Original->Cases.front().Target == 12);
+}
+
 void testStructuredCFGMaterializeFailsWhenBodySourceIsMissing() {
   StructuredCFG Cfg;
 
@@ -4982,6 +5000,7 @@ int main() {
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets();
+  testStructuredCFGRejectsInconsistentCopiedSwitchSuccessors();
   testStructuredCFGMaterializeFailsWhenBodySourceIsMissing();
   testStructuredCFGRedirectPredecessorsIsAtomic();
   testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();
