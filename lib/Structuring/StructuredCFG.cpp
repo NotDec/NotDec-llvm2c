@@ -155,17 +155,19 @@ bool StructuredCFG::materializeBlockBody(BlockId Id) {
   }
 
   const CFGBlock *Body = getBlock(BodyId);
-  if (Body != nullptr) {
-    // Materializing copies renderer payload from the body source. CFG identity
-    // stays on this block: successors and switch targets must keep any copied
-    // region rewrites that were already applied.
-    Block->Statements = Body->Statements;
-    Block->Terminator = Body->Terminator;
-    Block->Condition = Body->Condition;
-    if (Block->Cases.size() == Body->Cases.size()) {
-      for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
-        Block->Cases[I].Value = Body->Cases[I].Value;
-      }
+  if (Body == nullptr) {
+    return false;
+  }
+
+  // Materializing copies renderer payload from the body source. CFG identity
+  // stays on this block: successors and switch targets must keep any copied
+  // region rewrites that were already applied.
+  Block->Statements = Body->Statements;
+  Block->Terminator = Body->Terminator;
+  Block->Condition = Body->Condition;
+  if (Block->Cases.size() == Body->Cases.size()) {
+    for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
+      Block->Cases[I].Value = Body->Cases[I].Value;
     }
   }
 

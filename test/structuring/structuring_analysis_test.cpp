@@ -907,6 +907,31 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   assert(CopySwitch->Cases[1].Target == CopyBodyId);
 }
 
+void testStructuredCFGMaterializeFailsWhenBodySourceIsMissing() {
+  StructuredCFG Cfg;
+
+  CFGBlock Copy = block(20, {});
+  Copy.Origin = CFGBlockOrigin::Copied;
+  Copy.SourceBlock = 10;
+  Copy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  Copy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  Copy.BodyBlock = 10;
+  Copy.BodyMaterialized = false;
+  Copy.Statements.push_back({7});
+  Cfg.addBlock(std::move(Copy));
+
+  assert(!Cfg.materializeBlockBody(20));
+
+  const CFGBlock *Block = Cfg.getBlock(20);
+  assert(Block != nullptr);
+  assert(Block->Origin == CFGBlockOrigin::Copied);
+  assert(Block->SourceBlock == 10);
+  assert(Block->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(!Block->BodyMaterialized);
+  assert(Block->BodyBlock == 10);
+  assert(hasSinglePayload(Block->Statements, 7));
+}
+
 void testStructuredCFGRedirectPredecessorsIsAtomic() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -4751,6 +4776,7 @@ int main() {
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets();
+  testStructuredCFGMaterializeFailsWhenBodySourceIsMissing();
   testStructuredCFGRedirectPredecessorsIsAtomic();
   testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();
   testStructuredCFGReplaceEdgeUpdatesSwitchCases();
