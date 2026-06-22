@@ -1327,6 +1327,50 @@ void testDuplicationReverterKeepsSyntheticIdentitySeparate() {
   assert(Forwarder->Successors == std::vector<BlockId>{4});
 }
 
+void testDuplicationReverterKeepsCopiedSourcesSeparate() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Source1 = block(1, {5});
+  Source1.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source1));
+
+  Cfg.addBlock(block(2, {3}));
+
+  CFGBlock Source3 = block(3, {5});
+  Source3.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source3));
+
+  BlockId Copy1 = Cfg.duplicateBlock(1, {5});
+  BlockId Copy3 = Cfg.duplicateBlock(3, {5});
+  assert(Copy1 != InvalidBlockId && Copy3 != InvalidBlockId);
+  assert(Cfg.materializeBlockBody(Copy1));
+  assert(Cfg.materializeBlockBody(Copy3));
+
+  CFGBlock *Pred0 = Cfg.getBlock(0);
+  CFGBlock *Pred2 = Cfg.getBlock(2);
+  assert(Pred0 != nullptr && Pred2 != nullptr);
+  Pred0->Successors = {Copy1};
+  Pred2->Successors = {Copy3};
+
+  Cfg.addBlock(block(5, {}));
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *FirstCopy = Cfg.getBlock(Copy1);
+  const CFGBlock *SecondCopy = Cfg.getBlock(Copy3);
+  assert(FirstCopy != nullptr && SecondCopy != nullptr);
+  assert(FirstCopy->Origin == CFGBlockOrigin::Copied);
+  assert(SecondCopy->Origin == CFGBlockOrigin::Copied);
+  assert(FirstCopy->SourceBlock == 1);
+  assert(SecondCopy->SourceBlock == 3);
+  assert(FirstCopy->Successors == std::vector<BlockId>{5});
+  assert(SecondCopy->Successors == std::vector<BlockId>{5});
+}
+
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -4940,6 +4984,7 @@ int main() {
   testDuplicationReverterMergesExactDuplicateBlocks();
   testDuplicationReverterRedirectsSwitchPredecessorCases();
   testDuplicationReverterKeepsSyntheticIdentitySeparate();
+  testDuplicationReverterKeepsCopiedSourcesSeparate();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCopiesConnectedPredsOnce();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
