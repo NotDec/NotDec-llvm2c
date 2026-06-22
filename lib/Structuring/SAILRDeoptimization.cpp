@@ -424,8 +424,12 @@ bool reachesBlockFromNonDefaultSwitchSuccessor(const StructuredCFG &Graph,
 bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
                                const std::vector<BlockId> &Preds,
                                std::vector<BlockId> &OutCopies) {
+  // Keep the helper transactional: a failed copy should leave the caller's
+  // graph exactly as it was before we started cloning the region.
+  StructuredCFG Snapshot = Graph;
   std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
   if (!CopyRegion.has_value()) {
+    Graph = std::move(Snapshot);
     return false;
   }
 
@@ -434,6 +438,7 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
       for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
         Graph.removeBlock(OldCopy);
       }
+      Graph = std::move(Snapshot);
       return false;
     }
   }
@@ -444,6 +449,7 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
     for (const auto &[_, Copy] : CopyRegion->Blocks) {
       Graph.removeBlock(Copy);
     }
+    Graph = std::move(Snapshot);
     return false;
   }
 
@@ -574,8 +580,12 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
                                      const LinearRegion &Region,
                                      const std::vector<BlockId> &Preds,
                                      std::vector<BlockId> &OutCopies) {
+  // Keep the helper transactional: a failed copy should leave the caller's
+  // graph exactly as it was before we started cloning the region.
+  StructuredCFG Snapshot = Graph;
   std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
   if (!CopyRegion.has_value()) {
+    Graph = std::move(Snapshot);
     return false;
   }
 
@@ -584,6 +594,7 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
       for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
         Graph.removeBlock(OldCopy);
       }
+      Graph = std::move(Snapshot);
       return false;
     }
   }
@@ -594,6 +605,7 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
     for (const auto &[_, Copy] : CopyRegion->Blocks) {
       Graph.removeBlock(Copy);
     }
+    Graph = std::move(Snapshot);
     return false;
   }
 
