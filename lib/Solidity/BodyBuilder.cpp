@@ -32,8 +32,6 @@ PayloadRef addPayload(std::vector<std::string> &Payloads, std::string Text) {
   return PayloadRef{Payloads.size() - 1};
 }
 
-std::string blockName(BlockId Id) { return "block_" + std::to_string(Id); }
-
 std::string payloadText(const std::vector<std::string> &Payloads,
                         PayloadRef Ref) {
   if (!Ref.isValid() || Ref.Id >= Payloads.size()) {
@@ -48,10 +46,26 @@ std::string conditionText(const std::vector<std::string> &Payloads,
   return Node.ConditionNegated ? "!(" + Text + ")" : Text;
 }
 
+std::string indent(unsigned Depth) { return std::string(Depth * 2, ' '); }
+
+// The backend does not own expression recovery yet. Keep unknown low-level
+// predicates as comments while emitting a valid Solidity boolean expression.
+std::string todoCondition(llvm::StringRef Text) {
+  std::string Comment = Text.str();
+  std::string::size_type Pos = 0;
+  while ((Pos = Comment.find("*/", Pos)) != std::string::npos) {
+    Comment.replace(Pos, 2, "* /");
+    Pos += 3;
+  }
+  return "false /* TODO: " + Comment + " */";
+}
+
 void renderStructuredNode(const StructuredTree &Tree,
                           const std::vector<std::string> &Payloads,
                           structuring::NodeId Id,
-                          std::vector<std::string> &Out) {
+                          std::vector<std::string> &Out,
+                          unsigned Depth = 0,
+                          bool InLoop = false) {
   const StructuredNode *Node = Tree.getNode(Id);
   if (Node == nullptr) {
     return;
@@ -60,94 +74,116 @@ void renderStructuredNode(const StructuredTree &Tree,
   switch (Node->Kind) {
   case StructuredNodeKind::Sequence:
     for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out);
+      renderStructuredNode(Tree, Payloads, Child, Out, Depth, InLoop);
     }
     break;
   case StructuredNodeKind::Label:
-    Out.push_back("// " + blockName(Node->Block) + ":");
     break;
   case StructuredNodeKind::BasicBlock:
     for (PayloadRef Ref : Node->Statements) {
-      Out.push_back(payloadText(Payloads, Ref));
+      Out.push_back(indent(Depth) + payloadText(Payloads, Ref));
     }
     break;
   case StructuredNodeKind::If:
-    Out.push_back("// if " + conditionText(Payloads, *Node));
+    Out.push_back(indent(Depth) + "if (" +
+                  todoCondition(conditionText(Payloads, *Node)) + ") {");
     if (Node->Children.empty() &&
         (Node->Then != InvalidNodeId || Node->Else != InvalidNodeId)) {
-      renderStructuredNode(Tree, Payloads, Node->Then, Out);
+      renderStructuredNode(Tree, Payloads, Node->Then, Out, Depth + 1, InLoop);
+      Out.push_back(indent(Depth) + "}");
       if (Node->Else != InvalidNodeId) {
-        Out.push_back("// else");
-        renderStructuredNode(Tree, Payloads, Node->Else, Out);
+        Out.push_back(indent(Depth) + "else {");
+        renderStructuredNode(Tree, Payloads, Node->Else, Out, Depth + 1,
+                             InLoop);
+        Out.push_back(indent(Depth) + "}");
       }
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out);
+        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1, InLoop);
       }
+      Out.push_back(indent(Depth) + "}");
     }
     break;
   case StructuredNodeKind::Switch:
-    Out.push_back("// switch " + payloadText(Payloads, Node->Condition));
+    Out.push_back(indent(Depth) + "{");
+    Out.push_back(indent(Depth + 1) + "/* TODO: switch " +
+                  payloadText(Payloads, Node->Condition) + " */");
     if (Node->Children.empty() &&
         (!Node->StructuredCases.empty() || Node->Default != InvalidNodeId)) {
       for (const auto &Case : Node->StructuredCases) {
-        Out.push_back("// case " + payloadText(Payloads, Case.Value));
-        renderStructuredNode(Tree, Payloads, Case.Body, Out);
+        Out.push_back(indent(Depth + 1) + "/* case " +
+                      payloadText(Payloads, Case.Value) + " */");
+        renderStructuredNode(Tree, Payloads, Case.Body, Out, Depth + 1,
+                             InLoop);
       }
       if (Node->Default != InvalidNodeId) {
-        Out.push_back("// default");
-        renderStructuredNode(Tree, Payloads, Node->Default, Out);
+        Out.push_back(indent(Depth + 1) + "/* default */");
+        renderStructuredNode(Tree, Payloads, Node->Default, Out, Depth + 1,
+                             InLoop);
       }
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out);
+        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1, InLoop);
       }
     }
+    Out.push_back(indent(Depth) + "}");
     break;
   case StructuredNodeKind::Goto:
-    Out.push_back("// goto " + blockName(Node->Target));
     break;
   case StructuredNodeKind::Return:
-    Out.push_back("// return");
     break;
   case StructuredNodeKind::Unreachable:
-    Out.push_back("// unreachable");
     break;
   case StructuredNodeKind::Break:
-    Out.push_back("// break");
+    if (InLoop) {
+      Out.push_back(indent(Depth) + "break;");
+    }
     break;
   case StructuredNodeKind::Continue:
-    Out.push_back("// continue");
+    if (InLoop) {
+      Out.push_back(indent(Depth) + "continue;");
+    }
     break;
   case StructuredNodeKind::While:
-    Out.push_back("// while " + conditionText(Payloads, *Node));
+    Out.push_back(indent(Depth) + "while (" +
+                  todoCondition(conditionText(Payloads, *Node)) + ") {");
     if (Node->Body != InvalidNodeId) {
-      renderStructuredNode(Tree, Payloads, Node->Body, Out);
+      renderStructuredNode(Tree, Payloads, Node->Body, Out, Depth + 1,
+                           /*InLoop=*/true);
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out);
+        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1,
+                             /*InLoop=*/true);
       }
     }
+    Out.push_back(indent(Depth) + "}");
     break;
   case StructuredNodeKind::DoWhile:
-    Out.push_back("// do-while " + conditionText(Payloads, *Node));
+    Out.push_back(indent(Depth) + "do {");
     if (Node->Body != InvalidNodeId) {
-      renderStructuredNode(Tree, Payloads, Node->Body, Out);
+      renderStructuredNode(Tree, Payloads, Node->Body, Out, Depth + 1,
+                           /*InLoop=*/true);
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out);
+        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1,
+                             /*InLoop=*/true);
       }
     }
+    Out.push_back(indent(Depth) + "} while (" +
+                  todoCondition(conditionText(Payloads, *Node)) + ");");
     break;
   case StructuredNodeKind::InfiniteLoop:
-    Out.push_back("// infinite loop");
+    Out.push_back(indent(Depth) + "while (true) {");
     if (Node->Body != InvalidNodeId) {
-      renderStructuredNode(Tree, Payloads, Node->Body, Out);
+      renderStructuredNode(Tree, Payloads, Node->Body, Out, Depth + 1,
+                           /*InLoop=*/true);
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out);
+        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1,
+                             /*InLoop=*/true);
       }
     }
+    Out.push_back(indent(Depth) + "}");
     break;
   }
 }
@@ -211,8 +247,9 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
     renderStructuredNode(Tree, Payloads, Tree.root(), Result);
   }
 
-  Result.push_back(Payloads.empty() ? "// TODO: recover body"
-                                    : "// TODO: recover remaining body");
+  if (Result.empty()) {
+    Result.push_back("/* TODO: recover body */");
+  }
   return Result;
 }
 
