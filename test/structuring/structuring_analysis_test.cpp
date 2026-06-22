@@ -2676,6 +2676,22 @@ void testStructuringOptimizationPassRecoversAndContinuesFixedPoint() {
   assert(Result.Output.getBlock(99) == nullptr);
 }
 
+void testStructuringOptimizationPassRejectsOnlyRolledBackChanges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.MaxOptIters = 1;
+  Options.MustImproveRelativeQuality = false;
+  FailOnBlockRegionStructurer Structurer;
+  RecoverThenRemoveSuccessorPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Pass.Attempts == 1);
+  assert(!Result.Succeeded);
+}
+
 void testStructuringOptimizationPipelineKeepsAcceptedPasses() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -5131,6 +5147,7 @@ int main() {
   testStructuringOptimizationPassCanOverrideNewGotos();
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
+  testStructuringOptimizationPassRejectsOnlyRolledBackChanges();
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
   testSAILRDeoptimizationPipelineMatchesAngrOrder();
   testRecursiveStructurerVisitsChildBeforeParent();

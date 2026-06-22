@@ -73,7 +73,6 @@ StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
     if (!Changed) {
       break;
     }
-    HadChanges = true;
 
     Current = Evaluator.evaluate(Candidate, Structurer, Options.EdgesToRemove);
     if (!Current.Succeeded) {
@@ -85,6 +84,7 @@ StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
           Evaluator.evaluate(Candidate, Structurer, Options.EdgesToRemove);
       continue;
     }
+    HadChanges = true;
 
     if (Options.MaxOptIters <= 1) {
       break;
