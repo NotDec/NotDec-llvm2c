@@ -4,6 +4,7 @@
 #include "notdec-backends/Structuring/StructuringOptimizationPass.h"
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace notdec::backend::structuring {
@@ -20,6 +21,7 @@ struct StructuringOptimizationPipelineResult {
 class StructuringOptimizationPipeline {
 public:
   void addPass(std::unique_ptr<StructuringOptimizationPass> Pass);
+  std::vector<std::string> passNames() const;
 
   StructuringOptimizationPipelineResult run(const StructuredCFG &Cfg,
                                             RegionStructurer &Structurer);

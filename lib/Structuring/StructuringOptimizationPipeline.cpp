@@ -11,6 +11,15 @@ void StructuringOptimizationPipeline::addPass(
   }
 }
 
+std::vector<std::string> StructuringOptimizationPipeline::passNames() const {
+  std::vector<std::string> Names;
+  Names.reserve(Passes.size());
+  for (const std::unique_ptr<StructuringOptimizationPass> &Pass : Passes) {
+    Names.emplace_back(Pass->name());
+  }
+  return Names;
+}
+
 StructuringOptimizationPipelineResult
 StructuringOptimizationPipeline::run(const StructuredCFG &Cfg,
                                      RegionStructurer &Structurer) {

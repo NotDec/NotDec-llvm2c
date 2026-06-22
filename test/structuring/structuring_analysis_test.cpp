@@ -280,6 +280,8 @@ class RemoveFirstSuccessorPass : public StructuringOptimizationPass {
 public:
   using StructuringOptimizationPass::StructuringOptimizationPass;
 
+  const char *name() const override { return "RemoveFirstSuccessorPass"; }
+
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override {
@@ -298,6 +300,8 @@ protected:
 class AddFirstSuccessorPass : public StructuringOptimizationPass {
 public:
   using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  const char *name() const override { return "AddFirstSuccessorPass"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,
@@ -329,6 +333,8 @@ protected:
 class RecoverThenRemoveSuccessorPass : public StructuringOptimizationPass {
 public:
   using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  const char *name() const override { return "RecoverThenRemoveSuccessorPass"; }
 
   unsigned Attempts = 0;
 
@@ -2309,6 +2315,18 @@ void testStructuringOptimizationPipelineKeepsAcceptedPasses() {
   const CFGBlock *Block0 = Result.Output.getBlock(0);
   assert(Block0 != nullptr);
   assert(Block0->Successors.empty());
+}
+
+void testSAILRDeoptimizationPipelineMatchesAngrOrder() {
+  StructuringOptimizationPipeline Pipeline = buildSAILRDeoptimizationPipeline();
+  assert((Pipeline.passNames() == std::vector<std::string>{
+                                      "SwitchDefaultCaseDuplicator",
+                                      "DuplicationReverter",
+                                      "LoweredSwitchSimplifier",
+                                      "ReturnDuplicatorLow",
+                                      "CrossJumpReverter",
+                                      "SwitchReusedEntryRewriter",
+                                  }));
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
@@ -4721,6 +4739,7 @@ int main() {
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
+  testSAILRDeoptimizationPipelineMatchesAngrOrder();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();

@@ -1052,12 +1052,12 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
 StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline() {
   StructuringOptimizationPipeline Pipeline;
-  Pipeline.addPass(std::make_unique<DuplicationReverter>());
-  Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
-  Pipeline.addPass(std::make_unique<LoweredSwitchSimplifier>());
-  Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
   Pipeline.addPass(std::make_unique<SwitchDefaultCaseDuplicator>());
+  Pipeline.addPass(std::make_unique<DuplicationReverter>());
+  Pipeline.addPass(std::make_unique<LoweredSwitchSimplifier>());
+  Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
+  Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
   return Pipeline;
 }
 

@@ -17,6 +17,8 @@ public:
       StructuringOptimizationOptions Options = defaultOptions())
       : StructuringOptimizationPass(Options) {}
 
+  const char *name() const override { return "DuplicationReverter"; }
+
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
@@ -29,6 +31,8 @@ public:
   explicit ReturnDuplicatorLow(
       StructuringOptimizationOptions Options = defaultOptions())
       : StructuringOptimizationPass(Options) {}
+
+  const char *name() const override { return "ReturnDuplicatorLow"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,
@@ -43,6 +47,8 @@ public:
       StructuringOptimizationOptions Options = defaultOptions())
       : StructuringOptimizationPass(Options) {}
 
+  const char *name() const override { return "SwitchDefaultCaseDuplicator"; }
+
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
@@ -56,6 +62,8 @@ public:
       StructuringOptimizationOptions Options = defaultOptions())
       : StructuringOptimizationPass(Options) {}
 
+  const char *name() const override { return "SwitchReusedEntryRewriter"; }
+
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
@@ -68,6 +76,8 @@ public:
   explicit LoweredSwitchSimplifier(
       StructuringOptimizationOptions Options = defaultOptions())
       : StructuringOptimizationPass(Options) {}
+
+  const char *name() const override { return "LoweredSwitchSimplifier"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,
@@ -83,6 +93,8 @@ public:
       std::size_t MaxDuplicatedStatements = 16)
       : StructuringOptimizationPass(Options),
         MaxDuplicatedStatements(MaxDuplicatedStatements) {}
+
+  const char *name() const override { return "CrossJumpReverter"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,

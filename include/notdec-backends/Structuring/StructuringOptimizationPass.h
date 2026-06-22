@@ -38,6 +38,8 @@ public:
       : Options(Options) {}
   virtual ~StructuringOptimizationPass() = default;
 
+  virtual const char *name() const = 0;
+
   StructuringOptimizationResult analyze(const StructuredCFG &Cfg,
                                         RegionStructurer &Structurer);
 
