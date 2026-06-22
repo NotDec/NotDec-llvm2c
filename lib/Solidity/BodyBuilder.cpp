@@ -60,6 +60,42 @@ std::string todoCondition(llvm::StringRef Text) {
   return "false /* TODO: " + Comment + " */";
 }
 
+std::string solidityStringLiteral(llvm::StringRef Text) {
+  std::string Result = "\"";
+  for (char C : Text) {
+    switch (C) {
+    case '\\':
+      Result += "\\\\";
+      break;
+    case '"':
+      Result += "\\\"";
+      break;
+    case '\n':
+      Result += "\\n";
+      break;
+    case '\r':
+      Result += "\\r";
+      break;
+    case '\t':
+      Result += "\\t";
+      break;
+    default:
+      if (static_cast<unsigned char>(C) >= 0x20 &&
+          static_cast<unsigned char>(C) < 0x7f) {
+        Result.push_back(C);
+      } else {
+        Result += "\\x";
+        constexpr char Hex[] = "0123456789abcdef";
+        Result.push_back(Hex[(static_cast<unsigned char>(C) >> 4) & 0xf]);
+        Result.push_back(Hex[static_cast<unsigned char>(C) & 0xf]);
+      }
+      break;
+    }
+  }
+  Result += "\"";
+  return Result;
+}
+
 void renderStructuredNode(const StructuredTree &Tree,
                           const std::vector<std::string> &Payloads,
                           structuring::NodeId Id,
@@ -295,6 +331,13 @@ BodyBuilder::getEventName(const llvm::Instruction &I, llvm::StringRef Kind) {
 
 std::string BodyBuilder::formatRevertStatement(const llvm::Instruction &I,
                                                llvm::StringRef Kind) {
+  if (Kind == "error_string") {
+    if (std::optional<std::string> Literal = getStringMetadata(
+            I, "notdec.solidity_revert.error_string_literal")) {
+      return "require(false, " + solidityStringLiteral(*Literal) + ");";
+    }
+  }
+
   std::string Result = "revert();";
   std::string Comment = Kind.str();
 
