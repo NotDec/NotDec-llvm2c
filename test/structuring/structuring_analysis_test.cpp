@@ -1362,6 +1362,29 @@ void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   assert(hasSinglePayload(CopyRet1->Statements, 9));
 }
 
+void testReturnDuplicatorLowSkipsLargeFunction() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Ret = block(2, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({9});
+  Cfg.addBlock(std::move(Ret));
+
+  Cfg.addBlock(block(3, {}));
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions(),
+                               /*MaxFunctionBlocks=*/3);
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(1)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(2) != nullptr);
+}
+
 void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -4862,6 +4885,7 @@ int main() {
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCopiesConnectedPredsOnce();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
+  testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();

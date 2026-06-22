@@ -29,14 +29,18 @@ public:
   static StructuringOptimizationOptions defaultOptions();
 
   explicit ReturnDuplicatorLow(
-      StructuringOptimizationOptions Options = defaultOptions())
-      : StructuringOptimizationPass(Options) {}
+      StructuringOptimizationOptions Options = defaultOptions(),
+      std::size_t MaxFunctionBlocks = 500)
+      : StructuringOptimizationPass(Options), MaxFunctionBlocks(MaxFunctionBlocks) {}
 
   const char *name() const override { return "ReturnDuplicatorLow"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
+
+private:
+  std::size_t MaxFunctionBlocks;
 };
 
 class SwitchDefaultCaseDuplicator : public StructuringOptimizationPass {

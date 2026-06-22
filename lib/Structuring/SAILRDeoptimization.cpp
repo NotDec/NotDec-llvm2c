@@ -931,6 +931,10 @@ StructuringOptimizationOptions ReturnDuplicatorLow::defaultOptions() {
 
 bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
                                      const StructuringEvaluation &Current) {
+  if (Graph.blocks().size() > MaxFunctionBlocks) {
+    return false;
+  }
+
   std::map<BlockId, ReturnRegion> Regions;
 
   for (const CFGBlock &Block : Graph.blocks()) {
