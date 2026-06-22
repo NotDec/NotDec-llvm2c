@@ -2102,6 +2102,57 @@ void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   assert(hasSinglePayload(Copy->Statements, 23));
 }
 
+void testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 10}));
+  Cfg.addBlock(block(1, {20}));
+  Cfg.addBlock(switchBlock(2, {1, 11}));
+  Cfg.addBlock(switchBlock(3, {1, 12}));
+  Cfg.addBlock(block(10, {}));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(20, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions(),
+      /*MaxEntryReuseCount=*/2, /*MaxReusedEntries=*/20);
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(0)->Successors.front() == 1);
+  assert(Cfg.getBlock(2)->Successors.front() == 1);
+  assert(Cfg.getBlock(3)->Successors.front() == 1);
+}
+
+void testSwitchReusedEntryRewriterSkipsTooManyReusedEntries() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 10}));
+  Cfg.addBlock(block(1, {20}));
+  Cfg.addBlock(switchBlock(2, {1, 11}));
+  Cfg.addBlock(switchBlock(3, {4, 12}));
+  Cfg.addBlock(block(4, {21}));
+  Cfg.addBlock(switchBlock(5, {4, 13}));
+  Cfg.addBlock(block(10, {}));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(13, {}));
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(21, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions(),
+      /*MaxEntryReuseCount=*/10, /*MaxReusedEntries=*/1);
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(0)->Successors.front() == 1);
+  assert(Cfg.getBlock(2)->Successors.front() == 1);
+  assert(Cfg.getBlock(3)->Successors.front() == 4);
+  assert(Cfg.getBlock(5)->Successors.front() == 4);
+}
+
 void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
   StructuredCFG Cfg;
 
@@ -4821,6 +4872,8 @@ int main() {
   testSwitchReusedEntryRewriterCopiesEntryTailRegion();
   testSwitchReusedEntryRewriterCopiesConnectedPredsOnce();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
+  testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
+  testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();

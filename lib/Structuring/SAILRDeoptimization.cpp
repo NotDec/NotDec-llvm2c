@@ -593,7 +593,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
     EntryIds.push_back(Entry.Id);
   }
 
-  bool Changed = false;
+  std::map<BlockId, std::vector<BlockId>> SwitchPredsByEntry;
   for (BlockId EntryId : EntryIds) {
     const CFGBlock *Entry = Graph.getBlock(EntryId);
     if (Entry == nullptr) {
@@ -614,6 +614,22 @@ bool SwitchReusedEntryRewriter::runOnGraph(
     std::sort(SwitchPreds.begin(), SwitchPreds.end());
     SwitchPreds.erase(std::unique(SwitchPreds.begin(), SwitchPreds.end()),
                       SwitchPreds.end());
+    if (SwitchPreds.size() > MaxEntryReuseCount) {
+      return false;
+    }
+    SwitchPredsByEntry.emplace(EntryId, std::move(SwitchPreds));
+  }
+
+  if (SwitchPredsByEntry.size() > MaxReusedEntries) {
+    return false;
+  }
+
+  bool Changed = false;
+  for (const auto &[EntryId, SwitchPreds] : SwitchPredsByEntry) {
+    const CFGBlock *Entry = Graph.getBlock(EntryId);
+    if (Entry == nullptr) {
+      continue;
+    }
 
     if (Graph.successorsOf(EntryId).empty()) {
       continue;

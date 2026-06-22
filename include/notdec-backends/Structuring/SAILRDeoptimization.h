@@ -59,14 +59,22 @@ public:
   static StructuringOptimizationOptions defaultOptions();
 
   explicit SwitchReusedEntryRewriter(
-      StructuringOptimizationOptions Options = defaultOptions())
-      : StructuringOptimizationPass(Options) {}
+      StructuringOptimizationOptions Options = defaultOptions(),
+      std::size_t MaxEntryReuseCount = 10,
+      std::size_t MaxReusedEntries = 20)
+      : StructuringOptimizationPass(Options),
+        MaxEntryReuseCount(MaxEntryReuseCount),
+        MaxReusedEntries(MaxReusedEntries) {}
 
   const char *name() const override { return "SwitchReusedEntryRewriter"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
+
+private:
+  std::size_t MaxEntryReuseCount;
+  std::size_t MaxReusedEntries;
 };
 
 class LoweredSwitchSimplifier : public StructuringOptimizationPass {
