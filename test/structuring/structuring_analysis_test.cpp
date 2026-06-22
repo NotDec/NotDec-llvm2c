@@ -1463,6 +1463,53 @@ void testDuplicationReverterRedirectsSwitchPredecessorCases() {
   assert(SwitchBlock->Cases.front().Target == 1);
 }
 
+void testDuplicationReverterSkipsWhenDropCannotBeRemoved() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(block(0, {1}));
+  CFGBlock Keep = block(1, {4});
+  Keep.Statements.push_back({7});
+  Cfg.addBlock(std::move(Keep));
+
+  Cfg.addBlock(block(2, {3}));
+  CFGBlock Drop = switchBlock(3, {4, 5});
+  Drop.Statements.push_back({7});
+  Drop.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Drop));
+
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(5, {}));
+
+  CFGBlock BadCopy = switchBlock(20, {4});
+  BadCopy.Origin = CFGBlockOrigin::Copied;
+  BadCopy.SourceBlock = 3;
+  BadCopy.CopyKind = CFGBlockCopyKind::RegionCopy;
+  BadCopy.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  BadCopy.BodyBlock = 3;
+  BadCopy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(BadCopy));
+
+  CFGBlock *KeepBlock = Cfg.getBlock(1);
+  CFGBlock *DropBlock = Cfg.getBlock(3);
+  assert(KeepBlock != nullptr && DropBlock != nullptr);
+  KeepBlock->Terminator = DropBlock->Terminator;
+  KeepBlock->Condition = DropBlock->Condition;
+  KeepBlock->Successors = DropBlock->Successors;
+  KeepBlock->Cases = DropBlock->Cases;
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(3) != nullptr);
+  assert(Cfg.getBlock(2)->Successors == std::vector<BlockId>{3});
+  const CFGBlock *BadCopyBlock = Cfg.getBlock(20);
+  assert(BadCopyBlock != nullptr);
+  assert(!BadCopyBlock->BodyMaterialized);
+  assert(BadCopyBlock->BodyBlock == 3);
+}
+
 void testDuplicationReverterKeepsSyntheticIdentitySeparate() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -5258,6 +5305,7 @@ int main() {
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testDuplicationReverterRedirectsSwitchPredecessorCases();
+  testDuplicationReverterSkipsWhenDropCannotBeRemoved();
   testDuplicationReverterKeepsSyntheticIdentitySeparate();
   testDuplicationReverterKeepsCopiedSourcesSeparate();
   testCrossJumpReverterDuplicatesLinearGotoTarget();

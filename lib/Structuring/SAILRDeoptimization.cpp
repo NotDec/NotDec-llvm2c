@@ -970,11 +970,13 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
         continue;
       }
 
-      if (!Graph.redirectPredecessors(DropId, Keep->Id, DropPreds)) {
+      StructuredCFG Candidate = Graph;
+      if (!Candidate.redirectPredecessors(DropId, Keep->Id, DropPreds) ||
+          !Candidate.removeBlock(DropId)) {
         continue;
       }
 
-      Graph.removeBlock(DropId);
+      Graph = std::move(Candidate);
       return true;
     }
   }
