@@ -864,6 +864,49 @@ void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
   assert(hasSinglePayload(Copy->Statements, 7));
 }
 
+void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(10, {11, 12});
+  Switch.Condition = {70};
+  Switch.Cases.clear();
+  Switch.Cases.push_back({{71}, 12});
+  Switch.Cases.push_back({{72}, 11});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Body = block(11, {13});
+  Body.Statements.push_back({31});
+  Cfg.addBlock(std::move(Body));
+
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(block(13, {}));
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({10, 11});
+  assert(CopyRegion.has_value());
+
+  BlockId CopySwitchId = CopyRegion->copyOf(10);
+  BlockId CopyBodyId = CopyRegion->copyOf(11);
+  assert(CopySwitchId != InvalidBlockId);
+  assert(CopyBodyId != InvalidBlockId);
+
+  assert(Cfg.materializeBlockBody(CopySwitchId));
+  const CFGBlock *CopySwitch = Cfg.getBlock(CopySwitchId);
+  assert(CopySwitch != nullptr);
+  assert(CopySwitch->Origin == CFGBlockOrigin::Copied);
+  assert(CopySwitch->SourceBlock == 10);
+  assert(CopySwitch->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(CopySwitch->BodyMaterialized);
+  assert(CopySwitch->BodyBlock == CopySwitchId);
+  assert(CopySwitch->Terminator == TerminatorKind::Switch);
+  assert(CopySwitch->Condition.Id == 70);
+  assert(CopySwitch->Successors == std::vector<BlockId>({CopyBodyId, 12}));
+  assert(CopySwitch->Cases.size() == 2);
+  assert(CopySwitch->Cases[0].Value.Id == 71);
+  assert(CopySwitch->Cases[0].Target == 12);
+  assert(CopySwitch->Cases[1].Value.Id == 72);
+  assert(CopySwitch->Cases[1].Target == CopyBodyId);
+}
+
 void testStructuredCFGRedirectPredecessorsIsAtomic() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -4707,6 +4750,7 @@ int main() {
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
+  testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets();
   testStructuredCFGRedirectPredecessorsIsAtomic();
   testStructuredCFGRedirectPredecessorsUpdatesSwitchCases();
   testStructuredCFGReplaceEdgeUpdatesSwitchCases();

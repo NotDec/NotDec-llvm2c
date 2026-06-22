@@ -122,6 +122,7 @@ public:
   CFGBlock *getBlock(BlockId Id);
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
+  bool materializeBlockBody(BlockId Id);
   bool hasEdge(BlockId From, BlockId To) const;
   std::vector<BlockId> successorsOf(BlockId From) const;
   std::vector<BlockId> predecessorsOf(BlockId Target) const;

@@ -142,6 +142,38 @@ const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
   return getBlock(bodyBlock(Id));
 }
 
+bool StructuredCFG::materializeBlockBody(BlockId Id) {
+  CFGBlock *Block = getBlock(Id);
+  if (Block == nullptr) {
+    return false;
+  }
+  BlockId BodyId = bodyBlock(Id);
+  if (BodyId == Id) {
+    Block->BodyBlock = Id;
+    Block->BodyMaterialized = true;
+    return true;
+  }
+
+  const CFGBlock *Body = getBlock(BodyId);
+  if (Body != nullptr) {
+    // Materializing copies renderer payload from the body source. CFG identity
+    // stays on this block: successors and switch targets must keep any copied
+    // region rewrites that were already applied.
+    Block->Statements = Body->Statements;
+    Block->Terminator = Body->Terminator;
+    Block->Condition = Body->Condition;
+    if (Block->Cases.size() == Body->Cases.size()) {
+      for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
+        Block->Cases[I].Value = Body->Cases[I].Value;
+      }
+    }
+  }
+
+  Block->BodyBlock = Id;
+  Block->BodyMaterialized = true;
+  return true;
+}
+
 bool StructuredCFG::hasEdge(BlockId From, BlockId To) const {
   const CFGBlock *Block = getBlock(From);
   return Block != nullptr && hasTarget(*Block, To);
@@ -259,8 +291,7 @@ bool StructuredCFG::removeBlock(BlockId Id) {
 
   for (CFGBlock &Block : Blocks) {
     if (Block.BodyBlock == Id) {
-      Block.BodyBlock = Block.Id;
-      Block.BodyMaterialized = true;
+      materializeBlockBody(Block.Id);
     }
     Block.Successors.erase(
         std::remove(Block.Successors.begin(), Block.Successors.end(), Id),
