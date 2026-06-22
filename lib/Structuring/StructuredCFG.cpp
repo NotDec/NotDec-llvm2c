@@ -92,6 +92,11 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
   Copy.BodyBlock = SourceBlock->BodyBlock == InvalidBlockId
                        ? SourceBlock->Id
                        : SourceBlock->BodyBlock;
+  Copy.Statements.clear();
+  Copy.Condition = {};
+  for (SwitchCase &Case : Copy.Cases) {
+    Case.Value = {};
+  }
   Copy.Successors = std::move(Successors);
   return addBlock(std::move(Copy));
 }

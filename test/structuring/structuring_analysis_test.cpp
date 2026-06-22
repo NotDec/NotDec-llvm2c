@@ -733,7 +733,7 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(Copy->BodyBlock == 10);
   assert(Cfg.bodyBlock(CopyId) == 10);
   assert(Cfg.getBodyBlock(CopyId) == Cfg.getBlock(10));
-  assert(hasSinglePayload(Copy->Statements, 7));
+  assert(Copy->Statements.empty());
   assert((Copy->Successors == std::vector<BlockId>{11}));
 
   BlockId SecondCopyId = Cfg.duplicateBlock(CopyId, {});
@@ -745,6 +745,13 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(!SecondCopy->BodyMaterialized);
   assert(SecondCopy->BodyBlock == 10);
   assert(Cfg.bodyBlock(SecondCopyId) == 10);
+
+  assert(Cfg.materializeBlockBody(CopyId));
+  Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(hasSinglePayload(Copy->Statements, 7));
 }
 
 void testGotoStructurerRendersVirtualBlockBodySource() {
@@ -1067,6 +1074,10 @@ void testStructuredCFGDuplicateRegionRewritesInternalEdges() {
   assert(CopySwitch->Cases[0].Target == 12);
   assert(CopySwitch->Cases[1].Target == CopyBodyId);
   assert(CopyBody->Successors == std::vector<BlockId>{13});
+  assert(CopyBody->Statements.empty());
+  assert(Cfg.materializeBlockBody(CopyBodyId));
+  CopyBody = Cfg.getBlock(CopyBodyId);
+  assert(CopyBody != nullptr);
   assert(hasSinglePayload(CopyBody->Statements, 31));
 }
 
