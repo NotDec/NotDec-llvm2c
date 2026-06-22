@@ -49,6 +49,9 @@ BlockId StructuredCFG::addBlock(CFGBlock Block) {
   if (Block.SourceBlock == InvalidBlockId) {
     Block.SourceBlock = Block.Id;
   }
+  if (Block.BodyBlock == Block.Id) {
+    Block.BodyMaterialized = true;
+  }
   BlockId Id = Block.Id;
   Blocks.push_back(std::move(Block));
   return Id;
@@ -85,6 +88,7 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
                          : SourceBlock->SourceBlock;
   Copy.CopyKind = Kind;
   Copy.CreatedBy = Creator;
+  Copy.BodyMaterialized = false;
   Copy.BodyBlock = SourceBlock->BodyBlock == InvalidBlockId
                        ? SourceBlock->Id
                        : SourceBlock->BodyBlock;
@@ -256,9 +260,7 @@ bool StructuredCFG::removeBlock(BlockId Id) {
   for (CFGBlock &Block : Blocks) {
     if (Block.BodyBlock == Id) {
       Block.BodyBlock = Block.Id;
-      Block.SourceBlock = Block.Id;
-      Block.Origin = CFGBlockOrigin::Original;
-      Block.CopyKind = CFGBlockCopyKind::None;
+      Block.BodyMaterialized = true;
     }
     Block.Successors.erase(
         std::remove(Block.Successors.begin(), Block.Successors.end(), Id),

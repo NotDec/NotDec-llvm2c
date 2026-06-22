@@ -74,6 +74,7 @@ struct CFGBlock {
   BlockId SourceBlock = InvalidBlockId;
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
+  bool BodyMaterialized = false;
 
   // SAILR deoptimization can duplicate or synthesize control-flow blocks.
   // BodyBlock keeps the backend-neutral identity of the block whose statements

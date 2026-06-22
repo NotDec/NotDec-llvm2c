@@ -718,6 +718,7 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   Source.Statements.push_back({7});
   Cfg.addBlock(std::move(Source));
   Cfg.addBlock(block(11, {}));
+  assert(Cfg.getBlock(10)->BodyMaterialized);
 
   BlockId CopyId = Cfg.duplicateBlock(10, {11});
   assert(CopyId == 12);
@@ -728,6 +729,7 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(Copy->SourceBlock == 10);
   assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
   assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(!Copy->BodyMaterialized);
   assert(Copy->BodyBlock == 10);
   assert(Cfg.bodyBlock(CopyId) == 10);
   assert(Cfg.getBodyBlock(CopyId) == Cfg.getBlock(10));
@@ -740,6 +742,7 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(SecondCopy->Origin == CFGBlockOrigin::Copied);
   assert(SecondCopy->SourceBlock == 10);
   assert(SecondCopy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(!SecondCopy->BodyMaterialized);
   assert(SecondCopy->BodyBlock == 10);
   assert(Cfg.bodyBlock(SecondCopyId) == 10);
 }
@@ -852,9 +855,10 @@ void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
 
   const CFGBlock *Copy = Cfg.getBlock(CopyId);
   assert(Copy != nullptr);
-  assert(Copy->Origin == CFGBlockOrigin::Original);
-  assert(Copy->SourceBlock == CopyId);
-  assert(Copy->CopyKind == CFGBlockCopyKind::None);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == 10);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->BodyMaterialized);
   assert(Copy->BodyBlock == CopyId);
   assert(Cfg.getBodyBlock(CopyId) == Copy);
   assert(hasSinglePayload(Copy->Statements, 7));
@@ -986,6 +990,8 @@ void testStructuredCFGDuplicateRegionRewritesInternalEdges() {
   assert(CopyBody->SourceBlock == 11);
   assert(CopySwitch->CopyKind == CFGBlockCopyKind::RegionCopy);
   assert(CopyBody->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(!CopySwitch->BodyMaterialized);
+  assert(!CopyBody->BodyMaterialized);
   assert(CopySwitch->BodyBlock == 10);
   assert(CopyBody->BodyBlock == 11);
   assert(CopySwitch->Successors == std::vector<BlockId>({CopyBodyId, 12}));
@@ -1017,6 +1023,7 @@ void testStructuredCFGCreateSyntheticBlock() {
   assert(Block->SourceBlock == Synthetic);
   assert(Block->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
   assert(Block->CreatedBy == CFGBlockCreator::StructuredCFG);
+  assert(Block->BodyMaterialized);
   assert(Block->BodyBlock == Synthetic);
   assert(Block->Statements.empty());
   assert(Block->Terminator == TerminatorKind::Fallthrough);
