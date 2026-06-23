@@ -21,6 +21,8 @@ namespace {
 using structuring::BlockId;
 using structuring::InvalidNodeId;
 using structuring::LLVMFunctionCFGBuilder;
+using structuring::PayloadMaterializeContext;
+using structuring::PayloadMaterializeKind;
 using structuring::PayloadRef;
 using structuring::StructuredCFG;
 using structuring::StructuredNode;
@@ -278,6 +280,18 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
 
   SolidityPayloadProvider Provider(Payloads);
   StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(F, Provider);
+  // The Solidity payload store is string-based, so copied blocks can get new
+  // payload ids without pulling target-specific state into the structuring layer.
+  Cfg.setPayloadMaterializeHook(
+      [&Payloads](const PayloadMaterializeContext &, PayloadMaterializeKind,
+                  PayloadRef Payload,
+                  std::size_t) -> std::optional<PayloadRef> {
+        if (!Payload.isValid()) {
+          return Payload;
+        }
+        Payloads.push_back(Payloads[Payload.Id]);
+        return PayloadRef{Payloads.size() - 1};
+      });
 
   std::unique_ptr<structuring::Structurer> Structurer =
       structuring::createStructurer(structuring::DefaultStructurerName);

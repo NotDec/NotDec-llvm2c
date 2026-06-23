@@ -1,6 +1,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -42,6 +43,17 @@ public:
         st::createStructurer(SA.getStructurerName());
     assert(Structurer != nullptr);
     SharedCfg = buildCFG();
+    // Keep copied payload ids distinct in the shared CFG even when the C path
+    // still reuses the same underlying Clang nodes.
+    SharedCfg.setPayloadMaterializeHook(
+        [this](const st::PayloadMaterializeContext &, st::PayloadMaterializeKind,
+               st::PayloadRef Payload, std::size_t) -> std::optional<st::PayloadRef> {
+          if (!Payload.isValid()) {
+            return Payload;
+          }
+          Payloads.push_back(Payloads[Payload.Id]);
+          return st::PayloadRef{Payloads.size() - 1};
+        });
     st::StructuredTree Tree = Structurer->structure(SharedCfg);
     collectGotoTargets(Tree, Tree.root());
     std::vector<clang::Stmt *> Stmts;

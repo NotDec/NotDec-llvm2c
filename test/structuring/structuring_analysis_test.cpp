@@ -2234,7 +2234,8 @@ void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
           return Payload;
         }
         return PayloadRef{Payload.Id + Context.CopyBlock * 100};
-      });
+      },
+      /*SupportsPredecessorRewrite=*/true);
 
   StructuringOptimizationOptions Options =
       ReturnDuplicatorLow::defaultOptions();
@@ -2312,6 +2313,55 @@ void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
                           42 + CopyElseRet0->Id * 100));
   assert(hasSinglePayload(CopyElseRet1->Statements,
                           42 + CopyElseRet1->Id * 100));
+}
+
+void testReturnDuplicatorLowSkipsBranchReturnRegionWithoutPredecessorRewrite() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Branch = branchBlock(2, {3, 5});
+  Branch.Condition = {30};
+  Cfg.addBlock(std::move(Branch));
+
+  CFGBlock ThenTail = block(3, {4});
+  ThenTail.Statements.push_back({31});
+  Cfg.addBlock(std::move(ThenTail));
+
+  CFGBlock ThenRet = block(4, {});
+  ThenRet.Terminator = TerminatorKind::Return;
+  ThenRet.Statements.push_back({32});
+  Cfg.addBlock(std::move(ThenRet));
+
+  CFGBlock ElseTail = block(5, {6});
+  ElseTail.Statements.push_back({41});
+  Cfg.addBlock(std::move(ElseTail));
+
+  CFGBlock ElseRet = block(6, {});
+  ElseRet.Terminator = TerminatorKind::Return;
+  ElseRet.Statements.push_back({42});
+  Cfg.addBlock(std::move(ElseRet));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &, PayloadMaterializeKind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (!Payload.isValid()) {
+          return Payload;
+        }
+        return PayloadRef{Payload.Id + 1000};
+      });
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
 }
 
 void testReturnDuplicatorLowUsesGotoInReturnTail() {
@@ -5802,6 +5852,7 @@ int main() {
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testReturnDuplicatorLowCopiesReturnTailForkRegion();
   testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();
+  testReturnDuplicatorLowSkipsBranchReturnRegionWithoutPredecessorRewrite();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterCopiesEntryTailRegion();

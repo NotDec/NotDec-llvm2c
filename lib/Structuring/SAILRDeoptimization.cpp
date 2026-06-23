@@ -1107,7 +1107,8 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
   }
 
   std::map<BlockId, ReturnRegion> Regions;
-  bool AllowBranchReturnRegion = Graph.hasPayloadMaterializeHook();
+  bool AllowBranchReturnRegion =
+      Graph.hasPredecessorRewritePayloadMaterializeHook();
 
   for (const CFGBlock &Block : Graph.blocks()) {
     ReturnRegion Region =

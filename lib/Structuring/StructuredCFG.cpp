@@ -139,12 +139,19 @@ CFGBlock *StructuredCFG::getBlock(BlockId Id) {
   return nullptr;
 }
 
-void StructuredCFG::setPayloadMaterializeHook(PayloadMaterializeHook Hook) {
+void StructuredCFG::setPayloadMaterializeHook(
+    PayloadMaterializeHook Hook, bool SupportsPredecessorRewrite) {
   MaterializeHook = std::move(Hook);
+  MaterializeHookSupportsPredecessorRewrite =
+      SupportsPredecessorRewrite && static_cast<bool>(MaterializeHook);
 }
 
 bool StructuredCFG::hasPayloadMaterializeHook() const {
   return static_cast<bool>(MaterializeHook);
+}
+
+bool StructuredCFG::hasPredecessorRewritePayloadMaterializeHook() const {
+  return MaterializeHookSupportsPredecessorRewrite;
 }
 
 BlockId StructuredCFG::bodyBlock(BlockId Id) const {

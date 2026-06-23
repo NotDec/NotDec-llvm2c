@@ -142,8 +142,10 @@ public:
 
   const CFGBlock *getBlock(BlockId Id) const;
   CFGBlock *getBlock(BlockId Id);
-  void setPayloadMaterializeHook(PayloadMaterializeHook Hook);
+  void setPayloadMaterializeHook(PayloadMaterializeHook Hook,
+                                 bool SupportsPredecessorRewrite = false);
   bool hasPayloadMaterializeHook() const;
+  bool hasPredecessorRewritePayloadMaterializeHook() const;
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
   bool materializeBlockBody(BlockId Id);
@@ -164,6 +166,7 @@ private:
 
   std::vector<CFGBlock> Blocks;
   PayloadMaterializeHook MaterializeHook;
+  bool MaterializeHookSupportsPredecessorRewrite = false;
 };
 
 enum class StructuredNodeKind {
