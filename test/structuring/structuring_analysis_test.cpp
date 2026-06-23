@@ -18,6 +18,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 using namespace notdec::backend::structuring;
@@ -752,6 +753,102 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(Copy->BodyMaterialized);
   assert(Copy->BodyBlock == CopyId);
   assert(hasSinglePayload(Copy->Statements, 7));
+}
+
+void testStructuredCFGMaterializeRewritesCopiedPayloads() {
+  StructuredCFG Cfg;
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Statements.push_back({7});
+  Source.Statements.push_back({8});
+  Source.Condition = {70};
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  std::size_t StatementRewrites = 0;
+  std::size_t ConditionRewrites = 0;
+  std::size_t CaseRewrites = 0;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t Index) -> std::optional<PayloadRef> {
+        assert(Context.SourceBlock == 10);
+        assert(Context.BodyBlock == 10);
+        assert(Context.CopyBlock == 13);
+        assert(Context.OriginalPredecessor == 90);
+        assert(Context.NewPredecessor == 91);
+        assert(Context.CopyKind == CFGBlockCopyKind::RegionCopy);
+        assert(Context.CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+
+        if (Kind == PayloadMaterializeKind::Statement) {
+          ++StatementRewrites;
+          return PayloadRef{Payload.Id + 1000 + Index};
+        }
+        if (Kind == PayloadMaterializeKind::Condition) {
+          ++ConditionRewrites;
+          return PayloadRef{Payload.Id + 2000};
+        }
+
+        assert(Kind == PayloadMaterializeKind::SwitchCaseValue);
+        ++CaseRewrites;
+        return PayloadRef{Payload.Id + 3000 + Index};
+      });
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {11, 12});
+  assert(CopyId == 13);
+  assert(Cfg.materializeBlockBody(CopyId, 90, 91));
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert((Copy->Successors == std::vector<BlockId>{11, 12}));
+  assert(Copy->Statements.size() == 2);
+  assert(Copy->Statements[0].Id == 1007);
+  assert(Copy->Statements[1].Id == 1009);
+  assert(Copy->Condition.Id == 2070);
+  assert(Copy->Cases.size() == 1);
+  assert(Copy->Cases.front().Value.Id == 3071);
+  assert(Copy->Cases.front().Target == 12);
+  assert(StatementRewrites == 2);
+  assert(ConditionRewrites == 1);
+  assert(CaseRewrites == 1);
+}
+
+void testStructuredCFGMaterializeRewriteFailureIsAtomic() {
+  StructuredCFG Cfg;
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Statements.push_back({7});
+  Source.Statements.push_back({8});
+  Source.Condition = {70};
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &, PayloadMaterializeKind Kind,
+         PayloadRef Payload, std::size_t Index) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::Statement && Index == 1) {
+          return std::nullopt;
+        }
+        return Payload;
+      });
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {11, 12});
+  assert(CopyId == 13);
+  assert(!Cfg.materializeBlockBody(CopyId));
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(!Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == 10);
+  assert(Copy->Statements.empty());
+  assert(Copy->Condition.Id == InvalidPayloadId);
+  assert(Copy->Cases.size() == 1);
+  assert(Copy->Cases.front().Value.Id == InvalidPayloadId);
+  assert(Copy->Cases.front().Target == 12);
 }
 
 void testGotoStructurerRendersVirtualBlockBodySource() {
@@ -2101,6 +2198,120 @@ void testReturnDuplicatorLowCopiesReturnTailForkRegion() {
   assert(CopyRet1->Terminator == TerminatorKind::Return);
   assert(hasSinglePayload(CopyRet0->Statements, 21));
   assert(hasSinglePayload(CopyRet1->Statements, 21));
+}
+
+void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Branch = branchBlock(2, {3, 5});
+  Branch.Condition = {30};
+  Cfg.addBlock(std::move(Branch));
+
+  CFGBlock ThenTail = block(3, {4});
+  ThenTail.Statements.push_back({31});
+  Cfg.addBlock(std::move(ThenTail));
+
+  CFGBlock ThenRet = block(4, {});
+  ThenRet.Terminator = TerminatorKind::Return;
+  ThenRet.Statements.push_back({32});
+  Cfg.addBlock(std::move(ThenRet));
+
+  CFGBlock ElseTail = block(5, {6});
+  ElseTail.Statements.push_back({41});
+  Cfg.addBlock(std::move(ElseTail));
+
+  CFGBlock ElseRet = block(6, {});
+  ElseRet.Terminator = TerminatorKind::Return;
+  ElseRet.Statements.push_back({42});
+  Cfg.addBlock(std::move(ElseRet));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &Context, PayloadMaterializeKind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (!Payload.isValid()) {
+          return Payload;
+        }
+        return PayloadRef{Payload.Id + Context.CopyBlock * 100};
+      });
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  for (BlockId Original : {2, 3, 4, 5, 6}) {
+    assert(Result.Output.getBlock(Original) == nullptr);
+  }
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  const CFGBlock *Block1 = Result.Output.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors.size() == 1);
+  assert(Block0->Successors.front() != Block1->Successors.front());
+
+  const CFGBlock *CopyBranch0 =
+      Result.Output.getBlock(Block0->Successors.front());
+  const CFGBlock *CopyBranch1 =
+      Result.Output.getBlock(Block1->Successors.front());
+  assert(CopyBranch0 != nullptr && CopyBranch1 != nullptr);
+  assert(CopyBranch0->Terminator == TerminatorKind::Branch);
+  assert(CopyBranch1->Terminator == TerminatorKind::Branch);
+  assert(CopyBranch0->Successors.size() == 2);
+  assert(CopyBranch1->Successors.size() == 2);
+  assert(CopyBranch0->Condition.Id == 30 + CopyBranch0->Id * 100);
+  assert(CopyBranch1->Condition.Id == 30 + CopyBranch1->Id * 100);
+
+  const CFGBlock *CopyThenTail0 =
+      Result.Output.getBlock(CopyBranch0->Successors[0]);
+  const CFGBlock *CopyElseTail0 =
+      Result.Output.getBlock(CopyBranch0->Successors[1]);
+  const CFGBlock *CopyThenTail1 =
+      Result.Output.getBlock(CopyBranch1->Successors[0]);
+  const CFGBlock *CopyElseTail1 =
+      Result.Output.getBlock(CopyBranch1->Successors[1]);
+  assert(CopyThenTail0 != nullptr && CopyElseTail0 != nullptr);
+  assert(CopyThenTail1 != nullptr && CopyElseTail1 != nullptr);
+  assert(hasSinglePayload(CopyThenTail0->Statements,
+                          31 + CopyThenTail0->Id * 100));
+  assert(hasSinglePayload(CopyThenTail1->Statements,
+                          31 + CopyThenTail1->Id * 100));
+  assert(hasSinglePayload(CopyElseTail0->Statements,
+                          41 + CopyElseTail0->Id * 100));
+  assert(hasSinglePayload(CopyElseTail1->Statements,
+                          41 + CopyElseTail1->Id * 100));
+
+  const CFGBlock *CopyThenRet0 =
+      Result.Output.getBlock(CopyThenTail0->Successors.front());
+  const CFGBlock *CopyElseRet0 =
+      Result.Output.getBlock(CopyElseTail0->Successors.front());
+  const CFGBlock *CopyThenRet1 =
+      Result.Output.getBlock(CopyThenTail1->Successors.front());
+  const CFGBlock *CopyElseRet1 =
+      Result.Output.getBlock(CopyElseTail1->Successors.front());
+  assert(CopyThenRet0 != nullptr && CopyElseRet0 != nullptr);
+  assert(CopyThenRet1 != nullptr && CopyElseRet1 != nullptr);
+  assert(CopyThenRet0->Terminator == TerminatorKind::Return);
+  assert(CopyThenRet1->Terminator == TerminatorKind::Return);
+  assert(CopyElseRet0->Terminator == TerminatorKind::Return);
+  assert(CopyElseRet1->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyThenRet0->Statements,
+                          32 + CopyThenRet0->Id * 100));
+  assert(hasSinglePayload(CopyThenRet1->Statements,
+                          32 + CopyThenRet1->Id * 100));
+  assert(hasSinglePayload(CopyElseRet0->Statements,
+                          42 + CopyElseRet0->Id * 100));
+  assert(hasSinglePayload(CopyElseRet1->Statements,
+                          42 + CopyElseRet1->Id * 100));
 }
 
 void testReturnDuplicatorLowUsesGotoInReturnTail() {
@@ -5550,6 +5761,8 @@ int main() {
   testStructuringEvaluatorCollectsGotoSummary();
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
+  testStructuredCFGMaterializeRewritesCopiedPayloads();
+  testStructuredCFGMaterializeRewriteFailureIsAtomic();
   testGotoStructurerRendersVirtualBlockBodySource();
   testGotoStructurerRendersSyntheticForwarder();
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
@@ -5588,6 +5801,7 @@ int main() {
   testReturnDuplicatorLowSkipsBranchParentGotoSource();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testReturnDuplicatorLowCopiesReturnTailForkRegion();
+  testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCopiesReusedEntryBlock();
   testSwitchReusedEntryRewriterCopiesEntryTailRegion();

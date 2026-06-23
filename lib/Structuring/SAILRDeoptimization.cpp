@@ -186,8 +186,82 @@ bool prependReturnTailForkRegion(const StructuredCFG &Graph,
   return true;
 }
 
+bool collectClosedLinearReturnTail(const StructuredCFG &Graph, BlockId Head,
+                                   BlockId ExpectedPred,
+                                   std::set<BlockId> &Seen,
+                                   std::vector<BlockId> &Blocks) {
+  BlockId Current = Head;
+  BlockId Pred = ExpectedPred;
+  while (true) {
+    if (Seen.count(Current) != 0) {
+      return false;
+    }
+
+    const CFGBlock *Block = Graph.getBlock(Current);
+    if (Block == nullptr) {
+      return false;
+    }
+
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Current);
+    if (Preds.size() != 1 || Preds.front() != Pred) {
+      return false;
+    }
+
+    Seen.insert(Current);
+    Blocks.push_back(Current);
+    if (isClosedTerminal(*Block)) {
+      return true;
+    }
+
+    if (Block->Terminator != TerminatorKind::Fallthrough ||
+        Block->Successors.size() != 1) {
+      return false;
+    }
+
+    Pred = Current;
+    Current = Block->Successors.front();
+  }
+}
+
+bool prependBranchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
+                               BlockId Pred, std::set<BlockId> &Seen) {
+  const CFGBlock *PredBlock = Graph.getBlock(Pred);
+  if (PredBlock == nullptr || PredBlock->Terminator != TerminatorKind::Branch ||
+      PredBlock->Successors.size() != 2) {
+    return false;
+  }
+
+  std::set<BlockId> NewSeen = Seen;
+  std::vector<BlockId> BranchBlocks;
+  bool ReachesRegionHead = false;
+  for (BlockId Succ : PredBlock->Successors) {
+    if (Succ == Region.Head) {
+      ReachesRegionHead = true;
+      continue;
+    }
+
+    if (!collectClosedLinearReturnTail(Graph, Succ, Pred, NewSeen,
+                                       BranchBlocks)) {
+      return false;
+    }
+  }
+
+  if (!ReachesRegionHead || BranchBlocks.empty()) {
+    return false;
+  }
+
+  Region.Head = Pred;
+  Region.Blocks.insert(Region.Blocks.end(), BranchBlocks.begin(),
+                       BranchBlocks.end());
+  Region.Blocks.push_back(Pred);
+  Seen = std::move(NewSeen);
+  Seen.insert(Pred);
+  return true;
+}
+
 ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
-                                    BlockId ReturnBlock) {
+                                    BlockId ReturnBlock,
+                                    bool AllowBranchReturnRegion) {
   ReturnRegion Region;
   const CFGBlock *EndBlock = Graph.getBlock(ReturnBlock);
   if (EndBlock == nullptr || EndBlock->Terminator != TerminatorKind::Return ||
@@ -218,11 +292,13 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
     if (prependReturnTailForkRegion(Graph, Region, Pred, Seen)) {
       continue;
     }
+    if (AllowBranchReturnRegion &&
+        prependBranchReturnRegion(Graph, Region, Pred, Seen)) {
+      continue;
+    }
 
-    // Without payload-level Phi/vvar rewriting, only copy straight-line
-    // return tails plus narrow terminal fork shapes used by stack-canary
-    // style returns. Branch and switch regions beyond that still need richer
-    // shared semantics.
+    // Switch regions and branch regions without payload rewrite coverage still
+    // need richer shared semantics before they can be copied safely.
     if (PredBlock == nullptr ||
         PredBlock->Terminator != TerminatorKind::Fallthrough ||
         PredBlock->Successors.size() != 1) {
@@ -433,8 +509,10 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
     return false;
   }
 
+  BlockId OriginalPred =
+      Preds.size() == 1 ? Preds.front() : InvalidBlockId;
   for (const auto &[_, Copy] : CopyRegion->Blocks) {
-    if (!Graph.materializeBlockBody(Copy)) {
+    if (!Graph.materializeBlockBody(Copy, OriginalPred, OriginalPred)) {
       for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
         Graph.removeBlock(OldCopy);
       }
@@ -589,8 +667,10 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
     return false;
   }
 
+  BlockId OriginalPred =
+      Preds.size() == 1 ? Preds.front() : InvalidBlockId;
   for (const auto &[_, Copy] : CopyRegion->Blocks) {
-    if (!Graph.materializeBlockBody(Copy)) {
+    if (!Graph.materializeBlockBody(Copy, OriginalPred, OriginalPred)) {
       for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
         Graph.removeBlock(OldCopy);
       }
@@ -1027,9 +1107,11 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
   }
 
   std::map<BlockId, ReturnRegion> Regions;
+  bool AllowBranchReturnRegion = Graph.hasPayloadMaterializeHook();
 
   for (const CFGBlock &Block : Graph.blocks()) {
-    ReturnRegion Region = findLinearReturnRegion(Graph, Block.Id);
+    ReturnRegion Region =
+        findLinearReturnRegion(Graph, Block.Id, AllowBranchReturnRegion);
     if (Region.Head == InvalidBlockId) {
       continue;
     }

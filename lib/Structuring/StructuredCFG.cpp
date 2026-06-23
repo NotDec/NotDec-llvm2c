@@ -139,6 +139,14 @@ CFGBlock *StructuredCFG::getBlock(BlockId Id) {
   return nullptr;
 }
 
+void StructuredCFG::setPayloadMaterializeHook(PayloadMaterializeHook Hook) {
+  MaterializeHook = std::move(Hook);
+}
+
+bool StructuredCFG::hasPayloadMaterializeHook() const {
+  return static_cast<bool>(MaterializeHook);
+}
+
 BlockId StructuredCFG::bodyBlock(BlockId Id) const {
   const CFGBlock *Block = getBlock(Id);
   if (Block == nullptr) {
@@ -152,6 +160,12 @@ const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
 }
 
 bool StructuredCFG::materializeBlockBody(BlockId Id) {
+  return materializeBlockBody(Id, InvalidBlockId, InvalidBlockId);
+}
+
+bool StructuredCFG::materializeBlockBody(BlockId Id,
+                                         BlockId OriginalPredecessor,
+                                         BlockId NewPredecessor) {
   CFGBlock *Block = getBlock(Id);
   if (Block == nullptr) {
     return false;
@@ -171,14 +185,79 @@ bool StructuredCFG::materializeBlockBody(BlockId Id) {
     return false;
   }
 
+  if (!MaterializeHook) {
+    // Fast path for current production backends. CFG identity stays on this
+    // block: successors and switch targets must keep any copied-region rewrites
+    // that were already applied.
+    Block->Statements = Body->Statements;
+    Block->Terminator = Body->Terminator;
+    Block->Condition = Body->Condition;
+    for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
+      Block->Cases[I].Value = Body->Cases[I].Value;
+    }
+
+    Block->BodyBlock = Id;
+    Block->BodyMaterialized = true;
+    return true;
+  }
+
+  PayloadMaterializeContext Context;
+  Context.SourceBlock = Body->SourceBlock;
+  Context.BodyBlock = BodyId;
+  Context.CopyBlock = Id;
+  Context.OriginalPredecessor = OriginalPredecessor;
+  Context.NewPredecessor = NewPredecessor;
+  Context.CopyKind = Block->CopyKind;
+  Context.CreatedBy = Block->CreatedBy;
+
+  std::vector<PayloadRef> Statements;
+  Statements.reserve(Body->Statements.size());
+  for (std::size_t I = 0; I < Body->Statements.size(); ++I) {
+    PayloadRef Payload = Body->Statements[I];
+    if (MaterializeHook) {
+      std::optional<PayloadRef> Rewritten = MaterializeHook(
+          Context, PayloadMaterializeKind::Statement, Payload, I);
+      if (!Rewritten.has_value()) {
+        return false;
+      }
+      Payload = *Rewritten;
+    }
+    Statements.push_back(Payload);
+  }
+
+  PayloadRef Condition = Body->Condition;
+  if (MaterializeHook) {
+    std::optional<PayloadRef> Rewritten = MaterializeHook(
+        Context, PayloadMaterializeKind::Condition, Condition, 0);
+    if (!Rewritten.has_value()) {
+      return false;
+    }
+    Condition = *Rewritten;
+  }
+
+  std::vector<PayloadRef> CaseValues;
+  CaseValues.reserve(Body->Cases.size());
+  for (std::size_t I = 0; I < Body->Cases.size(); ++I) {
+    PayloadRef Payload = Body->Cases[I].Value;
+    if (MaterializeHook) {
+      std::optional<PayloadRef> Rewritten = MaterializeHook(
+          Context, PayloadMaterializeKind::SwitchCaseValue, Payload, I);
+      if (!Rewritten.has_value()) {
+        return false;
+      }
+      Payload = *Rewritten;
+    }
+    CaseValues.push_back(Payload);
+  }
+
   // Materializing copies renderer payload from the body source. CFG identity
   // stays on this block: successors and switch targets must keep any copied
   // region rewrites that were already applied.
-  Block->Statements = Body->Statements;
+  Block->Statements = std::move(Statements);
   Block->Terminator = Body->Terminator;
-  Block->Condition = Body->Condition;
+  Block->Condition = Condition;
   for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
-    Block->Cases[I].Value = Body->Cases[I].Value;
+    Block->Cases[I].Value = CaseValues[I];
   }
 
   Block->BodyBlock = Id;
@@ -228,21 +307,26 @@ StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
   Region.Blocks.reserve(RegionBlocks.size());
   Copies.reserve(RegionBlocks.size());
 
+  auto DropCopies = [&]() {
+    Blocks.erase(std::remove_if(Blocks.begin(), Blocks.end(),
+                                [&](const CFGBlock &Block) {
+                                  return std::find(Copies.begin(), Copies.end(),
+                                                   Block.Id) != Copies.end();
+                                }),
+                 Blocks.end());
+  };
+
   for (BlockId Original : RegionBlocks) {
     const CFGBlock *OriginalBlock = getBlock(Original);
     if (OriginalBlock == nullptr) {
-      for (BlockId OldCopy : Copies) {
-        removeBlock(OldCopy);
-      }
+      DropCopies();
       return std::nullopt;
     }
 
     BlockId Copy = duplicateBlock(Original, OriginalBlock->Successors, Kind,
                                   Creator);
     if (Copy == InvalidBlockId) {
-      for (BlockId OldCopy : Copies) {
-        removeBlock(OldCopy);
-      }
+      DropCopies();
       return std::nullopt;
     }
     Region.Blocks.push_back({Original, Copy});
@@ -253,9 +337,7 @@ StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
     const CFGBlock *OriginalBlock = getBlock(Original);
     CFGBlock *CopyBlock = getBlock(copyOf(Region, Original));
     if (OriginalBlock == nullptr || CopyBlock == nullptr) {
-      for (BlockId OldCopy : Copies) {
-        removeBlock(OldCopy);
-      }
+      DropCopies();
       return std::nullopt;
     }
 

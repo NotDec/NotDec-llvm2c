@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -57,6 +58,27 @@ struct SwitchCase {
   PayloadRef Value;
   BlockId Target = InvalidBlockId;
 };
+
+enum class PayloadMaterializeKind {
+  Statement,
+  Condition,
+  SwitchCaseValue,
+};
+
+struct PayloadMaterializeContext {
+  BlockId SourceBlock = InvalidBlockId;
+  BlockId BodyBlock = InvalidBlockId;
+  BlockId CopyBlock = InvalidBlockId;
+  BlockId OriginalPredecessor = InvalidBlockId;
+  BlockId NewPredecessor = InvalidBlockId;
+  CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
+  CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
+};
+
+using PayloadMaterializeHook =
+    std::function<std::optional<PayloadRef>(const PayloadMaterializeContext &,
+                                            PayloadMaterializeKind, PayloadRef,
+                                            std::size_t)>;
 
 struct StructuredSwitchCase {
   PayloadRef Value;
@@ -120,9 +142,14 @@ public:
 
   const CFGBlock *getBlock(BlockId Id) const;
   CFGBlock *getBlock(BlockId Id);
+  void setPayloadMaterializeHook(PayloadMaterializeHook Hook);
+  bool hasPayloadMaterializeHook() const;
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
   bool materializeBlockBody(BlockId Id);
+  bool materializeBlockBody(BlockId Id,
+                            BlockId OriginalPredecessor,
+                            BlockId NewPredecessor);
   bool hasEdge(BlockId From, BlockId To) const;
   std::vector<BlockId> successorsOf(BlockId From) const;
   std::vector<BlockId> predecessorsOf(BlockId Target) const;
@@ -136,6 +163,7 @@ private:
   BlockId nextBlockId() const;
 
   std::vector<CFGBlock> Blocks;
+  PayloadMaterializeHook MaterializeHook;
 };
 
 enum class StructuredNodeKind {
