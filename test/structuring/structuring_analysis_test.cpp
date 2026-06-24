@@ -947,6 +947,36 @@ void testStructuredCFGMaterializeFastPathReportsCommit() {
   assert(Copy->BodyMaterialized);
 }
 
+void testStructuredCFGMaterializeFastPathKeepsCopiedSwitchIdentity() {
+  StructuredCFG Cfg;
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Statements.push_back({7});
+  Source.Condition = {70};
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {11, 12});
+  assert(CopyId == 13);
+  assert(Cfg.materializeBlockBody(CopyId));
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == 10);
+  assert(Copy->CopiedFromBlock == 10);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Copy->Terminator == TerminatorKind::Switch);
+  assert(Copy->Condition.Id == 70);
+  assert(Copy->Cases.size() == 1);
+  assert(Copy->Cases.front().Value.Id == 71);
+  assert(Copy->Cases.front().Target == 12);
+}
+
 void testStructuredCFGMaterializeSelfReportsFullContext() {
   StructuredCFG Cfg;
   CFGBlock Source = switchBlock(10, {11, 12});
@@ -7392,6 +7422,7 @@ int main() {
   testStructuredCFGDuplicateCopyKeepsOriginalBodySource();
   testStructuredCFGMaterializeRewritesCopiedPayloads();
   testStructuredCFGMaterializeFastPathReportsCommit();
+  testStructuredCFGMaterializeFastPathKeepsCopiedSwitchIdentity();
   testStructuredCFGMaterializeSelfReportsFullContext();
   testStructuredCFGMaterializeReportsGroupedPredecessors();
   testStructuredCFGMaterializeRewriteFailureIsAtomic();
