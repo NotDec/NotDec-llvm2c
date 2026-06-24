@@ -419,6 +419,29 @@ bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   return false;
 }
 
+bool redirectSwitchCases(StructuredCFG &Graph, BlockId OldTarget,
+                         BlockId NewTarget,
+                         const std::vector<BlockId> &SwitchPreds) {
+  for (BlockId Pred : SwitchPreds) {
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock == nullptr ||
+        PredBlock->Terminator != TerminatorKind::Switch ||
+        !switchCaseReachesBlock(*PredBlock, OldTarget)) {
+      return false;
+    }
+  }
+
+  for (BlockId Pred : SwitchPreds) {
+    CFGBlock *PredBlock = Graph.getBlock(Pred);
+    for (SwitchCase &Case : PredBlock->Cases) {
+      if (Case.Target == OldTarget) {
+        Case.Target = NewTarget;
+      }
+    }
+  }
+  return true;
+}
+
 bool nonCaseSuccessorReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (Block.Terminator == TerminatorKind::Switch) {
     return !Block.Successors.empty() && Block.Successors.front() == Target;
@@ -819,29 +842,6 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
   return true;
 }
 
-bool redirectSwitchCases(StructuredCFG &Graph, BlockId OldTarget,
-                         BlockId NewTarget,
-                         const std::vector<BlockId> &SwitchPreds) {
-  for (BlockId Pred : SwitchPreds) {
-    const CFGBlock *PredBlock = Graph.getBlock(Pred);
-    if (PredBlock == nullptr ||
-        PredBlock->Terminator != TerminatorKind::Switch ||
-        !switchCaseReachesBlock(*PredBlock, OldTarget)) {
-      return false;
-    }
-  }
-
-  for (BlockId Pred : SwitchPreds) {
-    CFGBlock *PredBlock = Graph.getBlock(Pred);
-    for (SwitchCase &Case : PredBlock->Cases) {
-      if (Case.Target == OldTarget) {
-        Case.Target = NewTarget;
-      }
-    }
-  }
-  return true;
-}
-
 bool copyLinearRegionForSwitchCases(StructuredCFG &Graph,
                                     const LinearRegion &Region,
                                     const std::vector<BlockId> &SwitchPreds,
@@ -955,7 +955,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       BlockId Goto = Candidate.createSyntheticGoto(
           Pred, EntryId, CFGBlockCreator::SAILRDeoptimization);
       if (Goto == InvalidBlockId ||
-          !Candidate.redirectPredecessors(EntryId, Goto, {Pred})) {
+          !redirectSwitchCases(Candidate, EntryId, Goto, {Pred})) {
         continue;
       }
 

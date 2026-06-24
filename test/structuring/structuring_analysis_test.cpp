@@ -3301,6 +3301,36 @@ void testSwitchReusedEntryRewriterCreatesGotoPerReusedPred() {
   assert(!Cfg.hasEdge(Goto3->Id, 1));
 }
 
+void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {2, 1}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(switchBlock(3, {5, 1}));
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch3 = Cfg.getBlock(3);
+  assert(Switch0 != nullptr && Switch3 != nullptr);
+  assert(Switch0->Successors.front() == 2);
+  assert(Switch3->Successors.front() == 5);
+  assert(Switch0->Cases.front().Target == 1);
+  assert(Switch3->Cases.front().Target != 1);
+
+  const CFGBlock *Goto = Cfg.getBlock(Switch3->Cases.front().Target);
+  assert(Goto != nullptr);
+  assert(Goto->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto->SyntheticSource == 3);
+  assert(Goto->SyntheticTarget == 1);
+}
+
 void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
   StructuredCFG Cfg;
 
@@ -6388,6 +6418,7 @@ int main() {
   testSwitchReusedEntryRewriterCreatesGotoForReusedEntryBlock();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
   testSwitchReusedEntryRewriterCreatesGotoPerReusedPred();
+  testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched();
   testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets();
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
