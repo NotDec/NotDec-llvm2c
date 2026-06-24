@@ -1476,6 +1476,12 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
       for (llvm::Instruction &I : BB) {
         if (llvm::isa<llvm::PHINode>(&I)) {
           llvm::PHINode &PN = llvm::cast<llvm::PHINode>(I);
+          // The demote pass names the new alloca from the PHI name. Unnamed
+          // PHIs all have an empty string here, so give them stable per-function
+          // names before using the name as the HType handoff key.
+          if (!PN.hasName()) {
+            PN.setName("notdec.phi");
+          }
           auto wrapDemotedType = [&](HType *Ty) {
             if (Ty == nullptr) {
               return Ty;
