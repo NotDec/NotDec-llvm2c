@@ -1072,7 +1072,7 @@ StructuringOptimizationOptions DuplicationReverter::defaultOptions() {
   Options.RequireGotos = false;
   Options.PreventNewGotos = false;
   Options.MustImproveRelativeQuality = false;
-  Options.MaxOptIters = 4;
+  Options.MaxOptIters = 5;
   return Options;
 }
 

@@ -3478,6 +3478,28 @@ void testSAILRDeoptimizationPipelineMatchesAngrOrder() {
                                   }));
 }
 
+void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
+  StructuringOptimizationOptions DuplicationOptions =
+      DuplicationReverter::defaultOptions();
+  assert(!DuplicationOptions.RequireGotos);
+  assert(!DuplicationOptions.PreventNewGotos);
+  assert(!DuplicationOptions.MustImproveRelativeQuality);
+  assert(DuplicationOptions.MaxOptIters == 5);
+
+  StructuringOptimizationOptions ReturnOptions =
+      ReturnDuplicatorLow::defaultOptions();
+  assert(ReturnOptions.RequireGotos);
+  assert(ReturnOptions.PreventNewGotos);
+  assert(ReturnOptions.MaxOptIters == 4);
+
+  StructuringOptimizationOptions CrossJumpOptions =
+      CrossJumpReverter::defaultOptions();
+  assert(CrossJumpOptions.RequireGotos);
+  assert(CrossJumpOptions.PreventNewGotos);
+  assert(CrossJumpOptions.StrictlyLessGotos);
+  assert(CrossJumpOptions.MaxOptIters == 3);
+}
+
 void testRecursiveStructurerVisitsChildBeforeParent() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 2}));
@@ -5918,6 +5940,7 @@ int main() {
   testStructuringOptimizationPassRejectsOnlyRolledBackChanges();
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
   testSAILRDeoptimizationPipelineMatchesAngrOrder();
+  testSAILRDeoptimizationDefaultOptionsMatchAngr();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();
   testGotoRegionSkipsChildBlocks();
