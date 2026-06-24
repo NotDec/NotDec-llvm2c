@@ -3899,6 +3899,69 @@ void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
   assert(hasSinglePayload(Copy1Ret->Statements, 33));
 }
 
+void testLoweredSwitchSimplifierKeepsPredSensitiveCopiesSeparate() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {20, 10}));
+  Cfg.addBlock(switchBlock(1, {0, 10}));
+
+  CFGBlock CaseHead = block(10, {11});
+  CaseHead.Statements.push_back({31});
+  Cfg.addBlock(std::move(CaseHead));
+
+  CFGBlock CaseTail = block(11, {});
+  CaseTail.Statements.push_back({32});
+  Cfg.addBlock(std::move(CaseTail));
+
+  Cfg.addBlock(block(20, {}));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &Context, PayloadMaterializeKind Kind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::Statement) {
+          return Payload;
+        }
+        assert(Context.OriginalPredecessor != InvalidBlockId);
+        assert(Context.NewPredecessor != InvalidBlockId);
+        assert(Context.OriginalPredecessors.size() == 1);
+        assert(Context.NewPredecessors.size() == 1);
+        return PayloadRef{Payload.Id + Context.NewPredecessor * 1000};
+      },
+      /*SupportsPredecessorRewrite=*/true);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(10) == nullptr);
+  assert(Cfg.getBlock(11) == nullptr);
+
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch1 = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch1 != nullptr);
+  assert(Switch0->Cases.size() == 1);
+  assert(Switch1->Cases.size() == 1);
+  assert(Switch0->Cases.front().Target != Switch1->Cases.front().Target);
+
+  const CFGBlock *Copy0 = Cfg.getBlock(Switch0->Cases.front().Target);
+  const CFGBlock *Copy1 = Cfg.getBlock(Switch1->Cases.front().Target);
+  assert(Copy0 != nullptr && Copy1 != nullptr);
+  assert(Copy0->SourceBlock == 10);
+  assert(Copy1->SourceBlock == 10);
+  assert(hasSinglePayload(Copy0->Statements, 31 + 0 * 1000));
+  assert(hasSinglePayload(Copy1->Statements, 31 + 1 * 1000));
+
+  const CFGBlock *Copy0Tail = Cfg.getBlock(Copy0->Successors.front());
+  const CFGBlock *Copy1Tail = Cfg.getBlock(Copy1->Successors.front());
+  assert(Copy0Tail != nullptr && Copy1Tail != nullptr);
+  assert(Copy0Tail->SourceBlock == 11);
+  assert(Copy1Tail->SourceBlock == 11);
+  assert(hasSinglePayload(Copy0Tail->Statements, 32 + Copy0->Id * 1000));
+  assert(hasSinglePayload(Copy1Tail->Statements, 32 + Copy1->Id * 1000));
+}
+
 void testLoweredSwitchSimplifierCommitsCopyAtomically() {
   StructuredCFG Cfg;
 
@@ -6806,6 +6869,7 @@ int main() {
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
   testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
   testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion();
+  testLoweredSwitchSimplifierKeepsPredSensitiveCopiesSeparate();
   testLoweredSwitchSimplifierCommitsCopyAtomically();
   testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion();
   testLoweredSwitchSimplifierSkipsDefaultOnlyTargets();

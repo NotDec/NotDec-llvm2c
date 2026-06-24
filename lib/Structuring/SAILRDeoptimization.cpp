@@ -414,6 +414,22 @@ connectedPredecessorComponents(const StructuredCFG &Graph,
   return Components;
 }
 
+std::vector<std::vector<BlockId>>
+materializePredecessorComponents(const StructuredCFG &Graph,
+                                 const std::vector<BlockId> &Blocks) {
+  if (Graph.hasPredecessorRewritePayloadMaterializeHook() &&
+      !Graph.hasGroupedPredecessorRewritePayloadMaterializeHook()) {
+    std::vector<std::vector<BlockId>> Components;
+    Components.reserve(Blocks.size());
+    for (BlockId Block : Blocks) {
+      Components.push_back({Block});
+    }
+    return Components;
+  }
+
+  return connectedPredecessorComponents(Graph, Blocks);
+}
+
 std::vector<BlockId>
 expandToConnectedPredecessorComponents(const StructuredCFG &Graph,
                                        const std::vector<BlockId> &AllPreds,
@@ -1077,7 +1093,7 @@ bool LoweredSwitchSimplifier::runOnGraph(
 
     StructuredCFG Candidate = Graph;
     std::vector<std::vector<BlockId>> PredComponents =
-        connectedPredecessorComponents(Graph, Preds);
+        materializePredecessorComponents(Graph, Preds);
     std::vector<BlockId> UpdatedPreds;
     std::vector<BlockId> Copies;
     bool DeleteOriginal = sameBlockSet(AllPreds, Preds);
@@ -1235,7 +1251,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     StructuredCFG Candidate = Graph;
     std::vector<BlockId> Copies;
     std::vector<std::vector<BlockId>> PredComponents =
-        connectedPredecessorComponents(Graph, PredsToUpdate);
+        materializePredecessorComponents(Graph, PredsToUpdate);
     bool Failed = false;
     for (const std::vector<BlockId> &Component : PredComponents) {
       if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
@@ -1404,7 +1420,7 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
 
     std::vector<BlockId> Copies;
     std::vector<std::vector<BlockId>> PredComponents =
-        connectedPredecessorComponents(Graph, PredsToUpdate);
+        materializePredecessorComponents(Graph, PredsToUpdate);
     std::vector<BlockId> UpdatedPreds;
     for (const std::vector<BlockId> &Component : PredComponents) {
       if (!copyRegionForPredecessors(Candidate, Region, Component, Copies)) {
@@ -1503,7 +1519,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
 
     std::vector<BlockId> UpdatedPreds;
     std::vector<std::vector<BlockId>> PredComponents =
-        connectedPredecessorComponents(Graph, PredsToUpdate);
+        materializePredecessorComponents(Graph, PredsToUpdate);
     for (const std::vector<BlockId> &Component : PredComponents) {
       bool AllStillReachTarget = true;
       for (BlockId Pred : Component) {
