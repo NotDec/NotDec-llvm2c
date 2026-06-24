@@ -919,6 +919,44 @@ void testStructuredCFGMaterializeFastPathReportsCommit() {
   assert(Copy->BodyMaterialized);
 }
 
+void testStructuredCFGMaterializeSelfReportsFullContext() {
+  StructuredCFG Cfg;
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Statements.push_back({7});
+  Source.Condition = {70};
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  bool SawCommit = false;
+  Cfg.setPayloadMaterializeResultHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeResult Result,
+          const std::vector<PayloadRef> &Payloads) {
+        assert(Context.SourceBlock == 10);
+        assert(Context.BodyBlock == 10);
+        assert(Context.CopyBlock == 10);
+        assert(Context.CopiedFromBlock == InvalidBlockId);
+        assert(Context.OriginalCases.size() == 1);
+        assert(Context.NewCases.size() == 1);
+        assert(Context.OriginalSuccessors ==
+               std::vector<BlockId>({11, 12}));
+        assert(Context.NewSuccessors == std::vector<BlockId>({11, 12}));
+        assert(Context.OriginalTerminator == TerminatorKind::Switch);
+        assert(Context.NewTerminator == TerminatorKind::Switch);
+        assert(Result == PayloadMaterializeResult::Committed);
+        assert(Payloads.empty());
+        SawCommit = true;
+      });
+
+  assert(Cfg.materializeBlockBody(10));
+  assert(SawCommit);
+  const CFGBlock *Block = Cfg.getBlock(10);
+  assert(Block != nullptr);
+  assert(Block->BodyMaterialized);
+}
+
 void testStructuredCFGMaterializeReportsGroupedPredecessors() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(1, {10}));
@@ -7115,6 +7153,7 @@ int main() {
   testStructuredCFGDuplicatesBlockBodySource();
   testStructuredCFGMaterializeRewritesCopiedPayloads();
   testStructuredCFGMaterializeFastPathReportsCommit();
+  testStructuredCFGMaterializeSelfReportsFullContext();
   testStructuredCFGMaterializeReportsGroupedPredecessors();
   testStructuredCFGMaterializeRewriteFailureIsAtomic();
   testGotoStructurerRendersVirtualBlockBodySource();
