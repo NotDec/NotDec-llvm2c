@@ -799,6 +799,34 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(hasSinglePayload(Copy->Statements, 7));
 }
 
+void testStructuredCFGDuplicateCopyKeepsOriginalBodySource() {
+  StructuredCFG Cfg;
+  CFGBlock Source = block(10, {11});
+  Source.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {11});
+  assert(CopyId == 12);
+  BlockId CopyCopyId = Cfg.duplicateBlock(CopyId, {});
+  assert(CopyCopyId == 13);
+
+  const CFGBlock *CopyCopy = Cfg.getBlock(CopyCopyId);
+  assert(CopyCopy != nullptr);
+  assert(CopyCopy->Origin == CFGBlockOrigin::Copied);
+  assert(CopyCopy->SourceBlock == 10);
+  assert(CopyCopy->CopiedFromBlock == CopyId);
+  assert(CopyCopy->BodyBlock == 10);
+  assert(Cfg.bodyBlock(CopyCopyId) == 10);
+
+  assert(Cfg.materializeBlockBody(CopyCopyId));
+  CopyCopy = Cfg.getBlock(CopyCopyId);
+  assert(CopyCopy != nullptr);
+  assert(CopyCopy->BodyMaterialized);
+  assert(CopyCopy->BodyBlock == CopyCopyId);
+  assert(hasSinglePayload(CopyCopy->Statements, 7));
+}
+
 void testStructuredCFGMaterializeRewritesCopiedPayloads() {
   StructuredCFG Cfg;
   CFGBlock Source = switchBlock(10, {11, 12});
@@ -7095,6 +7123,7 @@ int main() {
   testStructuringEvaluatorCollectsGotoSummary();
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
+  testStructuredCFGDuplicateCopyKeepsOriginalBodySource();
   testStructuredCFGMaterializeRewritesCopiedPayloads();
   testStructuredCFGMaterializeFastPathReportsCommit();
   testStructuredCFGMaterializeSelfReportsFullContext();
