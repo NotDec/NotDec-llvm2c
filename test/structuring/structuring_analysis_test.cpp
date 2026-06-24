@@ -1920,6 +1920,53 @@ void testStructuredCFGDuplicateSyntheticForwarderReportsTargets() {
   assert(SawForwarder);
 }
 
+void testStructuredCFGDuplicateSyntheticGotoReportsTargets() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  BlockId Goto = Cfg.createSyntheticGoto(10, 2, CFGBlockCreator::SAILRDeoptimization);
+  assert(Goto != InvalidBlockId);
+  Cfg.addBlock(block(2, {}));
+
+  bool SawGoto = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        assert(Kind == PayloadMaterializeKind::Statement ||
+               Kind == PayloadMaterializeKind::Condition ||
+               Kind == PayloadMaterializeKind::SwitchCaseValue);
+        assert(Context.SourceBlock == Goto);
+        assert(Context.BodyBlock == Goto);
+        assert(Context.CopyBlock != InvalidBlockId);
+        SawGoto = true;
+        return Payload;
+      });
+
+  std::optional<DuplicatedRegion> CopyRegion =
+      Cfg.duplicateRegion({Goto});
+  assert(CopyRegion.has_value());
+
+  BlockId CopyId = CopyRegion->copyOf(Goto);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Goto);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->Successors.empty());
+  assert(Copy->SyntheticSource == 10);
+  assert(Copy->SyntheticTarget == 2);
+  assert(Cfg.materializeBlockBody(CopyId));
+  Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Copy->Successors.empty());
+  assert(Copy->SyntheticSource == 10);
+  assert(Copy->SyntheticTarget == 2);
+  assert(SawGoto);
+}
+
 void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -7656,6 +7703,7 @@ int main() {
   testStructuredCFGDuplicateRegionRewritesInternalEdges();
   testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity();
   testStructuredCFGDuplicateSyntheticForwarderReportsTargets();
+  testStructuredCFGDuplicateSyntheticGotoReportsTargets();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
