@@ -1093,7 +1093,33 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   assert(CopySwitchId != InvalidBlockId);
   assert(CopyBodyId != InvalidBlockId);
 
-  assert(Cfg.materializeBlockBody(CopySwitchId));
+  std::size_t CaseRewrites = 0;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t Index) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::SwitchCaseValue) {
+          return Payload;
+        }
+
+        assert(Context.SourceBlock == 10);
+        assert(Context.BodyBlock == 10);
+        assert(Context.CopyBlock == CopySwitchId);
+        assert(Context.OriginalPredecessor == 90);
+        assert(Context.NewPredecessor == 91);
+        if (Index == 0) {
+          assert(Context.OriginalTarget == 12);
+          assert(Context.NewTarget == 12);
+        } else {
+          assert(Index == 1);
+          assert(Context.OriginalTarget == 11);
+          assert(Context.NewTarget == CopyBodyId);
+        }
+        ++CaseRewrites;
+        return PayloadRef{Payload.Id + 1000 + Index};
+      });
+
+  assert(Cfg.materializeBlockBody(CopySwitchId, 90, 91));
   const CFGBlock *CopySwitch = Cfg.getBlock(CopySwitchId);
   assert(CopySwitch != nullptr);
   assert(CopySwitch->Origin == CFGBlockOrigin::Copied);
@@ -1105,10 +1131,11 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
   assert(CopySwitch->Condition.Id == 70);
   assert(CopySwitch->Successors == std::vector<BlockId>({CopyBodyId, 12}));
   assert(CopySwitch->Cases.size() == 2);
-  assert(CopySwitch->Cases[0].Value.Id == 71);
+  assert(CopySwitch->Cases[0].Value.Id == 1071);
   assert(CopySwitch->Cases[0].Target == 12);
-  assert(CopySwitch->Cases[1].Value.Id == 72);
+  assert(CopySwitch->Cases[1].Value.Id == 1073);
   assert(CopySwitch->Cases[1].Target == CopyBodyId);
+  assert(CaseRewrites == 2);
 }
 
 void testStructuredCFGMaterializeRejectsMismatchedSwitchCases() {

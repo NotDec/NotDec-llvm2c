@@ -247,8 +247,12 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
   for (std::size_t I = 0; I < Body->Cases.size(); ++I) {
     PayloadRef Payload = Body->Cases[I].Value;
     if (MaterializeHook) {
-      std::optional<PayloadRef> Rewritten = MaterializeHook(
-          Context, PayloadMaterializeKind::SwitchCaseValue, Payload, I);
+      PayloadMaterializeContext CaseContext = Context;
+      CaseContext.OriginalTarget = Body->Cases[I].Target;
+      CaseContext.NewTarget = Block->Cases[I].Target;
+      std::optional<PayloadRef> Rewritten =
+          MaterializeHook(CaseContext, PayloadMaterializeKind::SwitchCaseValue,
+                          Payload, I);
       if (!Rewritten.has_value()) {
         return false;
       }
