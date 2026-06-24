@@ -872,6 +872,28 @@ bool copyLinearRegionForSwitchCases(StructuredCFG &Graph,
   return true;
 }
 
+bool blockUsesSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
+                             BlockId Target) {
+  const CFGBlock *Block = Graph.getBlock(Pred);
+  if (Block == nullptr || Block->Terminator != TerminatorKind::Switch) {
+    return false;
+  }
+  return std::any_of(Block->Cases.begin(), Block->Cases.end(),
+                     [Target](const SwitchCase &Case) {
+                       return Case.Target == Target;
+                     });
+}
+
+bool blockUsesNonSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
+                                BlockId Target) {
+  const CFGBlock *Block = Graph.getBlock(Pred);
+  if (Block == nullptr) {
+    return false;
+  }
+  return std::find(Block->Successors.begin(), Block->Successors.end(),
+                   Target) != Block->Successors.end();
+}
+
 std::size_t statementCountInRegion(const StructuredCFG &Graph,
                                    const LinearRegion &Region) {
   std::size_t Count = 0;
@@ -1443,7 +1465,35 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
       }
 
       std::vector<BlockId> RegionCopies;
-      if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
+      std::vector<BlockId> CasePreds;
+      std::vector<BlockId> NonCasePreds;
+      bool HasAmbiguousSwitchPred = false;
+      for (BlockId Pred : Component) {
+        bool UsesCaseEdge = blockUsesSwitchCaseEdge(Candidate, Pred, Target);
+        bool UsesNonCaseEdge =
+            blockUsesNonSwitchCaseEdge(Candidate, Pred, Target);
+        if (UsesCaseEdge && UsesNonCaseEdge) {
+          HasAmbiguousSwitchPred = true;
+          break;
+        }
+        if (UsesCaseEdge) {
+          CasePreds.push_back(Pred);
+        }
+        if (UsesNonCaseEdge) {
+          NonCasePreds.push_back(Pred);
+        }
+      }
+      if (HasAmbiguousSwitchPred) {
+        continue;
+      }
+
+      if (!CasePreds.empty() &&
+          !copyLinearRegionForSwitchCases(Candidate, Region, CasePreds,
+                                          RegionCopies)) {
+        continue;
+      }
+      if (!NonCasePreds.empty() &&
+          !copyLinearRegionForPredecessors(Candidate, Region, NonCasePreds,
                                            RegionCopies)) {
         continue;
       }

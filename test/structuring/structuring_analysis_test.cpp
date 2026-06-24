@@ -1786,6 +1786,122 @@ void testCrossJumpReverterCopiesConnectedPredsOnce() {
   assert(hasSinglePayload(CopyTail->Statements, 18));
 }
 
+void testCrossJumpReverterSkipsAmbiguousSwitchCaseDefaultTarget() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {1});
+  Switch.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({51});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {4});
+  Tail.Statements.push_back({52});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(4, {}));
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Source;
+  Source.Kind = StructuredNodeKind::BasicBlock;
+  Source.Block = 0;
+  Root.Children.push_back(Tree.addNode(std::move(Source)));
+
+  StructuredNode Goto;
+  Goto.Kind = StructuredNodeKind::Goto;
+  Goto.Target = 1;
+  Root.Children.push_back(Tree.addNode(std::move(Goto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *SwitchBlock = Cfg.getBlock(0);
+  assert(SwitchBlock != nullptr);
+  assert(SwitchBlock->Successors == std::vector<BlockId>{1});
+  assert(SwitchBlock->Cases.size() == 1);
+  assert(SwitchBlock->Cases.front().Target == 1);
+}
+
+void testCrossJumpReverterRedirectsSwitchCasesOnly() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {9});
+  Switch.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({51});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {4});
+  Tail.Statements.push_back({52});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(9, {}));
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Source;
+  Source.Kind = StructuredNodeKind::BasicBlock;
+  Source.Block = 0;
+  Root.Children.push_back(Tree.addNode(std::move(Source)));
+
+  StructuredNode Goto;
+  Goto.Kind = StructuredNodeKind::Goto;
+  Goto.Target = 1;
+  Root.Children.push_back(Tree.addNode(std::move(Goto)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *SwitchBlock = Cfg.getBlock(0);
+  assert(SwitchBlock != nullptr);
+  assert(SwitchBlock->Successors == std::vector<BlockId>{9});
+  assert(SwitchBlock->Cases.size() == 1);
+  assert(SwitchBlock->Cases.front().Target != 1);
+  assert(Cfg.getBlock(1) == nullptr);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *CopyHead = Cfg.getBlock(SwitchBlock->Cases.front().Target);
+  assert(CopyHead != nullptr);
+  assert(CopyHead->BodyBlock == CopyHead->Id);
+  assert(hasSinglePayload(CopyHead->Statements, 51));
+  assert(CopyHead->Successors.size() == 1);
+  assert(CopyHead->Successors.front() != 2);
+
+  const CFGBlock *CopyTail = Cfg.getBlock(CopyHead->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->BodyBlock == CopyTail->Id);
+  assert(hasSinglePayload(CopyTail->Statements, 52));
+  assert(CopyTail->Successors.size() == 1);
+  assert(CopyTail->Successors.front() != 4);
+
+  const CFGBlock *CopyExit = Cfg.getBlock(CopyTail->Successors.front());
+  assert(CopyExit != nullptr);
+  assert(CopyExit->Successors.empty());
+}
+
 void testDuplicationReverterMergesExactDuplicateBlocks() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -6401,6 +6517,8 @@ int main() {
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
+  testCrossJumpReverterSkipsAmbiguousSwitchCaseDefaultTarget();
+  testCrossJumpReverterRedirectsSwitchCasesOnly();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
