@@ -1087,11 +1087,20 @@ bool LoweredSwitchSimplifier::runOnGraph(
       Preds.push_back(PredBlock.Id);
     }
 
-    if (Preds.size() <= 1) {
+    std::vector<BlockId> AllPreds = predecessorsOf(Graph, TargetId);
+    bool HasNonCaseReuse = false;
+    for (BlockId Pred : AllPreds) {
+      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock != nullptr &&
+          nonCaseSuccessorReachesBlock(*PredBlock, TargetId)) {
+        HasNonCaseReuse = true;
+        break;
+      }
+    }
+    if (Preds.empty() ||
+        (Preds.size() == 1 && AllPreds.size() == 1 && !HasNonCaseReuse)) {
       continue;
     }
-
-    std::vector<BlockId> AllPreds = predecessorsOf(Graph, TargetId);
 
     LinearRegion Region = findLinearCopyRegion(Graph, TargetId);
     if (Region.Blocks.size() <= 1) {

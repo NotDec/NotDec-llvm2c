@@ -4776,6 +4776,51 @@ void testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused() {
   assert(hasSinglePayload(Copy1->Statements, 61));
 }
 
+void testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {10, 10}));
+
+  CFGBlock CaseHead = block(10, {11});
+  CaseHead.Statements.push_back({81});
+  Cfg.addBlock(std::move(CaseHead));
+
+  CFGBlock CaseTail = block(11, {});
+  CaseTail.Statements.push_back({82});
+  Cfg.addBlock(std::move(CaseTail));
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Successors.front() == 10);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target != 10);
+
+  const CFGBlock *OriginalHead = Cfg.getBlock(10);
+  const CFGBlock *OriginalTail = Cfg.getBlock(11);
+  assert(OriginalHead != nullptr && OriginalTail != nullptr);
+  assert(hasSinglePayload(OriginalHead->Statements, 81));
+  assert(hasSinglePayload(OriginalTail->Statements, 82));
+
+  const CFGBlock *CopyHead = Cfg.getBlock(Switch->Cases.front().Target);
+  assert(CopyHead != nullptr);
+  assert(CopyHead->SourceBlock == 10);
+  assert(CopyHead->BodyBlock == CopyHead->Id);
+  assert(hasSinglePayload(CopyHead->Statements, 81));
+  assert(CopyHead->Successors.size() == 1);
+
+  const CFGBlock *CopyTail = Cfg.getBlock(CopyHead->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->SourceBlock == 11);
+  assert(CopyTail->BodyBlock == CopyTail->Id);
+  assert(hasSinglePayload(CopyTail->Statements, 82));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -7498,6 +7543,7 @@ int main() {
   testLoweredSwitchSimplifierSkipsDefaultOnlyTargets();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
+  testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
   testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault();
