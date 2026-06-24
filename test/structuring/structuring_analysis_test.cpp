@@ -2911,10 +2911,8 @@ void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   assert(Forwarder1->SyntheticSource == 3);
   assert(Forwarder0->SyntheticTarget == 1);
   assert(Forwarder1->SyntheticTarget == 1);
-  assert(!Forwarder0->Successors.empty());
-  assert(!Forwarder1->Successors.empty());
-  assert(Cfg.getBlock(Forwarder0->Successors.front()) != nullptr);
-  assert(Cfg.getBlock(Forwarder1->Successors.front()) != nullptr);
+  assert(Forwarder0->Successors == std::vector<BlockId>{1});
+  assert(Forwarder1->Successors == std::vector<BlockId>{1});
 }
 
 void testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault() {

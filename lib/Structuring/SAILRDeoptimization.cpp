@@ -1085,6 +1085,12 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
     std::vector<BlockId> PredsToUpdate;
     for (BlockId Pred : Preds) {
+      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock != nullptr &&
+          PredBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder &&
+          PredBlock->SyntheticTarget == DefaultTarget) {
+        continue;
+      }
       if (Pred == KeepPred) {
         continue;
       }
