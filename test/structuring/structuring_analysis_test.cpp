@@ -3400,7 +3400,7 @@ void testReturnDuplicatorLowSkipsBranchReturnRegionWithoutPredecessorRewrite() {
   ReturnDuplicatorLow Pass(Options);
   StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
 
-  assert(!Result.Succeeded);
+  assert(!Result.Changed);
 }
 
 void testReturnDuplicatorLowCopiesSwitchReturnRegionWithPayloadRewrite() {
@@ -4848,6 +4848,28 @@ void testStructuringOptimizationPipelineKeepsAcceptedPasses() {
   StructuringOptimizationPipeline Pipeline;
   Pipeline.addPass(std::make_unique<RemoveFirstSuccessorPass>());
   Pipeline.addPass(std::make_unique<AddFirstSuccessorPass>(RejectingOptions));
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  StructuringOptimizationPipelineResult Result = Pipeline.run(Cfg, Structurer);
+
+  assert(Result.Changed);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors.empty());
+}
+
+void testStructuringOptimizationPipelineSkipsRejectedPassAndContinues() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions RejectingOptions;
+  RejectingOptions.RequireGotos = false;
+  RejectingOptions.MustImproveRelativeQuality = false;
+
+  StructuringOptimizationPipeline Pipeline;
+  Pipeline.addPass(std::make_unique<AddFirstSuccessorPass>(RejectingOptions));
+  Pipeline.addPass(std::make_unique<RemoveFirstSuccessorPass>());
 
   CFGEdgeGotoRegionStructurer Structurer;
   StructuringOptimizationPipelineResult Result = Pipeline.run(Cfg, Structurer);
@@ -7377,6 +7399,7 @@ int main() {
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testStructuringOptimizationPassRejectsOnlyRolledBackChanges();
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
+  testStructuringOptimizationPipelineSkipsRejectedPassAndContinues();
   testSAILRDeoptimizationPipelineMatchesAngrOrder();
   testSAILRDeoptimizationDefaultOptionsMatchAngr();
   testRecursiveStructurerVisitsChildBeforeParent();
