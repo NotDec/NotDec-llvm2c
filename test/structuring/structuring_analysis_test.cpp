@@ -1843,6 +1843,94 @@ void testCrossJumpReverterCopiesConnectedPredsOnce() {
   assert(hasSinglePayload(CopyTail->Statements, 18));
 }
 
+void testCrossJumpReverterKeepsPredSensitiveCopiesSeparate() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {3, 1}));
+  Cfg.addBlock(block(3, {1}));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({17});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {});
+  Tail.Statements.push_back({18});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &Context, PayloadMaterializeKind Kind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::Statement) {
+          return Payload;
+        }
+        assert(Context.OriginalPredecessor != InvalidBlockId);
+        assert(Context.NewPredecessor != InvalidBlockId);
+        assert(Context.OriginalPredecessors.size() == 1);
+        assert(Context.NewPredecessors.size() == 1);
+        return PayloadRef{Payload.Id + Context.NewPredecessor * 1000};
+      },
+      /*SupportsPredecessorRewrite=*/true);
+
+  StructuredTree Tree;
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode Source0;
+  Source0.Kind = StructuredNodeKind::BasicBlock;
+  Source0.Block = 0;
+  Root.Children.push_back(Tree.addNode(std::move(Source0)));
+
+  StructuredNode Goto0;
+  Goto0.Kind = StructuredNodeKind::Goto;
+  Goto0.Target = 1;
+  Root.Children.push_back(Tree.addNode(std::move(Goto0)));
+
+  StructuredNode Source3;
+  Source3.Kind = StructuredNodeKind::BasicBlock;
+  Source3.Block = 3;
+  Root.Children.push_back(Tree.addNode(std::move(Source3)));
+
+  StructuredNode Goto3;
+  Goto3.Kind = StructuredNodeKind::Goto;
+  Goto3.Target = 1;
+  Root.Children.push_back(Tree.addNode(std::move(Goto3)));
+
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) == nullptr);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block0 != nullptr && Block3 != nullptr);
+  assert(Block0->Successors.size() == 2);
+  assert(Block3->Successors.size() == 1);
+  assert(Block0->Successors.front() == 3);
+  assert(Block0->Successors.back() != Block3->Successors.front());
+
+  const CFGBlock *Copy0 = Cfg.getBlock(Block0->Successors.back());
+  const CFGBlock *Copy3 = Cfg.getBlock(Block3->Successors.front());
+  assert(Copy0 != nullptr && Copy3 != nullptr);
+  assert(Copy0->SourceBlock == 1);
+  assert(Copy3->SourceBlock == 1);
+  assert(hasSinglePayload(Copy0->Statements, 17 + 0 * 1000));
+  assert(hasSinglePayload(Copy3->Statements, 17 + 3 * 1000));
+
+  const CFGBlock *Tail0 = Cfg.getBlock(Copy0->Successors.front());
+  const CFGBlock *Tail3 = Cfg.getBlock(Copy3->Successors.front());
+  assert(Tail0 != nullptr && Tail3 != nullptr);
+  assert(Tail0->SourceBlock == 2);
+  assert(Tail3->SourceBlock == 2);
+  assert(hasSinglePayload(Tail0->Statements, 18 + Copy0->Id * 1000));
+  assert(hasSinglePayload(Tail3->Statements, 18 + Copy3->Id * 1000));
+}
+
 void testCrossJumpReverterSkipsAmbiguousSwitchCaseDefaultTarget() {
   StructuredCFG Cfg;
 
@@ -6926,6 +7014,7 @@ int main() {
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
+  testCrossJumpReverterKeepsPredSensitiveCopiesSeparate();
   testCrossJumpReverterSkipsAmbiguousSwitchCaseDefaultTarget();
   testCrossJumpReverterRedirectsSwitchCasesOnly();
   testCrossJumpReverterUsesSwitchCaseGotoKind();
