@@ -494,6 +494,40 @@ bool reachesBlockFromNonDefaultSwitchSuccessor(const StructuredCFG &Graph,
   return false;
 }
 
+bool materializeDuplicatedRegion(StructuredCFG &Graph,
+                                 const DuplicatedRegion &CopyRegion,
+                                 BlockId RegionHead,
+                                 BlockId ExternalPred) {
+  for (const auto &[Original, Copy] : CopyRegion.Blocks) {
+    BlockId OriginalPred = InvalidBlockId;
+    BlockId NewPred = InvalidBlockId;
+
+    if (Original == RegionHead && ExternalPred != InvalidBlockId &&
+        Graph.hasEdge(ExternalPred, Original)) {
+      OriginalPred = ExternalPred;
+      NewPred = ExternalPred;
+    } else {
+      std::vector<BlockId> InternalPreds;
+      for (BlockId Pred : predecessorsOf(Graph, Original)) {
+        if (CopyRegion.copyOf(Pred) != InvalidBlockId) {
+          InternalPreds.push_back(Pred);
+        }
+      }
+
+      if (InternalPreds.size() == 1) {
+        OriginalPred = InternalPreds.front();
+        NewPred = CopyRegion.copyOf(OriginalPred);
+      }
+    }
+
+    if (!Graph.materializeBlockBody(Copy, OriginalPred, NewPred)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Copy the whole return region once, then retarget every predecessor in the
 // component to the copied head block. The shared CFG keeps the copied body
 // separate from the original body through BodyBlock.
@@ -511,14 +545,13 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
 
   BlockId OriginalPred =
       Preds.size() == 1 ? Preds.front() : InvalidBlockId;
-  for (const auto &[_, Copy] : CopyRegion->Blocks) {
-    if (!Graph.materializeBlockBody(Copy, OriginalPred, OriginalPred)) {
-      for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
-        Graph.removeBlock(OldCopy);
-      }
-      Graph = std::move(Snapshot);
-      return false;
+  if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
+                                   OriginalPred)) {
+    for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
+      Graph.removeBlock(OldCopy);
     }
+    Graph = std::move(Snapshot);
+    return false;
   }
 
   BlockId CopyHead = CopyRegion->copyOf(Region.Head);
@@ -669,14 +702,13 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
 
   BlockId OriginalPred =
       Preds.size() == 1 ? Preds.front() : InvalidBlockId;
-  for (const auto &[_, Copy] : CopyRegion->Blocks) {
-    if (!Graph.materializeBlockBody(Copy, OriginalPred, OriginalPred)) {
-      for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
-        Graph.removeBlock(OldCopy);
-      }
-      Graph = std::move(Snapshot);
-      return false;
+  if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
+                                   OriginalPred)) {
+    for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
+      Graph.removeBlock(OldCopy);
     }
+    Graph = std::move(Snapshot);
+    return false;
   }
 
   BlockId CopyHead = CopyRegion->copyOf(Region.Head);

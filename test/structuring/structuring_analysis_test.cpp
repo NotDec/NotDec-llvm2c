@@ -2233,7 +2233,9 @@ void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
         if (!Payload.isValid()) {
           return Payload;
         }
-        return PayloadRef{Payload.Id + Context.CopyBlock * 100};
+        assert(Context.OriginalPredecessor != InvalidBlockId);
+        assert(Context.NewPredecessor != InvalidBlockId);
+        return PayloadRef{Payload.Id + Context.NewPredecessor * 1000};
       },
       /*SupportsPredecessorRewrite=*/true);
 
@@ -2269,8 +2271,8 @@ void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
   assert(CopyBranch1->Terminator == TerminatorKind::Branch);
   assert(CopyBranch0->Successors.size() == 2);
   assert(CopyBranch1->Successors.size() == 2);
-  assert(CopyBranch0->Condition.Id == 30 + CopyBranch0->Id * 100);
-  assert(CopyBranch1->Condition.Id == 30 + CopyBranch1->Id * 100);
+  assert(CopyBranch0->Condition.Id == 30 + Block0->Id * 1000);
+  assert(CopyBranch1->Condition.Id == 30 + Block1->Id * 1000);
 
   const CFGBlock *CopyThenTail0 =
       Result.Output.getBlock(CopyBranch0->Successors[0]);
@@ -2283,13 +2285,13 @@ void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
   assert(CopyThenTail0 != nullptr && CopyElseTail0 != nullptr);
   assert(CopyThenTail1 != nullptr && CopyElseTail1 != nullptr);
   assert(hasSinglePayload(CopyThenTail0->Statements,
-                          31 + CopyThenTail0->Id * 100));
+                          31 + CopyBranch0->Id * 1000));
   assert(hasSinglePayload(CopyThenTail1->Statements,
-                          31 + CopyThenTail1->Id * 100));
+                          31 + CopyBranch1->Id * 1000));
   assert(hasSinglePayload(CopyElseTail0->Statements,
-                          41 + CopyElseTail0->Id * 100));
+                          41 + CopyBranch0->Id * 1000));
   assert(hasSinglePayload(CopyElseTail1->Statements,
-                          41 + CopyElseTail1->Id * 100));
+                          41 + CopyBranch1->Id * 1000));
 
   const CFGBlock *CopyThenRet0 =
       Result.Output.getBlock(CopyThenTail0->Successors.front());
@@ -2306,13 +2308,13 @@ void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
   assert(CopyElseRet0->Terminator == TerminatorKind::Return);
   assert(CopyElseRet1->Terminator == TerminatorKind::Return);
   assert(hasSinglePayload(CopyThenRet0->Statements,
-                          32 + CopyThenRet0->Id * 100));
+                          32 + CopyThenTail0->Id * 1000));
   assert(hasSinglePayload(CopyThenRet1->Statements,
-                          32 + CopyThenRet1->Id * 100));
+                          32 + CopyThenTail1->Id * 1000));
   assert(hasSinglePayload(CopyElseRet0->Statements,
-                          42 + CopyElseRet0->Id * 100));
+                          42 + CopyElseTail0->Id * 1000));
   assert(hasSinglePayload(CopyElseRet1->Statements,
-                          42 + CopyElseRet1->Id * 100));
+                          42 + CopyElseTail1->Id * 1000));
 }
 
 void testReturnDuplicatorLowSkipsBranchReturnRegionWithoutPredecessorRewrite() {
