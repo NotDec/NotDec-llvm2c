@@ -73,6 +73,8 @@ struct PayloadMaterializeContext {
   BlockId NewPredecessor = InvalidBlockId;
   BlockId OriginalTarget = InvalidBlockId;
   BlockId NewTarget = InvalidBlockId;
+  std::vector<BlockId> OriginalSuccessors;
+  std::vector<BlockId> NewSuccessors;
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
 };
