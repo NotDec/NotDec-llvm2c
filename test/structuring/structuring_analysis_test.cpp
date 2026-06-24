@@ -1841,6 +1841,8 @@ void testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity() {
         assert(Context.CopyBlock != InvalidBlockId);
         assert(Context.SourceBlock == Forwarder);
         assert(Context.BodyBlock == Forwarder);
+        assert(Context.SyntheticSource == 10);
+        assert(Context.SyntheticTarget == 2);
         assert(Result == PayloadMaterializeResult::Committed);
         assert(Payloads.empty());
         SawCommit = true;
@@ -1895,6 +1897,8 @@ void testStructuredCFGDuplicateSyntheticForwarderReportsTargets() {
                Kind == PayloadMaterializeKind::SwitchCaseValue);
         assert(Context.SourceBlock == Forwarder);
         assert(Context.BodyBlock == Forwarder);
+        assert(Context.SyntheticSource == 10);
+        assert(Context.SyntheticTarget == 2);
         assert(Context.CopyBlock != InvalidBlockId);
         SawForwarder = true;
         return Payload;
@@ -1937,6 +1941,8 @@ void testStructuredCFGDuplicateSyntheticGotoReportsTargets() {
                Kind == PayloadMaterializeKind::SwitchCaseValue);
         assert(Context.SourceBlock == Goto);
         assert(Context.BodyBlock == Goto);
+        assert(Context.SyntheticSource == 10);
+        assert(Context.SyntheticTarget == 2);
         assert(Context.CopyBlock != InvalidBlockId);
         SawGoto = true;
         return Payload;

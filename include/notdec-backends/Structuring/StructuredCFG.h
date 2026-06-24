@@ -76,6 +76,8 @@ struct PayloadMaterializeContext {
   BlockId BodyBlock = InvalidBlockId;
   BlockId CopyBlock = InvalidBlockId;
   BlockId CopiedFromBlock = InvalidBlockId;
+  BlockId SyntheticSource = InvalidBlockId;
+  BlockId SyntheticTarget = InvalidBlockId;
   BlockId OriginalPredecessor = InvalidBlockId;
   BlockId NewPredecessor = InvalidBlockId;
   std::vector<BlockId> OriginalPredecessors;

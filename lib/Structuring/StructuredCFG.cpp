@@ -253,6 +253,8 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.BodyBlock = BodyId;
   Context.CopyBlock = Id;
   Context.CopiedFromBlock = Block->CopiedFromBlock;
+  Context.SyntheticSource = Block->SyntheticSource;
+  Context.SyntheticTarget = Block->SyntheticTarget;
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
   if (BodyId == Id) {
