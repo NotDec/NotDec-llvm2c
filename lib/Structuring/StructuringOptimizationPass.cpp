@@ -11,13 +11,14 @@ GotoManager StructuringOptimizationPass::getNewGotos(
 
 bool StructuringOptimizationPass::needsInitialEvaluation() const {
   return Options.RequireStructurableGraph || Options.RequireGotos ||
-         Options.PreventNewGotos || Options.MustImproveRelativeQuality;
+         Options.PreventNewGotos || Options.StrictlyLessGotos ||
+         Options.MustImproveRelativeQuality;
 }
 
 bool StructuringOptimizationPass::acceptsFinalEvaluation(
     const StructuringEvaluation &Initial,
     const StructuringEvaluation &Current) const {
-  if (Options.PreventNewGotos) {
+  if (Options.PreventNewGotos || Options.StrictlyLessGotos) {
     std::size_t InitialGotos = Initial.Gotos.size();
     GotoManager NewGotos = getNewGotos(Initial, Current);
     std::size_t CurrentGotos = NewGotos.size();

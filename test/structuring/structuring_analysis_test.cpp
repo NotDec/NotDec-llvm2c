@@ -1380,6 +1380,7 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   StructuringOptimizationOptions Options = CrossJumpReverter::defaultOptions();
   Options.MaxOptIters = 1;
   Options.PreventNewGotos = false;
+  Options.StrictlyLessGotos = false;
   Options.MustImproveRelativeQuality = false;
 
   CFGEdgeGotoRegionStructurer Structurer;
@@ -3351,6 +3352,23 @@ void testStructuringOptimizationPassRejectsNewGotos() {
 
   StructuringOptimizationOptions Options;
   Options.RequireGotos = false;
+  CFGEdgeGotoRegionStructurer Structurer;
+  AddFirstSuccessorPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
+}
+
+void testStructuringOptimizationPassEnforcesStrictlyLessGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = false;
+  Options.StrictlyLessGotos = true;
+  Options.MustImproveRelativeQuality = false;
   CFGEdgeGotoRegionStructurer Structurer;
   AddFirstSuccessorPass Pass(Options);
   StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
@@ -5893,6 +5911,7 @@ int main() {
   testRelativeQualityRejectsMoreGotoTargets();
   testStructuringOptimizationPassAcceptsImprovedGraph();
   testStructuringOptimizationPassRejectsNewGotos();
+  testStructuringOptimizationPassEnforcesStrictlyLessGotos();
   testStructuringOptimizationPassCanOverrideNewGotos();
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
