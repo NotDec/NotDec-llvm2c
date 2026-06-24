@@ -2359,6 +2359,64 @@ void testCrossJumpReverterUsesSwitchCaseGotoKind() {
   assert(hasSinglePayload(CopyHead->Statements, 61));
 }
 
+void testCrossJumpReverterUsesSwitchDefaultGotoKind() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {1});
+  Switch.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({71});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {4});
+  Tail.Statements.push_back({72});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(4, {}));
+
+  StructuredTree Tree;
+
+  StructuredNode DefaultGoto;
+  DefaultGoto.Kind = StructuredNodeKind::Goto;
+  DefaultGoto.Target = 1;
+  NodeId DefaultId = Tree.addNode(std::move(DefaultGoto));
+
+  StructuredNode CaseBody;
+  CaseBody.Kind = StructuredNodeKind::BasicBlock;
+  CaseBody.Block = 1;
+  NodeId CaseId = Tree.addNode(std::move(CaseBody));
+
+  StructuredNode SwitchNode;
+  SwitchNode.Kind = StructuredNodeKind::Switch;
+  SwitchNode.Block = 0;
+  SwitchNode.Default = DefaultId;
+  SwitchNode.StructuredCases.push_back({{}, 1, CaseId});
+  Tree.setRoot(Tree.addNode(std::move(SwitchNode)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *SwitchBlock = Cfg.getBlock(0);
+  assert(SwitchBlock != nullptr);
+  assert(SwitchBlock->Successors.size() == 1);
+  assert(SwitchBlock->Successors.front() != 1);
+  assert(SwitchBlock->Cases.size() == 1);
+  assert(SwitchBlock->Cases.front().Target == 1);
+  assert(Cfg.getBlock(1) != nullptr);
+
+  const CFGBlock *CopyHead = Cfg.getBlock(SwitchBlock->Successors.front());
+  assert(CopyHead != nullptr);
+  assert(CopyHead->BodyBlock == CopyHead->Id);
+  assert(hasSinglePayload(CopyHead->Statements, 71));
+}
+
 void testDuplicationReverterMergesExactDuplicateBlocks() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -7512,6 +7570,7 @@ int main() {
   testCrossJumpReverterSkipsAmbiguousSwitchCaseDefaultTarget();
   testCrossJumpReverterRedirectsSwitchCasesOnly();
   testCrossJumpReverterUsesSwitchCaseGotoKind();
+  testCrossJumpReverterUsesSwitchDefaultGotoKind();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();

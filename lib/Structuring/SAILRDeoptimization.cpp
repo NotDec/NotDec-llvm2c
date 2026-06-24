@@ -712,7 +712,8 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
   // Keep the helper transactional: a failed copy should leave the caller's
   // graph exactly as it was before we started cloning the region.
   StructuredCFG Snapshot = Graph;
-  std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
+  std::optional<DuplicatedRegion> CopyRegion =
+      Graph.duplicateRegion(Region.Blocks);
   if (!CopyRegion.has_value()) {
     Graph = std::move(Snapshot);
     return false;
@@ -885,6 +886,64 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
   BlockId CopyHead = CopyRegion->copyOf(Region.Head);
   if (CopyHead == InvalidBlockId ||
       !Graph.redirectPredecessors(Region.Head, CopyHead, Preds)) {
+    for (const auto &[_, Copy] : CopyRegion->Blocks) {
+      Graph.removeBlock(Copy);
+    }
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    OutCopies.push_back(Copy);
+  }
+  return true;
+}
+
+bool redirectNonSwitchCaseEdges(StructuredCFG &Graph, BlockId OldTarget,
+                                BlockId NewTarget,
+                                const std::vector<BlockId> &Preds) {
+  for (BlockId Pred : Preds) {
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock == nullptr ||
+        !nonCaseSuccessorReachesBlock(*PredBlock, OldTarget)) {
+      return false;
+    }
+  }
+
+  for (BlockId Pred : Preds) {
+    CFGBlock *PredBlock = Graph.getBlock(Pred);
+    for (BlockId &Succ : PredBlock->Successors) {
+      if (Succ == OldTarget) {
+        Succ = NewTarget;
+      }
+    }
+  }
+  return true;
+}
+
+bool copyLinearRegionForNonCasePredecessors(StructuredCFG &Graph,
+                                            const LinearRegion &Region,
+                                            const std::vector<BlockId> &Preds,
+                                            std::vector<BlockId> &OutCopies) {
+  StructuredCFG Snapshot = Graph;
+  std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
+  if (!CopyRegion.has_value()) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
+                                   Preds)) {
+    for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
+      Graph.removeBlock(OldCopy);
+    }
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  BlockId CopyHead = CopyRegion->copyOf(Region.Head);
+  if (CopyHead == InvalidBlockId ||
+      !redirectNonSwitchCaseEdges(Graph, Region.Head, CopyHead, Preds)) {
     for (const auto &[_, Copy] : CopyRegion->Blocks) {
       Graph.removeBlock(Copy);
     }
@@ -1614,8 +1673,9 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
         continue;
       }
       if (!NonCasePreds.empty() &&
-          !copyLinearRegionForPredecessors(Candidate, Region, NonCasePreds,
-                                           RegionCopies)) {
+          !copyLinearRegionForNonCasePredecessors(Candidate, Region,
+                                                  NonCasePreds,
+                                                  RegionCopies)) {
         continue;
       }
 
