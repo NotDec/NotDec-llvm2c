@@ -1104,6 +1104,24 @@ void testSolidityBodyBuilderRendersSyntheticForwarder() {
   assert(std::find(Out.begin(), Out.end(), "unknown") == Out.end());
 }
 
+void testSolidityBodyBuilderConsumesStructuredSyntheticGoto() {
+  std::vector<std::string> Payloads;
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(10, {}));
+  BlockId Synthetic = Cfg.createSyntheticGoto(20, 10);
+
+  StructuredTree Tree = GotoStructurer().structure(Cfg);
+  std::vector<std::string> Out =
+      notdec::backend::solidity::BodyBuilder::renderStructuredBody(Tree,
+                                                                   Payloads);
+
+  assert(std::find(Out.begin(), Out.end(),
+                   "// block_" + std::to_string(Synthetic) + ":") !=
+         Out.end());
+  assert(std::find(Out.begin(), Out.end(), "// goto block_10") != Out.end());
+  assert(std::find(Out.begin(), Out.end(), "unknown") == Out.end());
+}
+
 void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
   StructuredCFG Cfg;
   CFGBlock Source = block(10, {});
@@ -6813,6 +6831,7 @@ int main() {
   testGotoStructurerRendersSyntheticGoto();
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
   testSolidityBodyBuilderRendersSyntheticForwarder();
+  testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();
   testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure();
