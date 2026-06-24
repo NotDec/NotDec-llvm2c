@@ -33,6 +33,13 @@ void appendUniqueTarget(std::vector<BlockId> &Targets, BlockId Target) {
   }
 }
 
+void appendGeneratedPayload(std::vector<PayloadRef> &Generated,
+                            PayloadRef Original, PayloadRef Rewritten) {
+  if (Rewritten.isValid() && Rewritten.Id != Original.Id) {
+    Generated.push_back(Rewritten);
+  }
+}
+
 BlockId copyOf(const DuplicatedRegion &Region, BlockId Original) {
   return Region.copyOf(Original);
 }
@@ -160,6 +167,11 @@ void StructuredCFG::setPayloadMaterializeHook(
       SupportsPredecessorRewrite && static_cast<bool>(MaterializeHook);
 }
 
+void StructuredCFG::setPayloadMaterializeResultHook(
+    PayloadMaterializeResultHook Hook) {
+  MaterializeResultHook = std::move(Hook);
+}
+
 bool StructuredCFG::hasPayloadMaterializeHook() const {
   return static_cast<bool>(MaterializeHook);
 }
@@ -238,6 +250,15 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
 
+  std::vector<PayloadRef> GeneratedPayloads;
+  auto AbortMaterialize = [&]() {
+    if (MaterializeResultHook) {
+      MaterializeResultHook(Context, PayloadMaterializeResult::Aborted,
+                            GeneratedPayloads);
+    }
+    return false;
+  };
+
   std::vector<PayloadRef> Statements;
   Statements.reserve(Body->Statements.size());
   for (std::size_t I = 0; I < Body->Statements.size(); ++I) {
@@ -246,8 +267,9 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
       std::optional<PayloadRef> Rewritten = MaterializeHook(
           Context, PayloadMaterializeKind::Statement, Payload, I);
       if (!Rewritten.has_value()) {
-        return false;
+        return AbortMaterialize();
       }
+      appendGeneratedPayload(GeneratedPayloads, Payload, *Rewritten);
       Payload = *Rewritten;
     }
     Statements.push_back(Payload);
@@ -258,8 +280,9 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
     std::optional<PayloadRef> Rewritten = MaterializeHook(
         Context, PayloadMaterializeKind::Condition, Condition, 0);
     if (!Rewritten.has_value()) {
-      return false;
+      return AbortMaterialize();
     }
+    appendGeneratedPayload(GeneratedPayloads, Condition, *Rewritten);
     Condition = *Rewritten;
   }
 
@@ -273,12 +296,15 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
       std::optional<PayloadRef> Rewritten = MaterializeHook(
           Context, PayloadMaterializeKind::SwitchCaseValue, Payload, I);
       if (!Rewritten.has_value()) {
-        return false;
+        return AbortMaterialize();
       }
+      appendGeneratedPayload(GeneratedPayloads, Payload, *Rewritten);
       Payload = *Rewritten;
     }
     CaseValues.push_back(Payload);
   }
+  Context.OriginalTarget = InvalidBlockId;
+  Context.NewTarget = InvalidBlockId;
 
   // Materializing copies renderer payload from the body source. CFG identity
   // stays on this block: successors and switch targets must keep any copied
@@ -292,6 +318,10 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
 
   Block->BodyBlock = Id;
   Block->BodyMaterialized = true;
+  if (MaterializeResultHook) {
+    MaterializeResultHook(Context, PayloadMaterializeResult::Committed,
+                          GeneratedPayloads);
+  }
   return true;
 }
 

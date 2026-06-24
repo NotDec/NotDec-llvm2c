@@ -65,6 +65,11 @@ enum class PayloadMaterializeKind {
   SwitchCaseValue,
 };
 
+enum class PayloadMaterializeResult {
+  Committed,
+  Aborted,
+};
+
 struct PayloadMaterializeContext {
   BlockId SourceBlock = InvalidBlockId;
   BlockId BodyBlock = InvalidBlockId;
@@ -88,6 +93,10 @@ using PayloadMaterializeHook =
     std::function<std::optional<PayloadRef>(const PayloadMaterializeContext &,
                                             PayloadMaterializeKind, PayloadRef,
                                             std::size_t)>;
+using PayloadMaterializeResultHook =
+    std::function<void(const PayloadMaterializeContext &,
+                       PayloadMaterializeResult,
+                       const std::vector<PayloadRef> &)>;
 
 struct StructuredSwitchCase {
   PayloadRef Value;
@@ -163,6 +172,7 @@ public:
   CFGBlock *getBlock(BlockId Id);
   void setPayloadMaterializeHook(PayloadMaterializeHook Hook,
                                  bool SupportsPredecessorRewrite = false);
+  void setPayloadMaterializeResultHook(PayloadMaterializeResultHook Hook);
   bool hasPayloadMaterializeHook() const;
   bool hasPredecessorRewritePayloadMaterializeHook() const;
   BlockId bodyBlock(BlockId Id) const;
@@ -186,6 +196,7 @@ private:
 
   std::vector<CFGBlock> Blocks;
   PayloadMaterializeHook MaterializeHook;
+  PayloadMaterializeResultHook MaterializeResultHook;
   bool MaterializeHookSupportsPredecessorRewrite = false;
 };
 

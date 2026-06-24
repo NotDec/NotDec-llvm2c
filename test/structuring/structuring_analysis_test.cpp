@@ -771,6 +771,8 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
   std::size_t StatementRewrites = 0;
   std::size_t ConditionRewrites = 0;
   std::size_t CaseRewrites = 0;
+  std::vector<PayloadRef> CommittedPayloads;
+  std::size_t AbortNotifications = 0;
   Cfg.setPayloadMaterializeHook(
       [&](const PayloadMaterializeContext &Context,
           PayloadMaterializeKind Kind, PayloadRef Payload,
@@ -807,6 +809,19 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
         ++CaseRewrites;
         return PayloadRef{Payload.Id + 3000 + Index};
       });
+  Cfg.setPayloadMaterializeResultHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeResult Result,
+          const std::vector<PayloadRef> &Payloads) {
+        assert(Context.CopyBlock == 13);
+        assert(Context.OriginalTarget == InvalidBlockId);
+        assert(Context.NewTarget == InvalidBlockId);
+        if (Result == PayloadMaterializeResult::Committed) {
+          CommittedPayloads = Payloads;
+        } else {
+          ++AbortNotifications;
+        }
+      });
 
   BlockId CopyId = Cfg.duplicateBlock(10, {11, 12});
   assert(CopyId == 13);
@@ -827,6 +842,12 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
   assert(StatementRewrites == 2);
   assert(ConditionRewrites == 1);
   assert(CaseRewrites == 1);
+  assert(AbortNotifications == 0);
+  assert(CommittedPayloads.size() == 4);
+  assert(CommittedPayloads[0].Id == 1007);
+  assert(CommittedPayloads[1].Id == 1009);
+  assert(CommittedPayloads[2].Id == 2070);
+  assert(CommittedPayloads[3].Id == 3071);
 }
 
 void testStructuredCFGMaterializeRewriteFailureIsAtomic() {
@@ -840,13 +861,26 @@ void testStructuredCFGMaterializeRewriteFailureIsAtomic() {
   Cfg.addBlock(block(11, {}));
   Cfg.addBlock(block(12, {}));
 
+  std::vector<PayloadRef> AbortedPayloads;
+  std::size_t CommitNotifications = 0;
   Cfg.setPayloadMaterializeHook(
       [](const PayloadMaterializeContext &, PayloadMaterializeKind Kind,
          PayloadRef Payload, std::size_t Index) -> std::optional<PayloadRef> {
         if (Kind == PayloadMaterializeKind::Statement && Index == 1) {
           return std::nullopt;
         }
-        return Payload;
+        return PayloadRef{Payload.Id + 1000};
+      });
+  Cfg.setPayloadMaterializeResultHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeResult Result,
+          const std::vector<PayloadRef> &Payloads) {
+        assert(Context.CopyBlock == 13);
+        if (Result == PayloadMaterializeResult::Aborted) {
+          AbortedPayloads = Payloads;
+        } else {
+          ++CommitNotifications;
+        }
       });
 
   BlockId CopyId = Cfg.duplicateBlock(10, {11, 12});
@@ -862,6 +896,9 @@ void testStructuredCFGMaterializeRewriteFailureIsAtomic() {
   assert(Copy->Cases.size() == 1);
   assert(Copy->Cases.front().Value.Id == InvalidPayloadId);
   assert(Copy->Cases.front().Target == 12);
+  assert(CommitNotifications == 0);
+  assert(AbortedPayloads.size() == 1);
+  assert(AbortedPayloads.front().Id == 1007);
 }
 
 void testGotoStructurerRendersVirtualBlockBodySource() {
