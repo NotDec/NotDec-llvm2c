@@ -3097,6 +3097,57 @@ void testReturnDuplicatorLowCopiesSwitchReturnRegionWithPayloadRewrite() {
                           54 + CopySwitch1->Id * 1000));
 }
 
+void testReturnDuplicatorLowSkipsSwitchReturnRegionWithoutPredecessorRewrite() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Switch = switchBlock(2, {3, 5});
+  Switch.Condition = {50};
+  Switch.Cases.clear();
+  Switch.Cases.push_back({{51}, 5});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock DefaultTail = block(3, {4});
+  DefaultTail.Statements.push_back({52});
+  Cfg.addBlock(std::move(DefaultTail));
+
+  CFGBlock DefaultRet = block(4, {});
+  DefaultRet.Terminator = TerminatorKind::Return;
+  DefaultRet.Statements.push_back({53});
+  Cfg.addBlock(std::move(DefaultRet));
+
+  CFGBlock CaseTail = block(5, {6});
+  CaseTail.Statements.push_back({54});
+  Cfg.addBlock(std::move(CaseTail));
+
+  CFGBlock CaseRet = block(6, {});
+  CaseRet.Terminator = TerminatorKind::Return;
+  CaseRet.Statements.push_back({55});
+  Cfg.addBlock(std::move(CaseRet));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &, PayloadMaterializeKind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (!Payload.isValid()) {
+          return Payload;
+        }
+        return PayloadRef{Payload.Id + 1000};
+      });
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
+}
+
 void testReturnDuplicatorLowUsesGotoInReturnTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -6744,6 +6795,7 @@ int main() {
   testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();
   testReturnDuplicatorLowSkipsBranchReturnRegionWithoutPredecessorRewrite();
   testReturnDuplicatorLowCopiesSwitchReturnRegionWithPayloadRewrite();
+  testReturnDuplicatorLowSkipsSwitchReturnRegionWithoutPredecessorRewrite();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testSwitchReusedEntryRewriterCreatesGotoForReusedEntryBlock();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
