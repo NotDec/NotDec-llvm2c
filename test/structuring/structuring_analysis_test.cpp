@@ -1387,6 +1387,17 @@ void testStructuredCFGCreateSyntheticBlock() {
   assert(Block->Statements.empty());
   assert(Block->Terminator == TerminatorKind::Fallthrough);
   assert(Block->Successors == std::vector<BlockId>{10});
+  assert(Block->SyntheticSource == InvalidBlockId);
+  assert(Block->SyntheticTarget == InvalidBlockId);
+
+  BlockId Forwarder = Cfg.createSyntheticForwarder(20, 10);
+  const CFGBlock *ForwarderBlock = Cfg.getBlock(Forwarder);
+  assert(ForwarderBlock != nullptr);
+  assert(ForwarderBlock->Origin == CFGBlockOrigin::Synthetic);
+  assert(ForwarderBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
+  assert(ForwarderBlock->Successors == std::vector<BlockId>{10});
+  assert(ForwarderBlock->SyntheticSource == 20);
+  assert(ForwarderBlock->SyntheticTarget == 10);
 }
 
 void testCrossJumpReverterDuplicatesLinearGotoTarget() {
@@ -2595,6 +2606,10 @@ void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   assert(Forwarder1->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
   assert(Forwarder0->BodyMaterialized);
   assert(Forwarder1->BodyMaterialized);
+  assert(Forwarder0->SyntheticSource == 0);
+  assert(Forwarder1->SyntheticSource == 3);
+  assert(Forwarder0->SyntheticTarget == 1);
+  assert(Forwarder1->SyntheticTarget == 1);
   assert(!Forwarder0->Successors.empty());
   assert(!Forwarder1->Successors.empty());
   assert(Cfg.getBlock(Forwarder0->Successors.front()) != nullptr);

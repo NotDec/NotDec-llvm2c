@@ -994,8 +994,8 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
         break;
       }
 
-      BlockId Forwarder = Candidate.createSyntheticBlock(
-          {DefaultTarget}, CFGBlockCreator::SAILRDeoptimization);
+      BlockId Forwarder = Candidate.createSyntheticForwarder(
+          SwitchPred, DefaultTarget, CFGBlockCreator::SAILRDeoptimization);
       if (Forwarder == InvalidBlockId ||
           !replaceDefaultSwitchSuccessor(Candidate, SwitchPred, DefaultTarget,
                                          Forwarder)) {

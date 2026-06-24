@@ -99,6 +99,9 @@ struct CFGBlock {
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
   bool BodyMaterialized = false;
+  // Synthetic forwarders stand for a virtualized original edge.
+  BlockId SyntheticSource = InvalidBlockId;
+  BlockId SyntheticTarget = InvalidBlockId;
 
   // SAILR deoptimization can duplicate or synthesize control-flow blocks.
   // BodyBlock keeps the backend-neutral identity of the block whose statements
@@ -129,6 +132,9 @@ public:
   BlockId addBlock(CFGBlock Block);
   BlockId createSyntheticBlock(
       std::vector<BlockId> Successors,
+      CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
+  BlockId createSyntheticForwarder(
+      BlockId Source, BlockId Target,
       CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
   BlockId duplicateBlock(
       BlockId Source, std::vector<BlockId> Successors,
