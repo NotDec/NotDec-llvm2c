@@ -192,6 +192,28 @@ cont:
         "absent": ["goto ret", "goto cont"],
     },
     {
+        "name": "phi_demote_before_structuring",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %then, label %else
+
+then:
+  br label %merge
+
+else:
+  br label %merge
+
+merge:
+  %v = phi i32 [ 1, %then ], [ 0, %else ]
+  ret i32 %v
+}
+""",
+        "contains": ["if (x == 0)", "return 1;", "return 0;"],
+        "absent": ["phi"],
+    },
+    {
         "name": "linear_do_while",
         "ir": r"""
 declare void @a()
