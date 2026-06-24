@@ -91,6 +91,10 @@ void testDemoteSSAFixHTKeepsUnnamedPhiTypes() {
   assert(!HT.hasValueType(Phi1, false));
   assert(!HT.prefersUpperValueType(Phi0));
   assert(!HT.prefersUpperValueType(Phi1));
+  assert(HT.ValueTypesLower.count(Phi0) == 0);
+  assert(HT.ValueTypesUpper.count(Phi0) == 0);
+  assert(HT.ValueTypesLower.count(Phi1) == 0);
+  assert(HT.ValueTypesUpper.count(Phi1) == 0);
 
   bool FoundPhi = false;
   bool FoundPhi1 = false;
@@ -189,6 +193,8 @@ void testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes() {
   assert(!HT.hasValueType(Phi, true));
   assert(!HT.hasValueType(Phi, false));
   assert(!HT.prefersUpperValueType(Phi));
+  assert(HT.ValueTypesLower.count(Phi) == 0);
+  assert(HT.ValueTypesUpper.count(Phi) == 0);
   assert(HT.hasValueType(A, true));
 }
 

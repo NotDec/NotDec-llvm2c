@@ -68,6 +68,33 @@ struct HTypeResult {
     }
     return Ty;
   }
+  template <class Pred>
+  void eraseValueTypesIf(Pred &&ShouldErase) {
+    for (auto It = ValueTypesLower.begin(); It != ValueTypesLower.end();) {
+      if (ShouldErase(It->first)) {
+        It = ValueTypesLower.erase(It);
+      } else {
+        ++It;
+      }
+    }
+    for (auto It = ValueTypesUpper.begin(); It != ValueTypesUpper.end();) {
+      if (ShouldErase(It->first)) {
+        It = ValueTypesUpper.erase(It);
+      } else {
+        ++It;
+      }
+    }
+  }
+  template <class Pred>
+  void eraseContraVariantValuesIf(Pred &&ShouldErase) {
+    for (auto It = ContraVariantValues.begin(); It != ContraVariantValues.end();) {
+      if (ShouldErase(*It)) {
+        It = ContraVariantValues.erase(It);
+      } else {
+        ++It;
+      }
+    }
+  }
   void print(llvm::raw_ostream &OS) const {
     // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
     // 因此这里先创建并预热一个 formatter，再统一打印 decl/type/memory，
