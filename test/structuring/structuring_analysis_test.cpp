@@ -2698,6 +2698,18 @@ void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
 
   Cfg.addBlock(block(3, {1}));
 
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &Context, PayloadMaterializeKind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (!Payload.isValid()) {
+          return Payload;
+        }
+        assert(Context.OriginalPredecessor != InvalidBlockId);
+        assert(Context.NewPredecessor != InvalidBlockId);
+        return PayloadRef{Payload.Id + Context.NewPredecessor * 1000};
+      },
+      /*SupportsPredecessorRewrite=*/true);
+
   TestSwitchDefaultCaseDuplicator Pass(
       SwitchDefaultCaseDuplicator::defaultOptions());
   StructuringEvaluation Current;
@@ -2721,7 +2733,7 @@ void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
   const CFGBlock *Copy = Cfg.getBlock(CopyId);
   assert(Copy != nullptr);
   assert(Copy->Successors.size() == 1);
-  assert(hasSinglePayload(Copy->Statements, 31));
+  assert(hasSinglePayload(Copy->Statements, 31 + CopyPred->Id * 1000));
 
   const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
   assert(CopyTail != nullptr);
@@ -2729,7 +2741,8 @@ void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
   assert(CopyTail->SourceBlock == 4);
   assert(CopyTail->BodyMaterialized);
   assert(CopyTail->BodyBlock == CopyTail->Id);
-  assert(hasSinglePayload(CopyTail->Statements, 32));
+  assert(hasSinglePayload(CopyTail->Statements, 32 + Copy->Id * 1000));
+
   assert(hasSinglePayload(Cfg.getBlock(5)->Statements, 33));
 }
 
