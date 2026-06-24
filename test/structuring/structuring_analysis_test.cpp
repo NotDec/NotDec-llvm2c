@@ -2563,6 +2563,25 @@ void testDuplicationReverterFiltersFutureIrreducibleGotos() {
   assert(!Filtered.isGotoEdge(0, 3));
 }
 
+void testDuplicationReverterKeepsValidEndGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  StructuringEvaluation Initial;
+  Initial.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}, StructuredGoto{1, 2}});
+
+  StructuringEvaluation Current = Initial;
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  GotoManager Filtered = Pass.getNewGotos(Cfg, Initial, Current);
+
+  assert(Filtered.size() == 2);
+  assert(Filtered.isGotoEdge(0, 1));
+  assert(Filtered.isGotoEdge(1, 2));
+}
+
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -7409,6 +7428,7 @@ int main() {
   testDuplicationReverterKeepsSyntheticIdentitySeparate();
   testDuplicationReverterKeepsCopiedSourcesSeparate();
   testDuplicationReverterFiltersFutureIrreducibleGotos();
+  testDuplicationReverterKeepsValidEndGotos();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
