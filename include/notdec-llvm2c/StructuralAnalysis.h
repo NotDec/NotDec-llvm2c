@@ -537,6 +537,7 @@ public:
                                           bool isVariadic = false);
   clang::FunctionDecl *getIntrinsic(std::string FName);
   clang::FunctionDecl *getIntrinsic(llvm::Function &F);
+  clang::FunctionDecl *declareFunctionFromIR(llvm::Function &F);
   ASTManager &getASTManager() { return *AM; }
   clang::ASTContext &getASTContext() { return AM->getASTContext(); }
   ValueNamer &getValueNamer() { return VN; }
@@ -561,7 +562,11 @@ public:
     return funcContexts.at(&Func);
   }
   clang::FunctionDecl *getFunctionDecl(llvm::Function &F) {
-    return llvm::cast<clang::FunctionDecl>(globalDecls.at(&F));
+    auto It = globalDecls.find(&F);
+    if (It == globalDecls.end()) {
+      return nullptr;
+    }
+    return llvm::dyn_cast_or_null<clang::FunctionDecl>(It->second);
   }
   clang::VarDecl *getGlobalVarDecl(llvm::GlobalVariable &GV) {
     return llvm::cast<clang::VarDecl>(globalDecls.at(&GV));

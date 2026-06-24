@@ -886,10 +886,21 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
   }
   // See also:
   // https://github.com/llvm/llvm-project/blob/d8e5a0c42bd8796cce9caa53aacab88c7cb2a3eb/clang/lib/Analysis/BodyFarm.cpp#L245
+  auto makeDefaultExpr = [&](llvm::Type *Ty) -> clang::Expr * {
+    auto QTy = getTypeBuilder().visitType(*Ty);
+    if (QTy.isNull() || QTy->isVoidType()) {
+      return nullptr;
+    }
+    return new (Ctx) clang::ImplicitValueInitExpr(QTy.getNonReferenceType());
+  };
   llvm::SmallVector<clang::Expr *, 16> Args(I.arg_size());
   for (unsigned i = 0; i < I.arg_size(); i++) {
     Args[i] = EB.visitValue(I.getArgOperand(i), &I, i);
-    assert(Args[i] != nullptr && "CFGBuilder.visitCallInst: Args[i] is null?");
+    if (Args[i] == nullptr) {
+      llvm::errs() << "Warning: failed to build call argument " << i
+                   << ", using default value for: " << I << "\n";
+      Args[i] = makeDefaultExpr(I.getArgOperand(i)->getType());
+    }
   }
   llvm::Function *Callee = I.getCalledFunction();
   clang::QualType Ret;
@@ -897,6 +908,18 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
   clang::QualType FunctionType;
   if (Callee != nullptr) {
     auto FD = FCtx.getSAContext().getFunctionDecl(*Callee);
+    if (FD == nullptr) {
+      llvm::errs() << "Warning: missing function declaration for "
+                   << Callee->getName() << ", declaring from IR type.\n";
+      FD = FCtx.getSAContext().declareFunctionFromIR(*Callee);
+    }
+    if (FD == nullptr) {
+      llvm::errs() << "Warning: failed to declare call target: " << I << "\n";
+      if (auto *Fallback = makeDefaultExpr(I.getType())) {
+        addExprOrStmt(I, *Fallback);
+      }
+      return;
+    }
     FunctionType = FD->getType();
     clang::QualType Ty = FD->getType();
     FRef = makeDeclRefExpr(FD);
@@ -926,28 +949,39 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
     auto RetTy = getTypeBuilder().getType(&I);
     llvm::SmallVector<clang::QualType, 16> ArgTypes;
     for (auto Arg : Args) {
-      ArgTypes.push_back(Arg->getType());
+      ArgTypes.push_back(Arg != nullptr ? Arg->getType() : Ctx.IntTy);
     }
     FunctionType =
         Ctx.getFunctionType(RetTy, ArgTypes, FunctionProtoType::ExtProtoInfo());
 
     // FunctionType = CalleeExpr->getType();
-    assert(CalleeExpr != nullptr &&
-           "CFGBuilder.visitCallInst: CalleeExpr is null?");
+    if (CalleeExpr == nullptr) {
+      llvm::errs() << "Warning: failed to build indirect call callee: " << I
+                   << "\n";
+      if (auto *Fallback = makeDefaultExpr(I.getType())) {
+        addExprOrStmt(I, *Fallback);
+      }
+      return;
+    }
     auto Ty = CalleeExpr->getType();
+    auto FuncPtrTy = Ctx.getPointerType(FunctionType);
     if (Ty->isPointerType()) {
       Ty = Ty->getPointeeType();
-      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr,
-                                              Ctx.getPointerType(FunctionType));
+      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, FuncPtrTy);
     } else {
-      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, FunctionType);
+      CalleeExpr = getTypeBuilder().checkCast(CalleeExpr, FuncPtrTy);
     }
-    assert(Ty->isFunctionType() &&
-           "CallInst operand is not a function pointer?");
     FRef = CalleeExpr;
 
     // create func ptr type cast
-    Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
+    if (Ty->isFunctionType()) {
+      Ret = llvm::cast<clang::FunctionType>(Ty)->getReturnType();
+    } else {
+      llvm::errs() << "Warning: indirect call operand is not a function "
+                      "pointer, using inferred call type: "
+                   << I << "\n";
+      Ret = RetTy;
+    }
 
     llvm::errs() << "CFGBuilder.visitCallInst: Warning: Func ptr call does no "
                     "arg casting.\n";
@@ -1561,13 +1595,19 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
           llvm::AllocaInst &AI = llvm::cast<llvm::AllocaInst>(I);
           if (!HT.hasValueType(&AI, false) && !HT.hasValueType(&AI, true)) {
             auto N1 = AI.getName().str();
-            assert(N1.rfind(".reg2mem", N1.length() - 8) == (N1.length() - 8) &&
-                   "decompileModule: alloca not from reg2mem?");
+            if (!llvm::StringRef(N1).ends_with(".reg2mem")) {
+              continue;
+            }
             auto N = N1.substr(0, N1.length() - 8);
             AI.setName(N);
             auto Key = std::make_pair(&F, N);
-            auto UpperTy = NameMapUpper.at(Key);
-            auto LowerTy = NameMapLower.at(Key);
+            auto UpperIt = NameMapUpper.find(Key);
+            auto LowerIt = NameMapLower.find(Key);
+            if (UpperIt == NameMapUpper.end() || LowerIt == NameMapLower.end()) {
+              continue;
+            }
+            auto UpperTy = UpperIt->second;
+            auto LowerTy = LowerIt->second;
             if (UpperTy != nullptr) {
               auto I1 = HT.ValueTypesUpper.insert({&AI, UpperTy});
               assert(I1.second && "decompileModule: duplicate alloca name?");
@@ -1732,6 +1772,67 @@ SAContext::createFunctionDecl(TranslationUnitDecl *TUD, const char *Name,
     Params.push_back(PVD);
   }
   FD->setParams(Params);
+  return FD;
+}
+
+static QualType getFallbackQualType(clang::ASTContext &Ctx, llvm::Type *Ty) {
+  if (Ty->isVoidTy()) {
+    return Ctx.VoidTy;
+  }
+  if (Ty->isPointerTy()) {
+    return Ctx.VoidPtrTy;
+  }
+  if (Ty->isIntegerTy()) {
+    auto BitWidth = Ty->getIntegerBitWidth();
+    auto IntTy = Ctx.getIntTypeForBitwidth(BitWidth, /*Signed=*/0);
+    if (!IntTy.isNull()) {
+      return IntTy;
+    }
+  }
+  if (Ty->isFloatTy()) {
+    return Ctx.FloatTy;
+  }
+  if (Ty->isDoubleTy()) {
+    return Ctx.DoubleTy;
+  }
+  return Ctx.IntTy;
+}
+
+clang::FunctionDecl *SAContext::declareFunctionFromIR(llvm::Function &F) {
+  auto *TUD = AM->getFunctionDeclarations();
+  std::string Name = F.isIntrinsic() ? escapeName(F.getName().str())
+                                     : getValueNamer().getFuncName(F).str();
+  if (auto *FD = AM->getFuncDeclaration(Name.c_str())) {
+    globalDecls[&F] = FD;
+    return FD;
+  }
+
+  auto RetTy = getTypeBuilder().visitType(*F.getReturnType());
+  if (RetTy.isNull()) {
+    RetTy = getFallbackQualType(getASTContext(), F.getReturnType());
+  }
+
+  llvm::SmallVector<std::string, 8> NameStorage;
+  llvm::SmallVector<const char *, 8> ParamNames;
+  llvm::SmallVector<QualType, 8> ParamTys;
+  NameStorage.reserve(F.arg_size());
+  ParamNames.reserve(F.arg_size());
+  ParamTys.reserve(F.arg_size());
+  unsigned Index = 0;
+  for (auto &Arg : F.args()) {
+    NameStorage.push_back(std::string("a") + std::to_string(Index++));
+    ParamNames.push_back(NameStorage.back().c_str());
+    auto ParamTy = getTypeBuilder().visitType(*Arg.getType());
+    if (ParamTy.isNull()) {
+      ParamTy = getFallbackQualType(getASTContext(), Arg.getType());
+    }
+    ParamTys.push_back(ParamTy);
+  }
+
+  auto *FD = createFunctionDecl(TUD, Name.c_str(), ParamNames, ParamTys, RetTy,
+                                F.isVarArg());
+  TUD->addDecl(FD);
+  globalDecls[&F] = FD;
   return FD;
 }
 
