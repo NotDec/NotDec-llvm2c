@@ -229,6 +229,8 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
   Context.NewPredecessor = NewPredecessor;
   Context.OriginalSuccessors = Body->Successors;
   Context.NewSuccessors = Block->Successors;
+  Context.OriginalTerminator = Body->Terminator;
+  Context.NewTerminator = Block->Terminator;
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
 

@@ -780,6 +780,8 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
         assert(Context.NewPredecessor == 91);
         assert(Context.OriginalSuccessors == std::vector<BlockId>({11, 12}));
         assert(Context.NewSuccessors == std::vector<BlockId>({11, 12}));
+        assert(Context.OriginalTerminator == TerminatorKind::Switch);
+        assert(Context.NewTerminator == TerminatorKind::Switch);
         assert(Context.CopyKind == CFGBlockCopyKind::RegionCopy);
         assert(Context.CreatedBy == CFGBlockCreator::SAILRDeoptimization);
 
@@ -1127,6 +1129,8 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
         assert(Context.OriginalSuccessors == std::vector<BlockId>({11, 12}));
         assert(Context.NewSuccessors ==
                std::vector<BlockId>({CopyBodyId, 12}));
+        assert(Context.OriginalTerminator == TerminatorKind::Switch);
+        assert(Context.NewTerminator == TerminatorKind::Switch);
         if (Index == 0) {
           assert(Context.OriginalTarget == 12);
           assert(Context.NewTarget == 12);

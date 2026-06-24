@@ -75,6 +75,8 @@ struct PayloadMaterializeContext {
   BlockId NewTarget = InvalidBlockId;
   std::vector<BlockId> OriginalSuccessors;
   std::vector<BlockId> NewSuccessors;
+  TerminatorKind OriginalTerminator = TerminatorKind::Fallthrough;
+  TerminatorKind NewTerminator = TerminatorKind::Fallthrough;
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
 };
