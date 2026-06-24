@@ -49,12 +49,14 @@ protected:
   // Angr lets a pass override _get_new_gotos() after a successful trial. Future
   // SAILR deoptimization passes need this to ignore gotos they deliberately
   // leave for a later pass while still using the shared safety checks.
-  virtual GotoManager getNewGotos(const StructuringEvaluation &Initial,
+  virtual GotoManager getNewGotos(const StructuredCFG &Cfg,
+                                  const StructuringEvaluation &Initial,
                                   const StructuringEvaluation &Current) const;
 
 private:
   bool needsInitialEvaluation() const;
-  bool acceptsFinalEvaluation(const StructuringEvaluation &Initial,
+  bool acceptsFinalEvaluation(const StructuredCFG &Cfg,
+                              const StructuringEvaluation &Initial,
                               const StructuringEvaluation &Current) const;
 
   StructuringOptimizationOptions Options;

@@ -67,6 +67,7 @@ public:
 class TestDuplicationReverter : public DuplicationReverter {
 public:
   using DuplicationReverter::DuplicationReverter;
+  using DuplicationReverter::getNewGotos;
   using DuplicationReverter::runOnGraph;
 };
 
@@ -324,8 +325,10 @@ public:
   using AddFirstSuccessorPass::AddFirstSuccessorPass;
 
 protected:
-  GotoManager getNewGotos(const StructuringEvaluation &Initial,
+  GotoManager getNewGotos(const StructuredCFG &Cfg,
+                          const StructuringEvaluation &Initial,
                           const StructuringEvaluation &Current) const override {
+    (void)Cfg;
     (void)Current;
     return Initial.Gotos;
   }
@@ -1944,6 +1947,35 @@ void testDuplicationReverterKeepsCopiedSourcesSeparate() {
   assert(SecondCopy->SourceBlock == 3);
   assert(FirstCopy->Successors == std::vector<BlockId>{5});
   assert(SecondCopy->Successors == std::vector<BlockId>{5});
+}
+
+void testDuplicationReverterFiltersFutureIrreducibleGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+
+  CFGBlock CycleA = block(3, {4});
+  CycleA.Terminator = TerminatorKind::Fallthrough;
+  Cfg.addBlock(std::move(CycleA));
+
+  CFGBlock CycleB = block(4, {3});
+  CycleB.Terminator = TerminatorKind::Fallthrough;
+  Cfg.addBlock(std::move(CycleB));
+
+  StructuringEvaluation Initial;
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({
+      {0, 1, 10},
+      {0, 3, 11},
+  });
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  GotoManager Filtered = Pass.getNewGotos(Cfg, Initial, Current);
+
+  assert(Filtered.size() == 1);
+  assert(Filtered.isGotoEdge(0, 1));
+  assert(!Filtered.isGotoEdge(0, 3));
 }
 
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
@@ -3659,9 +3691,9 @@ void testSAILRDeoptimizationPipelineMatchesAngrOrder() {
 void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
   StructuringOptimizationOptions DuplicationOptions =
       DuplicationReverter::defaultOptions();
-  assert(!DuplicationOptions.RequireGotos);
-  assert(!DuplicationOptions.PreventNewGotos);
-  assert(!DuplicationOptions.MustImproveRelativeQuality);
+  assert(DuplicationOptions.RequireGotos);
+  assert(DuplicationOptions.PreventNewGotos);
+  assert(DuplicationOptions.MustImproveRelativeQuality);
   assert(DuplicationOptions.MaxOptIters == 5);
 
   StructuringOptimizationOptions ReturnOptions =
@@ -6075,6 +6107,7 @@ int main() {
   testDuplicationReverterSkipsWhenDropCannotBeRemoved();
   testDuplicationReverterKeepsSyntheticIdentitySeparate();
   testDuplicationReverterKeepsCopiedSourcesSeparate();
+  testDuplicationReverterFiltersFutureIrreducibleGotos();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();

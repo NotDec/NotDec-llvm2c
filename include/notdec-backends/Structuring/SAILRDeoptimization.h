@@ -22,6 +22,9 @@ public:
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
+  GotoManager getNewGotos(const StructuredCFG &Cfg,
+                          const StructuringEvaluation &Initial,
+                          const StructuringEvaluation &Current) const override;
 };
 
 class ReturnDuplicatorLow : public StructuringOptimizationPass {

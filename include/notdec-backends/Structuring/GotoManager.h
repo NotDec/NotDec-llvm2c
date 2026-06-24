@@ -30,6 +30,7 @@ struct StructuredGoto {
 class GotoManager {
 public:
   static GotoManager collect(const StructuredTree &Tree);
+  static GotoManager fromGotos(const std::vector<StructuredGoto> &Gotos);
 
   const std::set<StructuredGoto> &gotos() const { return Gotos; }
   bool empty() const { return Gotos.empty(); }

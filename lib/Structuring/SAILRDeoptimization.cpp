@@ -479,6 +479,40 @@ bool reachesBlock(const StructuredCFG &Graph, BlockId Start, BlockId Target) {
   return false;
 }
 
+bool reachesBlockWithin(const StructuredCFG &Graph, BlockId Start,
+                        BlockId Target, unsigned MaxDepth,
+                        std::set<BlockId> &Seen) {
+  if (Start == Target) {
+    return true;
+  }
+  if (MaxDepth == 0 || !Seen.insert(Start).second) {
+    return false;
+  }
+
+  for (BlockId Succ : Graph.successorsOf(Start)) {
+    if (reachesBlockWithin(Graph, Succ, Target, MaxDepth - 1, Seen)) {
+      return true;
+    }
+  }
+  Seen.erase(Start);
+  return false;
+}
+
+bool reachesAnyEndBlockWithin(const StructuredCFG &Graph, BlockId Start,
+                              unsigned MaxDepth) {
+  for (const CFGBlock &Block : Graph.blocks()) {
+    if (!Graph.successorsOf(Block.Id).empty()) {
+      continue;
+    }
+
+    std::set<BlockId> Seen;
+    if (reachesBlockWithin(Graph, Start, Block.Id, MaxDepth, Seen)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool reachesBlockFromNonDefaultSwitchSuccessor(const StructuredCFG &Graph,
                                                const CFGBlock &Switch,
                                                BlockId DefaultTarget,
@@ -1048,9 +1082,6 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
 
 StructuringOptimizationOptions DuplicationReverter::defaultOptions() {
   StructuringOptimizationOptions Options;
-  Options.RequireGotos = false;
-  Options.PreventNewGotos = false;
-  Options.MustImproveRelativeQuality = false;
   Options.MaxOptIters = 5;
   return Options;
 }
@@ -1103,6 +1134,28 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
   }
 
   return false;
+}
+
+GotoManager DuplicationReverter::getNewGotos(
+    const StructuredCFG &Cfg, const StructuringEvaluation &Initial,
+    const StructuringEvaluation &Current) const {
+  (void)Initial;
+  constexpr unsigned MaxEndpointDistance = 5;
+  std::vector<StructuredGoto> Filtered;
+
+  for (const StructuredGoto &Goto : Current.Gotos.gotos()) {
+    const CFGBlock *Target = Cfg.getBlock(Goto.Target);
+    if (Target == nullptr) {
+      Filtered.push_back(Goto);
+      continue;
+    }
+    if (Cfg.successorsOf(Target->Id).empty() ||
+        reachesAnyEndBlockWithin(Cfg, Target->Id, MaxEndpointDistance)) {
+      Filtered.push_back(Goto);
+    }
+  }
+
+  return GotoManager::fromGotos(Filtered);
 }
 
 StructuringOptimizationOptions ReturnDuplicatorLow::defaultOptions() {

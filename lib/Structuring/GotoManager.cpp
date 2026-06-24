@@ -62,6 +62,12 @@ GotoManager GotoManager::collect(const StructuredTree &Tree) {
   return Manager;
 }
 
+GotoManager GotoManager::fromGotos(const std::vector<StructuredGoto> &Gotos) {
+  GotoManager Manager;
+  Manager.Gotos.insert(Gotos.begin(), Gotos.end());
+  return Manager;
+}
+
 std::vector<StructuredGoto> GotoManager::gotosInBlock(BlockId Source) const {
   std::vector<StructuredGoto> Result;
   for (const StructuredGoto &Goto : Gotos) {
