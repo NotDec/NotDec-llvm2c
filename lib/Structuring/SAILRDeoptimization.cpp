@@ -259,9 +259,45 @@ bool prependBranchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
   return true;
 }
 
+bool prependSwitchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
+                               BlockId Pred, std::set<BlockId> &Seen) {
+  const CFGBlock *PredBlock = Graph.getBlock(Pred);
+  if (PredBlock == nullptr || PredBlock->Terminator != TerminatorKind::Switch ||
+      PredBlock->Successors.empty()) {
+    return false;
+  }
+
+  std::set<BlockId> NewSeen = Seen;
+  std::vector<BlockId> SwitchBlocks;
+  bool ReachesRegionHead = false;
+  for (BlockId Succ : Graph.successorsOf(Pred)) {
+    if (Succ == Region.Head) {
+      ReachesRegionHead = true;
+      continue;
+    }
+
+    if (!collectClosedLinearReturnTail(Graph, Succ, Pred, NewSeen,
+                                       SwitchBlocks)) {
+      return false;
+    }
+  }
+
+  if (!ReachesRegionHead || SwitchBlocks.empty()) {
+    return false;
+  }
+
+  Region.Head = Pred;
+  Region.Blocks.insert(Region.Blocks.end(), SwitchBlocks.begin(),
+                       SwitchBlocks.end());
+  Region.Blocks.push_back(Pred);
+  Seen = std::move(NewSeen);
+  Seen.insert(Pred);
+  return true;
+}
+
 ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
                                     BlockId ReturnBlock,
-                                    bool AllowBranchReturnRegion) {
+                                    bool AllowComplexReturnRegion) {
   ReturnRegion Region;
   const CFGBlock *EndBlock = Graph.getBlock(ReturnBlock);
   if (EndBlock == nullptr || EndBlock->Terminator != TerminatorKind::Return ||
@@ -292,13 +328,17 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
     if (prependReturnTailForkRegion(Graph, Region, Pred, Seen)) {
       continue;
     }
-    if (AllowBranchReturnRegion &&
+    if (AllowComplexReturnRegion &&
         prependBranchReturnRegion(Graph, Region, Pred, Seen)) {
       continue;
     }
+    if (AllowComplexReturnRegion &&
+        prependSwitchReturnRegion(Graph, Region, Pred, Seen)) {
+      continue;
+    }
 
-    // Switch regions and branch regions without payload rewrite coverage still
-    // need richer shared semantics before they can be copied safely.
+    // Complex regions without payload rewrite coverage still need richer shared
+    // semantics before they can be copied safely.
     if (PredBlock == nullptr ||
         PredBlock->Terminator != TerminatorKind::Fallthrough ||
         PredBlock->Successors.size() != 1) {
