@@ -1000,6 +1000,7 @@ void testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure() {
   StructuredCFG Cfg;
 
   CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Statements.push_back({70});
   Source.Cases.front().Value = {71};
   Cfg.addBlock(std::move(Source));
   Cfg.addBlock(block(11, {}));
@@ -1014,7 +1015,7 @@ void testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure() {
   GoodCopy.BodyMaterialized = false;
   Cfg.addBlock(std::move(GoodCopy));
 
-  CFGBlock BadCopy = switchBlock(30, {11});
+  CFGBlock BadCopy = switchBlock(30, {11, 12});
   BadCopy.Origin = CFGBlockOrigin::Copied;
   BadCopy.SourceBlock = 10;
   BadCopy.CopyKind = CFGBlockCopyKind::RegionCopy;
@@ -1023,6 +1024,16 @@ void testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure() {
   BadCopy.BodyMaterialized = false;
   Cfg.addBlock(std::move(BadCopy));
 
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &Context, PayloadMaterializeKind Kind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (Context.CopyBlock == 30 &&
+            Kind == PayloadMaterializeKind::Statement) {
+          return std::nullopt;
+        }
+        return Payload;
+      });
+
   assert(!Cfg.removeBlock(10));
 
   const CFGBlock *SourceBlock = Cfg.getBlock(10);
@@ -1030,11 +1041,15 @@ void testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure() {
   const CFGBlock *BadCopyBlock = Cfg.getBlock(30);
   assert(SourceBlock != nullptr && GoodCopyBlock != nullptr &&
          BadCopyBlock != nullptr);
+  assert(hasSinglePayload(SourceBlock->Statements, 70));
   assert(!GoodCopyBlock->BodyMaterialized);
   assert(GoodCopyBlock->BodyBlock == 10);
+  assert(GoodCopyBlock->Statements.empty());
   assert(GoodCopyBlock->Condition.Id == InvalidPayloadId);
   assert(!BadCopyBlock->BodyMaterialized);
   assert(BadCopyBlock->BodyBlock == 10);
+  assert(BadCopyBlock->Statements.empty());
+  assert(BadCopyBlock->Condition.Id == InvalidPayloadId);
 }
 
 void testStructuredCFGRemoveBlocksIsAtomicOnLaterFailure() {

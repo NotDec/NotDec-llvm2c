@@ -408,6 +408,16 @@ bool StructuredCFG::redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
 }
 
 bool StructuredCFG::removeBlock(BlockId Id) {
+  StructuredCFG Candidate = *this;
+  if (!Candidate.removeBlockInPlace(Id)) {
+    return false;
+  }
+
+  Blocks = std::move(Candidate.Blocks);
+  return true;
+}
+
+bool StructuredCFG::removeBlockInPlace(BlockId Id) {
   auto It = std::find_if(Blocks.begin(), Blocks.end(),
                          [Id](const CFGBlock &Block) {
                            return Block.Id == Id;

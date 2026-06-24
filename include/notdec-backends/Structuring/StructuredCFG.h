@@ -171,6 +171,7 @@ public:
 
 private:
   BlockId nextBlockId() const;
+  bool removeBlockInPlace(BlockId Id);
 
   std::vector<CFGBlock> Blocks;
   PayloadMaterializeHook MaterializeHook;
