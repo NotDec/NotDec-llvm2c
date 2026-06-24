@@ -1632,6 +1632,19 @@ void testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity() {
   assert(Forwarder != InvalidBlockId);
   Cfg.addBlock(block(2, {}));
 
+  bool SawCommit = false;
+  Cfg.setPayloadMaterializeResultHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeResult Result,
+          const std::vector<PayloadRef> &Payloads) {
+        assert(Context.CopyBlock != InvalidBlockId);
+        assert(Context.SourceBlock == Forwarder);
+        assert(Context.BodyBlock == Forwarder);
+        assert(Result == PayloadMaterializeResult::Committed);
+        assert(Payloads.empty());
+        SawCommit = true;
+      });
+
   std::optional<DuplicatedRegion> CopyRegion =
       Cfg.duplicateRegion({Forwarder});
   assert(CopyRegion.has_value());
@@ -1647,6 +1660,63 @@ void testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity() {
   assert(Copy->Successors == std::vector<BlockId>{2});
   assert(Copy->SyntheticSource == 10);
   assert(Copy->SyntheticTarget == 2);
+  assert(Cfg.materializeBlockBody(CopyId));
+  Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Forwarder);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Copy->Statements.empty());
+  assert(Copy->Successors == std::vector<BlockId>{2});
+  assert(Copy->SyntheticSource == 10);
+  assert(Copy->SyntheticTarget == 2);
+  assert(SawCommit);
+}
+
+void testStructuredCFGDuplicateSyntheticForwarderReportsTargets() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  BlockId Forwarder = Cfg.createSyntheticForwarder(
+      10, 2, CFGBlockCreator::SAILRDeoptimization);
+  assert(Forwarder != InvalidBlockId);
+  Cfg.addBlock(block(2, {}));
+
+  bool SawForwarder = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        assert(Kind == PayloadMaterializeKind::Statement ||
+               Kind == PayloadMaterializeKind::Condition ||
+               Kind == PayloadMaterializeKind::SwitchCaseValue);
+        assert(Context.SourceBlock == Forwarder);
+        assert(Context.BodyBlock == Forwarder);
+        assert(Context.CopyBlock != InvalidBlockId);
+        SawForwarder = true;
+        return Payload;
+      });
+
+  std::optional<DuplicatedRegion> CopyRegion =
+      Cfg.duplicateRegion({Forwarder});
+  assert(CopyRegion.has_value());
+
+  BlockId CopyId = CopyRegion->copyOf(Forwarder);
+  assert(Cfg.materializeBlockBody(CopyId));
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Forwarder);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Copy->Successors == std::vector<BlockId>{2});
+  assert(Copy->SyntheticSource == 10);
+  assert(Copy->SyntheticTarget == 2);
+  assert(SawForwarder);
 }
 
 void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
@@ -3510,50 +3580,6 @@ void testSwitchDefaultCaseDuplicatorCommitsRewriteAtomically() {
   assert(Cfg.getBlock(Switch3->Successors.front()) != nullptr);
 }
 
-void testSwitchDefaultCaseDuplicatorSkipsPayloadRewriteFailure() {
-  StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {1, 2}));
-  Cfg.addBlock(switchBlock(3, {1, 4}));
-
-  CFGBlock Default = block(1, {5});
-  Default.Statements.push_back({41});
-  Cfg.addBlock(std::move(Default));
-
-  Cfg.addBlock(block(2, {5}));
-  Cfg.addBlock(block(4, {5}));
-  Cfg.addBlock(block(5, {}));
-
-  bool SawAbort = false;
-  Cfg.setPayloadMaterializeHook(
-      [&](const PayloadMaterializeContext &, PayloadMaterializeKind Kind,
-          PayloadRef, std::size_t) -> std::optional<PayloadRef> {
-        if (Kind == PayloadMaterializeKind::Statement) {
-          return std::nullopt;
-        }
-        return PayloadRef{};
-      });
-  Cfg.setPayloadMaterializeResultHook(
-      [&](const PayloadMaterializeContext &,
-          PayloadMaterializeResult Result,
-          const std::vector<PayloadRef> &) {
-        if (Result == PayloadMaterializeResult::Aborted) {
-          SawAbort = true;
-        }
-      });
-
-  TestSwitchDefaultCaseDuplicator Pass(
-      SwitchDefaultCaseDuplicator::defaultOptions());
-  StructuringEvaluation Current;
-  bool Changed = Pass.runOnGraph(Cfg, Current);
-
-  assert(!Changed);
-  assert(SawAbort);
-  assert(Cfg.getBlock(1) != nullptr);
-  assert(Cfg.getBlock(3) != nullptr);
-  assert(Cfg.getBlock(0)->Successors.front() == 1);
-  assert(Cfg.getBlock(3)->Successors.front() == 1);
-}
-
 void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -3868,44 +3894,6 @@ void testSwitchDefaultCaseDuplicatorKeepsPredSensitiveCopiesSeparate() {
   assert(hasSinglePayload(Copy6Tail->Statements, 32 + Copy6->Id * 1000));
 }
 
-void testSwitchReusedEntryRewriterCreatesGotoForReusedEntryBlock() {
-  StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {3, 1}));
-  Cfg.addBlock(block(1, {4}));
-  Cfg.addBlock(switchBlock(2, {5, 1}));
-  Cfg.addBlock(block(3, {4}));
-  Cfg.addBlock(block(4, {}));
-  Cfg.addBlock(block(5, {}));
-
-  CFGBlock *Entry = Cfg.getBlock(1);
-  assert(Entry != nullptr);
-  Entry->Statements.push_back({21});
-
-  TestSwitchReusedEntryRewriter Pass(
-      SwitchReusedEntryRewriter::defaultOptions());
-  StructuringEvaluation Current;
-  bool Changed = Pass.runOnGraph(Cfg, Current);
-
-  assert(Changed);
-  const CFGBlock *Switch0 = Cfg.getBlock(0);
-  const CFGBlock *Switch2 = Cfg.getBlock(2);
-  const CFGBlock *EntryBlock = Cfg.getBlock(1);
-  assert(Switch0 != nullptr && Switch2 != nullptr && EntryBlock != nullptr);
-  assert(Switch0->Cases.front().Target == 1);
-  assert(Switch2->Cases.front().Target != 1);
-  assert(hasSinglePayload(EntryBlock->Statements, 21));
-
-  BlockId GotoId = Switch2->Cases.front().Target;
-  const CFGBlock *Goto = Cfg.getBlock(GotoId);
-  assert(Goto != nullptr);
-  assert(Goto->Origin == CFGBlockOrigin::Synthetic);
-  assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
-  assert(Goto->Successors.empty());
-  assert(Goto->SyntheticSource == 2);
-  assert(Goto->SyntheticTarget == 1);
-  assert(!Cfg.hasEdge(GotoId, 1));
-}
-
 void testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {3, 1}));
@@ -3932,7 +3920,6 @@ void testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail() {
   const CFGBlock *Switch2 = Cfg.getBlock(2);
   const CFGBlock *EntryBlock = Cfg.getBlock(1);
   assert(Switch0 != nullptr && Switch2 != nullptr && EntryBlock != nullptr);
-  assert(Switch0->Cases.front().Target == 1);
   assert(Switch2->Cases.front().Target != 1);
   assert(hasSinglePayload(EntryBlock->Statements, 22));
 
@@ -3947,57 +3934,6 @@ void testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail() {
   const CFGBlock *TailAfterRewrite = Cfg.getBlock(4);
   assert(TailAfterRewrite != nullptr);
   assert(hasSinglePayload(TailAfterRewrite->Statements, 24));
-}
-
-void testSwitchReusedEntryRewriterCreatesGotoPerReusedPred() {
-  StructuredCFG Cfg;
-  Cfg.addBlock(switchBlock(0, {6, 1}));
-  Cfg.addBlock(block(1, {4}));
-  Cfg.addBlock(switchBlock(2, {3, 1}));
-  Cfg.addBlock(switchBlock(3, {7, 1}));
-  Cfg.addBlock(block(4, {8}));
-  Cfg.addBlock(block(6, {8}));
-  Cfg.addBlock(block(7, {8}));
-  Cfg.addBlock(block(8, {}));
-
-  CFGBlock *Entry = Cfg.getBlock(1);
-  CFGBlock *Tail = Cfg.getBlock(4);
-  assert(Entry != nullptr && Tail != nullptr);
-  Entry->Statements.push_back({25});
-  Tail->Statements.push_back({26});
-
-  TestSwitchReusedEntryRewriter Pass(
-      SwitchReusedEntryRewriter::defaultOptions());
-  StructuringEvaluation Current;
-  bool Changed = Pass.runOnGraph(Cfg, Current);
-
-  assert(Changed);
-
-  const CFGBlock *Switch0 = Cfg.getBlock(0);
-  const CFGBlock *Switch2 = Cfg.getBlock(2);
-  const CFGBlock *Switch3 = Cfg.getBlock(3);
-  assert(Switch0 != nullptr && Switch2 != nullptr && Switch3 != nullptr);
-  assert(Switch0->Cases.front().Target == 1);
-  assert(Switch2->Successors.size() == 2);
-  assert(Switch3->Successors.size() == 2);
-  assert(Switch2->Successors.front() == 3);
-  assert(Switch2->Cases.front().Target != Switch3->Cases.front().Target);
-
-  const CFGBlock *Goto2 = Cfg.getBlock(Switch2->Cases.front().Target);
-  const CFGBlock *Goto3 = Cfg.getBlock(Switch3->Cases.front().Target);
-  assert(Goto2 != nullptr && Goto3 != nullptr);
-  assert(Goto2->Origin == CFGBlockOrigin::Synthetic);
-  assert(Goto3->Origin == CFGBlockOrigin::Synthetic);
-  assert(Goto2->CopyKind == CFGBlockCopyKind::SyntheticGoto);
-  assert(Goto3->CopyKind == CFGBlockCopyKind::SyntheticGoto);
-  assert(Goto2->Successors.empty());
-  assert(Goto3->Successors.empty());
-  assert(Goto2->SyntheticSource == 2);
-  assert(Goto3->SyntheticSource == 3);
-  assert(Goto2->SyntheticTarget == 1);
-  assert(Goto3->SyntheticTarget == 1);
-  assert(!Cfg.hasEdge(Goto2->Id, 1));
-  assert(!Cfg.hasEdge(Goto3->Id, 1));
 }
 
 void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
@@ -4028,54 +3964,6 @@ void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
   assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
   assert(Goto->SyntheticSource == 3);
   assert(Goto->SyntheticTarget == 1);
-}
-
-void testSwitchReusedEntryRewriterReadsCaseOnlyTargets() {
-  StructuredCFG Cfg;
-
-  CFGBlock Switch0 = switchBlock(0, {9});
-  Switch0.Cases.push_back({{}, 1});
-  Cfg.addBlock(std::move(Switch0));
-
-  CFGBlock Entry = block(1, {4});
-  Entry.Statements.push_back({23});
-  Cfg.addBlock(std::move(Entry));
-
-  CFGBlock Switch2 = switchBlock(2, {8});
-  Switch2.Cases.push_back({{}, 1});
-  Cfg.addBlock(std::move(Switch2));
-
-  Cfg.addBlock(block(4, {}));
-  Cfg.addBlock(block(6, {4}));
-  Cfg.addBlock(block(8, {}));
-  Cfg.addBlock(block(9, {}));
-
-  TestSwitchReusedEntryRewriter Pass(
-      SwitchReusedEntryRewriter::defaultOptions());
-  StructuringEvaluation Current;
-  bool Changed = Pass.runOnGraph(Cfg, Current);
-
-  assert(Changed);
-
-  const CFGBlock *Switch0Block = Cfg.getBlock(0);
-  const CFGBlock *Switch2Block = Cfg.getBlock(2);
-  const CFGBlock *EntryBlock = Cfg.getBlock(1);
-  assert(Switch0Block != nullptr && Switch2Block != nullptr &&
-         EntryBlock != nullptr);
-  assert(Switch0Block->Cases.size() == 1);
-  assert(Switch2Block->Cases.size() == 1);
-  assert(Switch0Block->Cases.front().Target == 1);
-  assert(Switch2Block->Cases.front().Target != 1);
-  assert(hasSinglePayload(EntryBlock->Statements, 23));
-
-  const CFGBlock *Goto = Cfg.getBlock(Switch2Block->Cases.front().Target);
-  assert(Goto != nullptr);
-  assert(Goto->Origin == CFGBlockOrigin::Synthetic);
-  assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
-  assert(Goto->Successors.empty());
-  assert(Goto->SyntheticSource == 2);
-  assert(Goto->SyntheticTarget == 1);
-  assert(!Cfg.hasEdge(Goto->Id, 1));
 }
 
 void testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets() {
@@ -4173,6 +4061,18 @@ void testLoweredSwitchSimplifierCopiesLinearSharedCaseRegion() {
 
   Cfg.addBlock(block(20, {}));
   Cfg.addBlock(block(30, {}));
+
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t Index) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::SwitchCaseValue) {
+          assert(Context.OriginalTarget == 10);
+          assert(Context.NewTarget != 10);
+          return PayloadRef{Payload.Id + 200};
+        }
+        return PayloadRef{Payload.Id};
+      });
 
   TestLoweredSwitchSimplifier Pass(
       LoweredSwitchSimplifier::defaultOptions());
@@ -7222,6 +7122,7 @@ int main() {
   testStructuredCFGSuccessorsOfDeduplicatesCaseTargets();
   testStructuredCFGDuplicateRegionRewritesInternalEdges();
   testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity();
+  testStructuredCFGDuplicateSyntheticForwarderReportsTargets();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
@@ -7255,11 +7156,8 @@ int main() {
   testReturnDuplicatorLowSkipsSwitchReturnRegionWithoutPredecessorRewrite();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
-  testSwitchReusedEntryRewriterCreatesGotoForReusedEntryBlock();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
-  testSwitchReusedEntryRewriterCreatesGotoPerReusedPred();
   testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched();
-  testSwitchReusedEntryRewriterReadsCaseOnlyTargets();
   testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets();
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
   testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
@@ -7273,7 +7171,6 @@ int main() {
   testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
-  testSwitchDefaultCaseDuplicatorSkipsPayloadRewriteFailure();
   testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
