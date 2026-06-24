@@ -1543,44 +1543,7 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
     }
   }
 
-  auto referencesDemotedValue = [&](const ExtValuePtr &Val) {
-    if (auto V = std::get_if<llvm::Value *>(&Val)) {
-      return *V != nullptr && DemotedValues.count(*V) != 0;
-    }
-    if (auto C = std::get_if<UConstant>(&Val)) {
-      return (C->Val != nullptr && DemotedValues.count(C->Val) != 0) ||
-             (C->User != nullptr && DemotedValues.count(C->User) != 0);
-    }
-    if (auto S = std::get_if<StackObject>(&Val)) {
-      return S->Allocator != nullptr && DemotedValues.count(S->Allocator) != 0;
-    }
-    if (auto H = std::get_if<HeapObject>(&Val)) {
-      return H->Allocator != nullptr && DemotedValues.count(H->Allocator) != 0;
-    }
-    return false;
-  };
-
-  for (auto It = HT.ValueTypesUpper.begin(); It != HT.ValueTypesUpper.end();) {
-    if (referencesDemotedValue(It->first)) {
-      It = HT.ValueTypesUpper.erase(It);
-    } else {
-      ++It;
-    }
-  }
-  for (auto It = HT.ValueTypesLower.begin(); It != HT.ValueTypesLower.end();) {
-    if (referencesDemotedValue(It->first)) {
-      It = HT.ValueTypesLower.erase(It);
-    } else {
-      ++It;
-    }
-  }
-  for (auto It = HT.ContraVariantValues.begin(); It != HT.ContraVariantValues.end();) {
-    if (referencesDemotedValue(*It)) {
-      It = HT.ContraVariantValues.erase(It);
-    } else {
-      ++It;
-    }
-  }
+  HT.eraseTypesForDemotedValues(DemotedValues);
 
   if (DebugDir) {
     // demote SSA using reg2mem
