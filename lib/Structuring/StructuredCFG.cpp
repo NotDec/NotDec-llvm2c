@@ -175,10 +175,13 @@ CFGBlock *StructuredCFG::getBlock(BlockId Id) {
 }
 
 void StructuredCFG::setPayloadMaterializeHook(
-    PayloadMaterializeHook Hook, bool SupportsPredecessorRewrite) {
+    PayloadMaterializeHook Hook, bool SupportsPredecessorRewrite,
+    bool SupportsGroupedPredecessorRewrite) {
   MaterializeHook = std::move(Hook);
   MaterializeHookSupportsPredecessorRewrite =
       SupportsPredecessorRewrite && static_cast<bool>(MaterializeHook);
+  MaterializeHookSupportsGroupedPredecessorRewrite =
+      SupportsGroupedPredecessorRewrite && static_cast<bool>(MaterializeHook);
 }
 
 void StructuredCFG::setPayloadMaterializeResultHook(
@@ -194,6 +197,11 @@ bool StructuredCFG::hasPredecessorRewritePayloadMaterializeHook() const {
   return MaterializeHookSupportsPredecessorRewrite;
 }
 
+bool StructuredCFG::hasGroupedPredecessorRewritePayloadMaterializeHook()
+    const {
+  return MaterializeHookSupportsGroupedPredecessorRewrite;
+}
+
 BlockId StructuredCFG::bodyBlock(BlockId Id) const {
   const CFGBlock *Block = getBlock(Id);
   if (Block == nullptr) {
@@ -207,12 +215,34 @@ const CFGBlock *StructuredCFG::getBodyBlock(BlockId Id) const {
 }
 
 bool StructuredCFG::materializeBlockBody(BlockId Id) {
-  return materializeBlockBody(Id, InvalidBlockId, InvalidBlockId);
+  return materializeBlockBodyImpl(Id, {}, {});
 }
 
 bool StructuredCFG::materializeBlockBody(BlockId Id,
                                          BlockId OriginalPredecessor,
                                          BlockId NewPredecessor) {
+  if (OriginalPredecessor != InvalidBlockId &&
+      NewPredecessor != InvalidBlockId) {
+    return materializeBlockBodyImpl(Id, {OriginalPredecessor},
+                                    {NewPredecessor});
+  }
+  return materializeBlockBodyImpl(Id, {}, {});
+}
+
+bool StructuredCFG::materializeBlockBody(
+    BlockId Id, std::vector<BlockId> OriginalPredecessors,
+    std::vector<BlockId> NewPredecessors) {
+  return materializeBlockBodyImpl(Id, std::move(OriginalPredecessors),
+                                  std::move(NewPredecessors));
+}
+
+bool StructuredCFG::materializeBlockBodyImpl(
+    BlockId Id, std::vector<BlockId> OriginalPredecessors,
+    std::vector<BlockId> NewPredecessors) {
+  if (OriginalPredecessors.size() != NewPredecessors.size()) {
+    return false;
+  }
+
   CFGBlock *Block = getBlock(Id);
   if (Block == nullptr) {
     return false;
@@ -253,8 +283,14 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
   Context.BodyBlock = BodyId;
   Context.CopyBlock = Id;
   Context.CopiedFromBlock = Block->CopiedFromBlock;
-  Context.OriginalPredecessor = OriginalPredecessor;
-  Context.NewPredecessor = NewPredecessor;
+  if (!OriginalPredecessors.empty()) {
+    Context.OriginalPredecessor = OriginalPredecessors.front();
+  }
+  if (!NewPredecessors.empty()) {
+    Context.NewPredecessor = NewPredecessors.front();
+  }
+  Context.OriginalPredecessors = std::move(OriginalPredecessors);
+  Context.NewPredecessors = std::move(NewPredecessors);
   Context.OriginalCases = Body->Cases;
   Context.NewCases = Block->Cases;
   Context.OriginalSuccessors = Body->Successors;

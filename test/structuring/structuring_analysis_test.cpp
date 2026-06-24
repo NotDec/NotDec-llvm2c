@@ -853,6 +853,48 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
   assert(CommittedPayloads[3].Id == 3071);
 }
 
+void testStructuredCFGMaterializeReportsGroupedPredecessors() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {10}));
+  Cfg.addBlock(block(2, {10}));
+
+  CFGBlock Source = block(10, {});
+  Source.Terminator = TerminatorKind::Return;
+  Source.Statements.push_back({7});
+  Cfg.addBlock(std::move(Source));
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {});
+  assert(CopyId != InvalidBlockId);
+
+  bool SawGroupedPreds = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::Statement) {
+          assert(Context.OriginalPredecessor == 1);
+          assert(Context.NewPredecessor == 101);
+          assert(Context.OriginalPredecessors == std::vector<BlockId>({1, 2}));
+          assert(Context.NewPredecessors ==
+                 std::vector<BlockId>({101, 102}));
+          SawGroupedPreds = true;
+          return PayloadRef{Payload.Id + Context.NewPredecessors.size()};
+        }
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  assert(Cfg.hasPredecessorRewritePayloadMaterializeHook());
+  assert(Cfg.hasGroupedPredecessorRewritePayloadMaterializeHook());
+  assert(Cfg.materializeBlockBody(CopyId, {1, 2}, {101, 102}));
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(SawGroupedPreds);
+  assert(hasSinglePayload(Copy->Statements, 9));
+}
+
 void testStructuredCFGMaterializeRewriteFailureIsAtomic() {
   StructuredCFG Cfg;
   CFGBlock Source = switchBlock(10, {11, 12});
@@ -2141,6 +2183,52 @@ void testReturnDuplicatorLowExpandsGotoPredToConnectedComponent() {
   assert(Copy->Terminator == TerminatorKind::Return);
   assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 14));
+}
+
+void testReturnDuplicatorLowReportsGroupedPredecessorRewrite() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(2, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({15});
+  Cfg.addBlock(std::move(Ret));
+
+  bool SawGroupedPreds = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::Statement) {
+          assert(Context.OriginalPredecessors ==
+                 std::vector<BlockId>({0, 2}));
+          assert(Context.NewPredecessors.size() == 2);
+          SawGroupedPreds = true;
+        }
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(SawGroupedPreds);
+  assert(Cfg.getBlock(1) == nullptr);
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block2 = Cfg.getBlock(2);
+  assert(Block0 != nullptr && Block2 != nullptr);
+  assert(Block0->Successors.size() == 2);
+  BlockId CopyId = Block0->Successors.front() == 2 ? Block0->Successors.back()
+                                                   : Block0->Successors.front();
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Terminator == TerminatorKind::Return);
 }
 
 void testReturnDuplicatorLowCommitsCopyAtomically() {
@@ -6120,6 +6208,7 @@ int main() {
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
   testStructuredCFGMaterializeRewritesCopiedPayloads();
+  testStructuredCFGMaterializeReportsGroupedPredecessors();
   testStructuredCFGMaterializeRewriteFailureIsAtomic();
   testGotoStructurerRendersVirtualBlockBodySource();
   testGotoStructurerRendersSyntheticForwarder();
@@ -6158,6 +6247,7 @@ int main() {
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
+  testReturnDuplicatorLowReportsGroupedPredecessorRewrite();
   testReturnDuplicatorLowCommitsCopyAtomically();
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();

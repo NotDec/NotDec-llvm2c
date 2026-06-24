@@ -78,6 +78,8 @@ struct PayloadMaterializeContext {
   BlockId CopiedFromBlock = InvalidBlockId;
   BlockId OriginalPredecessor = InvalidBlockId;
   BlockId NewPredecessor = InvalidBlockId;
+  std::vector<BlockId> OriginalPredecessors;
+  std::vector<BlockId> NewPredecessors;
   BlockId OriginalTarget = InvalidBlockId;
   BlockId NewTarget = InvalidBlockId;
   std::vector<SwitchCase> OriginalCases;
@@ -175,16 +177,21 @@ public:
   const CFGBlock *getBlock(BlockId Id) const;
   CFGBlock *getBlock(BlockId Id);
   void setPayloadMaterializeHook(PayloadMaterializeHook Hook,
-                                 bool SupportsPredecessorRewrite = false);
+                                 bool SupportsPredecessorRewrite = false,
+                                 bool SupportsGroupedPredecessorRewrite = false);
   void setPayloadMaterializeResultHook(PayloadMaterializeResultHook Hook);
   bool hasPayloadMaterializeHook() const;
   bool hasPredecessorRewritePayloadMaterializeHook() const;
+  bool hasGroupedPredecessorRewritePayloadMaterializeHook() const;
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
   bool materializeBlockBody(BlockId Id);
   bool materializeBlockBody(BlockId Id,
                             BlockId OriginalPredecessor,
                             BlockId NewPredecessor);
+  bool materializeBlockBody(BlockId Id,
+                            std::vector<BlockId> OriginalPredecessors,
+                            std::vector<BlockId> NewPredecessors);
   bool hasEdge(BlockId From, BlockId To) const;
   std::vector<BlockId> successorsOf(BlockId From) const;
   std::vector<BlockId> predecessorsOf(BlockId Target) const;
@@ -195,6 +202,9 @@ public:
   bool removeBlocks(const std::vector<BlockId> &Ids);
 
 private:
+  bool materializeBlockBodyImpl(BlockId Id,
+                                std::vector<BlockId> OriginalPredecessors,
+                                std::vector<BlockId> NewPredecessors);
   BlockId nextBlockId() const;
   bool removeBlockInPlace(BlockId Id);
 
@@ -202,6 +212,7 @@ private:
   PayloadMaterializeHook MaterializeHook;
   PayloadMaterializeResultHook MaterializeResultHook;
   bool MaterializeHookSupportsPredecessorRewrite = false;
+  bool MaterializeHookSupportsGroupedPredecessorRewrite = false;
 };
 
 enum class StructuredNodeKind {

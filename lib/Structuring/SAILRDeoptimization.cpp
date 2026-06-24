@@ -384,7 +384,8 @@ expandToConnectedPredecessorComponents(const StructuredCFG &Graph,
   // A copied component has no single predecessor for the copied head. Keep
   // predecessor-sensitive payload hooks on one-pred copies until the shared
   // payload layer can express grouped incoming-value rewrites.
-  if (Graph.hasPredecessorRewritePayloadMaterializeHook()) {
+  if (Graph.hasPredecessorRewritePayloadMaterializeHook() &&
+      !Graph.hasGroupedPredecessorRewritePayloadMaterializeHook()) {
     return std::vector<BlockId>(Expanded.begin(), Expanded.end());
   }
 
@@ -563,15 +564,27 @@ bool reachesBlockFromNonDefaultSwitchSuccessor(const StructuredCFG &Graph,
 bool materializeDuplicatedRegion(StructuredCFG &Graph,
                                  const DuplicatedRegion &CopyRegion,
                                  BlockId RegionHead,
-                                 BlockId ExternalPred) {
+                                 const std::vector<BlockId> &ExternalPreds) {
   for (const auto &[Original, Copy] : CopyRegion.Blocks) {
     BlockId OriginalPred = InvalidBlockId;
     BlockId NewPred = InvalidBlockId;
+    std::vector<BlockId> OriginalPreds;
+    std::vector<BlockId> NewPreds;
 
-    if (Original == RegionHead && ExternalPred != InvalidBlockId &&
-        Graph.hasEdge(ExternalPred, Original)) {
-      OriginalPred = ExternalPred;
-      NewPred = ExternalPred;
+    if (Original == RegionHead && !ExternalPreds.empty() &&
+        (ExternalPreds.size() == 1 ||
+         Graph.hasGroupedPredecessorRewritePayloadMaterializeHook())) {
+      bool AllExternalPredsReachHead = true;
+      for (BlockId ExternalPred : ExternalPreds) {
+        if (!Graph.hasEdge(ExternalPred, Original)) {
+          AllExternalPredsReachHead = false;
+          break;
+        }
+      }
+      if (AllExternalPredsReachHead) {
+        OriginalPreds = ExternalPreds;
+        NewPreds = ExternalPreds;
+      }
     } else {
       std::vector<BlockId> InternalPreds;
       for (BlockId Pred : predecessorsOf(Graph, Original)) {
@@ -583,10 +596,19 @@ bool materializeDuplicatedRegion(StructuredCFG &Graph,
       if (InternalPreds.size() == 1) {
         OriginalPred = InternalPreds.front();
         NewPred = CopyRegion.copyOf(OriginalPred);
+        OriginalPreds.push_back(OriginalPred);
+        NewPreds.push_back(NewPred);
       }
     }
 
-    if (!Graph.materializeBlockBody(Copy, OriginalPred, NewPred)) {
+    if (OriginalPreds.empty() && OriginalPred != InvalidBlockId &&
+        NewPred != InvalidBlockId) {
+      OriginalPreds.push_back(OriginalPred);
+      NewPreds.push_back(NewPred);
+    }
+
+    if (!Graph.materializeBlockBody(Copy, std::move(OriginalPreds),
+                                    std::move(NewPreds))) {
       return false;
     }
   }
@@ -609,10 +631,8 @@ bool copyRegionForPredecessors(StructuredCFG &Graph, const ReturnRegion &Region,
     return false;
   }
 
-  BlockId OriginalPred =
-      Preds.size() == 1 ? Preds.front() : InvalidBlockId;
   if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
-                                   OriginalPred)) {
+                                   Preds)) {
     for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
       Graph.removeBlock(OldCopy);
     }
@@ -766,10 +786,8 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
     return false;
   }
 
-  BlockId OriginalPred =
-      Preds.size() == 1 ? Preds.front() : InvalidBlockId;
   if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
-                                   OriginalPred)) {
+                                   Preds)) {
     for (const auto &[_, OldCopy] : CopyRegion->Blocks) {
       Graph.removeBlock(OldCopy);
     }
