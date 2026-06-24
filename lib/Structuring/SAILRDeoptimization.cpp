@@ -799,43 +799,22 @@ bool SwitchReusedEntryRewriter::runOnGraph(
       continue;
     }
 
-    if (Graph.successorsOf(EntryId).empty()) {
-      continue;
-    }
-
-    LinearRegion Region = findLinearRegionFromHead(Graph, EntryId);
-    if (Region.Head == InvalidBlockId) {
-      continue;
-    }
-
-    std::vector<BlockId> PredsToUpdate;
-    for (BlockId Pred : SwitchPreds) {
-      if (Pred == SwitchPreds.front()) {
-        continue;
-      }
-      PredsToUpdate.push_back(Pred);
-    }
-
-    std::vector<std::vector<BlockId>> PredComponents =
-        connectedPredecessorComponents(Graph, PredsToUpdate);
-    for (const std::vector<BlockId> &Component : PredComponents) {
-      bool AllStillReachEntry = true;
-      for (BlockId Pred : Component) {
-        const CFGBlock *PredBlock = Graph.getBlock(Pred);
-        if (PredBlock == nullptr || !switchCaseReachesBlock(*PredBlock, EntryId)) {
-          AllStillReachEntry = false;
-          break;
-        }
-      }
-      if (!AllStillReachEntry) {
+    for (std::size_t I = 1; I < SwitchPreds.size(); ++I) {
+      BlockId Pred = SwitchPreds[I];
+      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr || !switchCaseReachesBlock(*PredBlock, EntryId)) {
         continue;
       }
 
-      std::vector<BlockId> Copies;
-      if (!copyLinearRegionForPredecessors(Graph, Region, Component, Copies)) {
+      StructuredCFG Candidate = Graph;
+      BlockId Goto = Candidate.createSyntheticGoto(
+          Pred, EntryId, CFGBlockCreator::SAILRDeoptimization);
+      if (Goto == InvalidBlockId ||
+          !Candidate.redirectPredecessors(EntryId, Goto, {Pred})) {
         continue;
       }
 
+      Graph = std::move(Candidate);
       Changed = true;
     }
   }

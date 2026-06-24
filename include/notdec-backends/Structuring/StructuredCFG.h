@@ -46,6 +46,7 @@ enum class CFGBlockCopyKind {
   None,
   RegionCopy,
   SyntheticForwarder,
+  SyntheticGoto,
 };
 
 enum class CFGBlockCreator {
@@ -119,7 +120,7 @@ struct CFGBlock {
   // source across copy-of-copy chains; CopiedFromBlock records the concrete
   // block that was duplicated this time.
   BlockId CopiedFromBlock = InvalidBlockId;
-  // Synthetic forwarders and their copies stand for a virtualized original edge.
+  // Synthetic control-flow blocks keep the original source-target edge identity.
   BlockId SyntheticSource = InvalidBlockId;
   BlockId SyntheticTarget = InvalidBlockId;
 
@@ -154,6 +155,9 @@ public:
       std::vector<BlockId> Successors,
       CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
   BlockId createSyntheticForwarder(
+      BlockId Source, BlockId Target,
+      CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
+  BlockId createSyntheticGoto(
       BlockId Source, BlockId Target,
       CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
   BlockId duplicateBlock(

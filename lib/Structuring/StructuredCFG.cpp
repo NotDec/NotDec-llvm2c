@@ -91,6 +91,20 @@ BlockId StructuredCFG::createSyntheticForwarder(BlockId Source, BlockId Target,
   return Id;
 }
 
+BlockId StructuredCFG::createSyntheticGoto(BlockId Source, BlockId Target,
+                                           CFGBlockCreator Creator) {
+  BlockId Id = createSyntheticBlock({}, Creator);
+  CFGBlock *Block = getBlock(Id);
+  if (Block == nullptr) {
+    return InvalidBlockId;
+  }
+
+  Block->CopyKind = CFGBlockCopyKind::SyntheticGoto;
+  Block->SyntheticSource = Source;
+  Block->SyntheticTarget = Target;
+  return Id;
+}
+
 BlockId StructuredCFG::duplicateBlock(BlockId Source,
                                       std::vector<BlockId> Successors,
                                       CFGBlockCopyKind Kind,

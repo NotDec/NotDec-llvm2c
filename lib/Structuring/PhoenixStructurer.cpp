@@ -145,6 +145,17 @@ void appendBlockBody(const StructuredCFG &Cfg, BlockId Id,
   Body.Block = Block->Id;
   Body.Statements = BodyBlock->Statements;
   Sequence.Children.push_back(Tree.addNode(std::move(Body)));
+
+  const CFGBlock *SyntheticBlock = Cfg.getBlock(Id);
+  if (SyntheticBlock != nullptr &&
+      SyntheticBlock->Origin == CFGBlockOrigin::Synthetic &&
+      SyntheticBlock->CopyKind == CFGBlockCopyKind::SyntheticGoto &&
+      SyntheticBlock->SyntheticTarget != InvalidBlockId) {
+    StructuredNode Goto;
+    Goto.Kind = StructuredNodeKind::Goto;
+    Goto.Target = SyntheticBlock->SyntheticTarget;
+    Sequence.Children.push_back(Tree.addNode(std::move(Goto)));
+  }
 }
 
 NodeId buildLinearNode(const StructuredCFG &Cfg,

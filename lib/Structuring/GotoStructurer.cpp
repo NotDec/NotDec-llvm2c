@@ -29,6 +29,22 @@ static StructuredNode makeBlockBody(const StructuredCFG &Cfg,
   return Body;
 }
 
+static bool isSyntheticGotoBlock(const CFGBlock &Block) {
+  return Block.Origin == CFGBlockOrigin::Synthetic &&
+         Block.CopyKind == CFGBlockCopyKind::SyntheticGoto &&
+         Block.SyntheticTarget != InvalidBlockId;
+}
+
+static void appendBlockBodyAndSyntheticGoto(const StructuredCFG &Cfg,
+                                            const CFGBlock &Block,
+                                            StructuredNode &Sequence,
+                                            StructuredTree &Tree) {
+  Sequence.Children.push_back(Tree.addNode(makeBlockBody(Cfg, Block)));
+  if (isSyntheticGotoBlock(Block)) {
+    Sequence.Children.push_back(Tree.addNode(makeGoto(Block.SyntheticTarget)));
+  }
+}
+
 StructuredTree GotoStructurer::structure(const StructuredCFG &Cfg) {
   OverlayManager Manager = RegionIdentifier::identifyOverlay(Cfg);
   return RecursiveStructurer().structure(Cfg, Manager, *this);
@@ -52,7 +68,7 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
     Label.Block = Block.Id;
     Root.Children.push_back(Tree.addNode(std::move(Label)));
 
-    Root.Children.push_back(Tree.addNode(makeBlockBody(Cfg, Block)));
+    appendBlockBodyAndSyntheticGoto(Cfg, Block, Root, Tree);
 
     switch (Block.Terminator) {
     case TerminatorKind::Branch: {
@@ -151,7 +167,7 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
     Label.Block = Block.Id;
     Root.Children.push_back(Tree.addNode(std::move(Label)));
 
-    Root.Children.push_back(Tree.addNode(makeBlockBody(Cfg, Block)));
+    appendBlockBodyAndSyntheticGoto(Cfg, Block, Root, Tree);
   }
 
   return Tree.addNode(std::move(Root));
