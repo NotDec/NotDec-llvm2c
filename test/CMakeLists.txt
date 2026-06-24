@@ -12,5 +12,10 @@ add_test(NAME phi-demote
   COMMAND phi-demote-test
 )
 
+add_test(NAME phi-demote-htypes
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/phi_demote_htypes_smoke.py
+          --notdec $<TARGET_FILE:notdec>
+)
+
 add_subdirectory(sysy)
 add_subdirectory(structuring)

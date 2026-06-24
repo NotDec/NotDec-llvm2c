@@ -133,34 +133,16 @@ merge:
         "absent": ["malloc", "goto then", "goto else", "phi"],
     },
     {
-        "name": "condensing_return_proxy",
+        "name": "condensing_real_lighttpd",
         "angr_test": "test_who_condensing_opt_reversion",
-        "semantic": "CrossJumpReverter / return condensing proxy",
-        "ir": r"""
-declare void @callee()
-declare i64 @retv()
-declare i64 @errno_location()
-
-define void @main() {
-entry:
-  %rv = call i64 @retv()
-  %cond = icmp eq i64 %rv, 0
-  br i1 %cond, label %ok, label %fail
-
-ok:
-  br label %join
-
-fail:
-  %v = call i64 @errno_location()
-  br label %join
-
-join:
-  call void @callee()
-  ret void
-}
-""",
-        "contains": ["callee();", "return;"],
-        "absent": ["goto ok", "goto fail"],
+        "semantic": "CrossJumpReverter / real condensing sample",
+        "input": Path(
+            "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
+            "lighttpd/1-main_init_once.ll"
+        ),
+        "contains": ["goto structured_block_1;", "goto structured_block_4;",
+                      "goto structured_block_6;"],
+        "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
     },
 ]
 

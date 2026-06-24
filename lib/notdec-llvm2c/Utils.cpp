@@ -389,6 +389,9 @@ static bool eliminateEmptyBr(llvm::Function &F) {
       BB.eraseFromParent();
       Changed = true;
     } else {
+      if (Succ == &BB) {
+        continue;
+      }
       BB.replaceAllUsesWith(Succ);
       // for (BasicBlock *Pred : make_early_inc_range(predecessors(&BB))) {
       //   Pred->getTerminator()->replaceSuccessorWith(&BB, Succ);

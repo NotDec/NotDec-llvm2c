@@ -20,7 +20,7 @@ add_test(NAME shared-structurer-registry
 
 add_test(NAME sailr-bench2-migration
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/run_sailr_bench2_migration.py
-          --notdec-llvm2c $<TARGET_FILE:notdec-llvm2c>
+          --notdec-llvm2c $<TARGET_FILE:notdec-llvm2c-exe>
 )
 
 add_executable(structuring-analysis-test

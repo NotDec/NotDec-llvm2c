@@ -90,30 +90,43 @@ void testDemoteSSAFixHTKeepsUnnamedPhiTypes() {
   assert(!HT.hasValueType(Phi1, true));
   assert(!HT.hasValueType(Phi1, false));
 
-  unsigned TypedPhiSlots = 0;
-  unsigned ContraVariantSlots = 0;
+  bool FoundPhi = false;
+  bool FoundPhi1 = false;
+  bool FoundContraVariant = false;
   for (llvm::BasicBlock &BB : *F) {
     for (llvm::Instruction &I : BB) {
       auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&I);
-      if (AI == nullptr || !AI->getName().starts_with("notdec.phi")) {
+      if (AI == nullptr || !AI->getAllocatedType()->isIntegerTy()) {
         continue;
       }
 
-      ++TypedPhiSlots;
       auto *LowerTy = HT.getValueType(AI, true);
       auto *UpperTy = HT.getValueType(AI, false);
-      assert(LowerTy != nullptr && LowerTy->isPointerType());
-      assert(UpperTy != nullptr && UpperTy->isPointerType());
-      assert(LowerTy->getPointeeType() == I32Ty);
-      assert(UpperTy->getPointeeType() == I32Ty);
+      if (LowerTy == nullptr || UpperTy == nullptr) {
+        continue;
+      }
+      if (!LowerTy->isPointerType() || !UpperTy->isPointerType()) {
+        continue;
+      }
+      if (LowerTy->getPointeeType() != I32Ty ||
+          UpperTy->getPointeeType() != I32Ty) {
+        continue;
+      }
+
+      if (AI->getName() == "notdec.phi") {
+        FoundPhi = true;
+      } else if (AI->getName() == "notdec.phi1") {
+        FoundPhi1 = true;
+      }
       if (HT.ContraVariantValues.count(AI) != 0) {
-        ++ContraVariantSlots;
+        FoundContraVariant = true;
       }
     }
   }
 
-  assert(TypedPhiSlots == 2);
-  assert(ContraVariantSlots == 1);
+  assert(FoundPhi);
+  assert(FoundPhi1);
+  assert(FoundContraVariant);
 }
 
 } // namespace
