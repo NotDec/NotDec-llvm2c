@@ -4030,6 +4030,55 @@ void testSwitchDefaultCaseDuplicatorKeepsPredSensitiveCopiesSeparate() {
   assert(hasSinglePayload(Copy6Tail->Statements, 32 + Copy6->Id * 1000));
 }
 
+void testSwitchDefaultCaseDuplicatorRollsBackGroupedPredecessorFailure() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock Default = block(1, {4});
+  Default.Statements.push_back({31});
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock Tail = block(4, {});
+  Tail.Statements.push_back({32});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(6, {3, 1}));
+
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context, PayloadMaterializeKind Kind,
+          PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::Statement) {
+          return Payload;
+        }
+        if (Context.OriginalPredecessors == std::vector<BlockId>({3, 6})) {
+          return std::nullopt;
+        }
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  const CFGBlock *Pred3 = Cfg.getBlock(3);
+  const CFGBlock *Pred6 = Cfg.getBlock(6);
+  assert(Switch != nullptr && DefaultBlock != nullptr && Pred3 != nullptr &&
+         Pred6 != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(DefaultBlock->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(DefaultBlock->Statements, 31));
+  assert(Pred3->Successors == std::vector<BlockId>{1});
+  assert((Pred6->Successors == std::vector<BlockId>{3, 1}));
+}
+
 void testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {3, 1}));
@@ -7315,6 +7364,7 @@ int main() {
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
   testSwitchDefaultCaseDuplicatorKeepsPredSensitiveCopiesSeparate();
+  testSwitchDefaultCaseDuplicatorRollsBackGroupedPredecessorFailure();
   testSwitchDefaultCaseDuplicatorCommitsRewriteAtomically();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
