@@ -4589,12 +4589,26 @@ void testSAILRDeoptimizationPipelineMatchesAngrOrder() {
 }
 
 void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
+  StructuringOptimizationOptions SwitchDefaultOptions =
+      SwitchDefaultCaseDuplicator::defaultOptions();
+  assert(!SwitchDefaultOptions.RequireGotos);
+  assert(!SwitchDefaultOptions.PreventNewGotos);
+  assert(!SwitchDefaultOptions.MustImproveRelativeQuality);
+  assert(SwitchDefaultOptions.MaxOptIters == 2);
+
   StructuringOptimizationOptions DuplicationOptions =
       DuplicationReverter::defaultOptions();
   assert(DuplicationOptions.RequireGotos);
   assert(DuplicationOptions.PreventNewGotos);
   assert(DuplicationOptions.MustImproveRelativeQuality);
   assert(DuplicationOptions.MaxOptIters == 5);
+
+  StructuringOptimizationOptions LoweredSwitchOptions =
+      LoweredSwitchSimplifier::defaultOptions();
+  assert(!LoweredSwitchOptions.RequireGotos);
+  assert(!LoweredSwitchOptions.PreventNewGotos);
+  assert(!LoweredSwitchOptions.MustImproveRelativeQuality);
+  assert(LoweredSwitchOptions.MaxOptIters == 2);
 
   StructuringOptimizationOptions ReturnOptions =
       ReturnDuplicatorLow::defaultOptions();
@@ -4608,6 +4622,13 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
   assert(CrossJumpOptions.PreventNewGotos);
   assert(CrossJumpOptions.StrictlyLessGotos);
   assert(CrossJumpOptions.MaxOptIters == 3);
+
+  StructuringOptimizationOptions ReusedEntryOptions =
+      SwitchReusedEntryRewriter::defaultOptions();
+  assert(!ReusedEntryOptions.RequireGotos);
+  assert(!ReusedEntryOptions.PreventNewGotos);
+  assert(!ReusedEntryOptions.MustImproveRelativeQuality);
+  assert(ReusedEntryOptions.MaxOptIters == 2);
 }
 
 void testRecursiveStructurerVisitsChildBeforeParent() {
