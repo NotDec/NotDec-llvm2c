@@ -2061,7 +2061,7 @@ void testReturnDuplicatorLowSkipsLargeFunction() {
 
 void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
   StructuredCFG Cfg;
-  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(branchBlock(0, {1, 2}));
   Cfg.addBlock(block(2, {1}));
 
   CFGBlock Ret = block(1, {});
@@ -2098,6 +2098,49 @@ void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
   assert(Copy->Terminator == TerminatorKind::Return);
   assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 13));
+}
+
+void testReturnDuplicatorLowExpandsGotoPredToConnectedComponent() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(2, {1}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(4, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({14});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block2 = Cfg.getBlock(2);
+  const CFGBlock *Block3 = Cfg.getBlock(3);
+  const CFGBlock *Block4 = Cfg.getBlock(4);
+  assert(Block0 != nullptr && Block2 != nullptr && Block3 != nullptr &&
+         Block4 != nullptr);
+  assert(Block0->Successors.size() == 2);
+  assert(Block0->Successors.front() == 2 || Block0->Successors.back() == 2);
+  BlockId CopyId = Block0->Successors.front() == 2 ? Block0->Successors.back()
+                                                   : Block0->Successors.front();
+  assert(CopyId != 1);
+  assert(Block2->Successors == std::vector<BlockId>{CopyId});
+  assert(Block3->Successors == std::vector<BlockId>{1});
+  assert(Block4->Successors == std::vector<BlockId>{1});
+
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(Copy->BodyBlock == Copy->Id);
+  assert(hasSinglePayload(Copy->Statements, 14));
 }
 
 void testReturnDuplicatorLowCommitsCopyAtomically() {
@@ -6114,6 +6157,7 @@ int main() {
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
+  testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowCommitsCopyAtomically();
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();

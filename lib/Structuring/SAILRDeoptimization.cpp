@@ -374,6 +374,38 @@ connectedPredecessorComponents(const StructuredCFG &Graph,
   return Components;
 }
 
+std::vector<BlockId>
+expandToConnectedPredecessorComponents(const StructuredCFG &Graph,
+                                       const std::vector<BlockId> &AllPreds,
+                                       const std::vector<BlockId> &Selected) {
+  std::set<BlockId> SelectedSet(Selected.begin(), Selected.end());
+  std::set<BlockId> Expanded = SelectedSet;
+
+  // A copied component has no single predecessor for the copied head. Keep
+  // predecessor-sensitive payload hooks on one-pred copies until the shared
+  // payload layer can express grouped incoming-value rewrites.
+  if (Graph.hasPredecessorRewritePayloadMaterializeHook()) {
+    return std::vector<BlockId>(Expanded.begin(), Expanded.end());
+  }
+
+  for (const std::vector<BlockId> &Component :
+       connectedPredecessorComponents(Graph, AllPreds)) {
+    bool HasSelectedPred = false;
+    for (BlockId Pred : Component) {
+      if (SelectedSet.count(Pred) != 0) {
+        HasSelectedPred = true;
+        break;
+      }
+    }
+    if (!HasSelectedPred) {
+      continue;
+    }
+    Expanded.insert(Component.begin(), Component.end());
+  }
+
+  return std::vector<BlockId>(Expanded.begin(), Expanded.end());
+}
+
 bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (Block.Terminator != TerminatorKind::Switch) {
     return false;
@@ -1206,6 +1238,10 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     if (CurrentPreds.size() > 2 &&
         GotoPreds.size() >= CurrentPreds.size() - 2) {
       PredsToUpdate = CurrentPreds;
+    } else {
+      PredsToUpdate =
+          expandToConnectedPredecessorComponents(Graph, CurrentPreds,
+                                                 PredsToUpdate);
     }
 
     std::sort(PredsToUpdate.begin(), PredsToUpdate.end());
