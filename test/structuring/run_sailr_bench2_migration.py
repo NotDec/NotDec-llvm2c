@@ -324,6 +324,37 @@ exit:
         "absent": ["goto case1", "goto case2", "goto default"],
     },
     {
+        "name": "terminal_shared_default_proxy",
+        "angr_test": "test_reverting_switch_clustering_and_lowering_cat_main_no_endpoint_dup",
+        "semantic": "SwitchDefaultCaseDuplicator / terminal shared default proxy",
+        "ir": r"""
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+default:
+  switch i32 %y, label %shared_default [
+    i32 3, label %shared_default
+    i32 4, label %shared_default
+  ]
+
+case1:
+  br label %shared_default
+
+case2:
+  br label %shared_default
+
+shared_default:
+  ret i32 0
+}
+""",
+        "contains": ["switch (x)", "return 0;"],
+        "absent": ["goto shared_default"],
+    },
+    {
         "name": "condensing_real_lighttpd",
         "angr_test": "test_who_condensing_opt_reversion",
         "semantic": "CrossJumpReverter / real condensing sample",
