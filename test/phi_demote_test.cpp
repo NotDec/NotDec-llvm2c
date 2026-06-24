@@ -198,10 +198,65 @@ void testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes() {
   assert(HT.hasValueType(A, true));
 }
 
+void testHTypeResultErasesTypesForDemotedValues() {
+  llvm::LLVMContext Ctx;
+  llvm::Module M("phi-demote-htype-cleanup", Ctx);
+  M.setDataLayout("e-p:32:32");
+
+  llvm::Type *I1 = llvm::Type::getInt1Ty(Ctx);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Ctx);
+  auto *FTy = llvm::FunctionType::get(I32, {I1}, false);
+  auto *F = llvm::Function::Create(FTy, llvm::GlobalValue::ExternalLinkage,
+                                   "cleanup_refs", M);
+
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", F);
+  llvm::IRBuilder<> Builder(Entry);
+  auto *Alloca = Builder.CreateAlloca(I32, nullptr, "slot");
+  auto *Constant = llvm::ConstantInt::get(I32, 7);
+  auto *Callee = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Ctx), false),
+      llvm::GlobalValue::ExternalLinkage, "callee", M);
+  auto *Call = Builder.CreateCall(Callee);
+  Builder.CreateRet(Constant);
+
+  notdec::llvm2c::HTypeResult HT;
+  HT.HTCtx = std::make_shared<notdec::ast::HTypeContext>();
+  auto *I32Ty = HT.HTCtx->getIntegerType(false, 32, false);
+
+  HT.ValueTypesLower.emplace(Alloca, I32Ty);
+  HT.ValueTypesUpper.emplace(Alloca, I32Ty);
+  HT.ValueTypesLower.emplace(notdec::UConstant{Constant, Call, 0}, I32Ty);
+  HT.ValueTypesUpper.emplace(notdec::UConstant{Constant, Call, 0}, I32Ty);
+  HT.ValueTypesLower.emplace(notdec::StackObject{Alloca}, I32Ty);
+  HT.ValueTypesUpper.emplace(notdec::StackObject{Alloca}, I32Ty);
+  HT.ValueTypesLower.emplace(notdec::HeapObject{Call}, I32Ty);
+  HT.ValueTypesUpper.emplace(notdec::HeapObject{Call}, I32Ty);
+  HT.ContraVariantValues.insert(Alloca);
+  HT.ContraVariantValues.insert(notdec::UConstant{Constant, Call, 0});
+  HT.ContraVariantValues.insert(notdec::StackObject{Alloca});
+  HT.ContraVariantValues.insert(notdec::HeapObject{Call});
+
+  std::set<const llvm::Value *> DemotedValues;
+  DemotedValues.insert(Alloca);
+  DemotedValues.insert(Constant);
+  DemotedValues.insert(Call);
+  HT.eraseTypesForDemotedValues(DemotedValues);
+
+  assert(!HT.hasValueType(Alloca, true));
+  assert(!HT.hasValueType(notdec::StackObject{Alloca}, true));
+  assert(!HT.hasValueType(notdec::HeapObject{Call}, true));
+  assert(!HT.hasValueType(notdec::UConstant{Constant, Call, 0}, true));
+  assert(!HT.prefersUpperValueType(Alloca));
+  assert(!HT.prefersUpperValueType(notdec::StackObject{Alloca}));
+  assert(!HT.prefersUpperValueType(notdec::HeapObject{Call}));
+  assert(!HT.prefersUpperValueType(notdec::UConstant{Constant, Call, 0}));
+}
+
 } // namespace
 
 int main() {
   testDemoteSSAFixHTKeepsUnnamedPhiTypes();
   testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes();
+  testHTypeResultErasesTypesForDemotedValues();
   return 0;
 }
