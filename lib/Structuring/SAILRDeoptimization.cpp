@@ -1022,11 +1022,13 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     }
 
     const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
-    if (DefaultBlock == nullptr ||
-        Graph.successorsOf(DefaultTarget).size() != 1) {
+    if (DefaultBlock == nullptr) {
       continue;
     }
     SwitchPredsByDefault[DefaultTarget].push_back(Block.Id);
+    if (Graph.successorsOf(DefaultTarget).size() != 1) {
+      continue;
+    }
 
     std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
     if (Preds.size() <= 1) {
