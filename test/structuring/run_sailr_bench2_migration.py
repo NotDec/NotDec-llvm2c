@@ -8,7 +8,9 @@ from pathlib import Path
 
 CASES = [
     {
-        "name": "hexx64_function_0x1156e0_native",
+        "name": "return_tail_cleanup",
+        "angr_test": "test_sailr_motivating_example",
+        "semantic": "ReturnDuplicatorLow tail cleanup",
         "input": Path(
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "hexx64/function-0x1156e0/native/function-0x1156e0.ll"
@@ -17,7 +19,9 @@ CASES = [
         "absent": ["goto "],
     },
     {
-        "name": "python_fill_token_cold",
+        "name": "early_exit_chain",
+        "angr_test": "test_decompiling_sha384sum_digest_bsd_split_3",
+        "semantic": "ReturnDuplicatorLow early-exit chain",
         "input": Path(
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "python/one-_PyPegen_fill_token.cold.ll"
@@ -26,7 +30,9 @@ CASES = [
         "absent": ["goto "],
     },
     {
-        "name": "lighttpd_main_init_once",
+        "name": "goto_condensing_chain",
+        "angr_test": "test_who_condensing_opt_reversion",
+        "semantic": "CrossJumpReverter / condensing",
         "input": Path(
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "lighttpd/1-main_init_once.ll"
@@ -57,12 +63,15 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
 
     output = output_path.read_text()
     failures = []
+    header = f"{case['name']} [{case['angr_test']}] ({case['semantic']})"
+    if not output:
+        failures.append(f"{header}: empty output")
     for needle in case.get("contains", []):
         if needle not in output:
-            failures.append(f"{case['name']}: missing {needle!r}")
+            failures.append(f"{header}: missing {needle!r}")
     for needle in case.get("absent", []):
         if needle in output:
-            failures.append(f"{case['name']}: unexpected {needle!r}")
+            failures.append(f"{header}: unexpected {needle!r}")
     return failures
 
 
