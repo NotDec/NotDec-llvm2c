@@ -135,6 +135,34 @@ merge:
         "absent": ["malloc", "goto then", "goto else", "phi"],
     },
     {
+        "name": "build_spec_list_proxy",
+        "angr_test": "test_decompiling_tr_build_spec_list",
+        "semantic": "DuplicationReverter / straight-line no-goto proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define i32 @main(i32 %x) {
+entry:
+  %c0 = icmp eq i32 %x, 0
+  br i1 %c0, label %then, label %else
+
+then:
+  call void @a()
+  br label %merge
+
+else:
+  call void @b()
+  br label %merge
+
+merge:
+  ret i32 0
+}
+""",
+        "contains": ["if (x == 0)", "a();", "b();", "return 0;"],
+        "absent": ["goto ", "phi"],
+    },
+    {
         "name": "early_return_proxy",
         "angr_test": "test_decompiling_uname_main",
         "semantic": "ReturnDuplicatorLow / early return proxy",
@@ -156,6 +184,66 @@ cont:
 """,
         "contains": ["if (x == 0)", "return 1;", "return 0;"],
         "absent": ["goto ret", "goto cont"],
+    },
+    {
+        "name": "eager_returns_proxy",
+        "angr_test": "test_eager_returns_simplifier_no_duplication_of_default_case",
+        "semantic": "ReturnDuplicatorLow / eager returns proxy",
+        "ir": r"""
+declare void @a()
+
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %ret, label %cont
+
+ret:
+  ret i32 1
+
+cont:
+  call void @a()
+  ret i32 0
+}
+""",
+        "contains": ["if (x == 0)", "return 1;", "return 0;"],
+        "absent": ["goto "],
+    },
+    {
+        "name": "root_cycle_follow_proxy",
+        "angr_test": "test_decompiling_printenv_main",
+        "semantic": "Loop structuring / root cycle proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  br label %head
+
+head:
+  %c0 = icmp eq i32 %x, 0
+  br i1 %c0, label %a, label %b
+
+a:
+  call void @a()
+  br label %c
+
+b:
+  call void @b()
+  br label %c
+
+c:
+  call void @c()
+  %c1 = icmp eq i32 %y, 0
+  br i1 %c1, label %head, label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["do {", "c();", "return 0;"],
+        "absent": ["goto head", "goto c;"],
     },
     {
         "name": "switch_case_recovery_proxy",
@@ -218,6 +306,53 @@ exit:
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
+    },
+    {
+        "name": "nested_switch_proxy",
+        "angr_test": "test_reverting_switch_clustering_and_lowering_cat_main_no_endpoint_dup",
+        "semantic": "LoweredSwitchSimplifier / nested switch proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+default:
+  call void @a()
+  br label %exit
+
+case1:
+  switch i32 %y, label %inner_default [
+    i32 10, label %inner1
+    i32 11, label %inner2
+  ]
+
+inner_default:
+  br label %exit
+
+inner1:
+  call void @b()
+  br label %exit
+
+inner2:
+  call void @b()
+  br label %exit
+
+case2:
+  br label %exit
+
+exit:
+  ret i32 0
+}
+        """,
+        "contains": ["switch (x)", "case 1:", "case 2:", "case 10:",
+                      "case 11:", "return 0;"],
+        "absent": ["goto "],
     },
 ]
 
