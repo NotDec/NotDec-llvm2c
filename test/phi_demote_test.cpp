@@ -89,6 +89,8 @@ void testDemoteSSAFixHTKeepsUnnamedPhiTypes() {
   assert(!HT.hasValueType(Phi0, false));
   assert(!HT.hasValueType(Phi1, true));
   assert(!HT.hasValueType(Phi1, false));
+  assert(!HT.prefersUpperValueType(Phi0));
+  assert(!HT.prefersUpperValueType(Phi1));
 
   bool FoundPhi = false;
   bool FoundPhi1 = false;
@@ -129,9 +131,71 @@ void testDemoteSSAFixHTKeepsUnnamedPhiTypes() {
   assert(FoundContraVariant);
 }
 
+void testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes() {
+  llvm::LLVMContext Ctx;
+  llvm::Module M("phi-demote-test-write-filter", Ctx);
+  M.setDataLayout("e-p:32:32");
+
+  llvm::Type *I1 = llvm::Type::getInt1Ty(Ctx);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Ctx);
+  auto *FTy = llvm::FunctionType::get(I32, {I1, I32, I32}, false);
+  auto *F = llvm::Function::Create(FTy, llvm::GlobalValue::ExternalLinkage,
+                                   "filter_phi_refs", M);
+
+  auto ArgIt = F->arg_begin();
+  llvm::Argument *Cond = &*ArgIt++;
+  llvm::Argument *A = &*ArgIt++;
+  llvm::Argument *B = &*ArgIt++;
+
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", F);
+  auto *Then = llvm::BasicBlock::Create(Ctx, "then", F);
+  auto *Else = llvm::BasicBlock::Create(Ctx, "else", F);
+  auto *Merge = llvm::BasicBlock::Create(Ctx, "merge", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  Builder.CreateCondBr(Cond, Then, Else);
+  Builder.SetInsertPoint(Then);
+  Builder.CreateBr(Merge);
+  Builder.SetInsertPoint(Else);
+  Builder.CreateBr(Merge);
+  Builder.SetInsertPoint(Merge);
+
+  auto *Phi = Builder.CreatePHI(I32, 2);
+  Phi->addIncoming(A, Then);
+  Phi->addIncoming(B, Else);
+  Builder.CreateRet(Phi);
+
+  notdec::llvm2c::HTypeResult HT;
+  HT.HTCtx = std::make_shared<notdec::ast::HTypeContext>();
+  auto *I32Ty = HT.HTCtx->getIntegerType(false, 32, false);
+  HT.ValueTypesLower.insert({Phi, I32Ty});
+  HT.ValueTypesUpper.insert({Phi, I32Ty});
+  HT.ContraVariantValues.insert(Phi);
+  HT.ValueTypesLower.insert({A, I32Ty});
+
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB;
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  notdec::llvm2c::demoteSSAFixHT(M, MAM, HT, nullptr);
+
+  assert(!HT.hasValueType(Phi, true));
+  assert(!HT.hasValueType(Phi, false));
+  assert(!HT.prefersUpperValueType(Phi));
+  assert(HT.hasValueType(A, true));
+}
+
 } // namespace
 
 int main() {
   testDemoteSSAFixHTKeepsUnnamedPhiTypes();
+  testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes();
   return 0;
 }

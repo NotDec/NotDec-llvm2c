@@ -163,6 +163,34 @@ merge:
         "absent": ["goto ", "phi"],
     },
     {
+        "name": "else_if_scope_proxy",
+        "angr_test": "test_else_if_scope_printing",
+        "semantic": "Else-if / ITE printing proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define i32 @main(i32 %x) {
+entry:
+  %c0 = icmp eq i32 %x, 0
+  br i1 %c0, label %then, label %else
+
+then:
+  call void @a()
+  br label %merge
+
+else:
+  call void @b()
+  br label %merge
+
+merge:
+  ret i32 0
+}
+""",
+        "contains": ["if (x == 0)", "a();", "b();", "return 0;"],
+        "absent": ["goto ", "phi"],
+    },
+    {
         "name": "early_return_proxy",
         "angr_test": "test_decompiling_uname_main",
         "semantic": "ReturnDuplicatorLow / early return proxy",
