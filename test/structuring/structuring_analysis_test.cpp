@@ -1494,7 +1494,7 @@ void testStructuredCFGDuplicateCopyKeepsSwitchBodySource() {
   assert(CopyCopy->BodyMaterialized);
   assert(CopyCopy->BodyBlock == CopyCopyId);
   assert(CopyCopy->Successors == std::vector<BlockId>({11, 12}));
-  assert(CopyCopy->Cases.front().Value.Id == 1000);
+  assert(CopyCopy->Cases.front().Value.Id == 1071);
   assert(CopyCopy->Cases.front().Target == 12);
   assert(CaseRewrites == 1);
 }
@@ -2838,6 +2838,52 @@ void testReturnDuplicatorLowCopiesGroupedReturnPredsWithPayloadRewrite() {
   assert(hasSinglePayload(Copy0->Statements, 115));
   assert(hasSinglePayload(Copy2->Statements, 115));
   assert(hasSinglePayload(Copy3->Statements, 115));
+}
+
+void testReturnDuplicatorLowRollsBackGroupedPredecessorFailure() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(2, {1}));
+  Cfg.addBlock(block(3, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({15});
+  Cfg.addBlock(std::move(Ret));
+
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::Statement) {
+          return Payload;
+        }
+        if (Context.OriginalPredecessors == std::vector<BlockId>({0, 2})) {
+          return std::nullopt;
+        }
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block2 = Cfg.getBlock(2);
+  const CFGBlock *Block3 = Cfg.getBlock(3);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block2 != nullptr && Block3 != nullptr &&
+         Block1 != nullptr);
+  assert(Block0->Successors == std::vector<BlockId>({1, 2}));
+  assert(Block2->Successors == std::vector<BlockId>({1}));
+  assert(Block3->Successors == std::vector<BlockId>({1}));
+  assert(Block1->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(Block1->Statements, 15));
 }
 
 void testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure() {
@@ -7247,6 +7293,7 @@ int main() {
   testReturnDuplicatorLowCopiesSwitchReturnRegionWithPayloadRewrite();
   testReturnDuplicatorLowSkipsSwitchReturnRegionWithoutPredecessorRewrite();
   testReturnDuplicatorLowUsesGotoInReturnTail();
+  testReturnDuplicatorLowRollsBackGroupedPredecessorFailure();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
   testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched();
