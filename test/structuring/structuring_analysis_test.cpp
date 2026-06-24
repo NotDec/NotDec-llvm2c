@@ -3621,6 +3621,55 @@ void testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion() {
   assert(hasSinglePayload(Copy1Trap->Statements, 44));
 }
 
+void testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {10, 10}));
+  Cfg.addBlock(switchBlock(1, {30, 10}));
+
+  CFGBlock CaseHead = block(10, {11});
+  CaseHead.Statements.push_back({61});
+  Cfg.addBlock(std::move(CaseHead));
+
+  CFGBlock CaseTail = block(11, {});
+  CaseTail.Statements.push_back({62});
+  Cfg.addBlock(std::move(CaseTail));
+
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(30, {}));
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch1 = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch1 != nullptr);
+  assert(Switch0->Successors.front() == 10);
+  assert(Switch1->Successors.front() == 30);
+  assert(Switch0->Cases.front().Target != 10);
+  assert(Switch1->Cases.front().Target != 10);
+  assert(Switch0->Cases.front().Target != Switch1->Cases.front().Target);
+
+  const CFGBlock *OriginalHead = Cfg.getBlock(10);
+  const CFGBlock *OriginalTail = Cfg.getBlock(11);
+  assert(OriginalHead != nullptr && OriginalTail != nullptr);
+  assert(hasSinglePayload(OriginalHead->Statements, 61));
+  assert(hasSinglePayload(OriginalTail->Statements, 62));
+
+  const CFGBlock *Copy0 = Cfg.getBlock(Switch0->Cases.front().Target);
+  const CFGBlock *Copy1 = Cfg.getBlock(Switch1->Cases.front().Target);
+  assert(Copy0 != nullptr && Copy1 != nullptr);
+  assert(Copy0->SourceBlock == 10);
+  assert(Copy1->SourceBlock == 10);
+  assert(Copy0->BodyBlock == Copy0->Id);
+  assert(Copy1->BodyBlock == Copy1->Id);
+  assert(hasSinglePayload(Copy0->Statements, 61));
+  assert(hasSinglePayload(Copy1->Statements, 61));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -6281,6 +6330,7 @@ int main() {
   testLoweredSwitchSimplifierSkipsUnsafeOriginalDeletion();
   testLoweredSwitchSimplifierSkipsDefaultOnlyTargets();
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
+  testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
   testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault();

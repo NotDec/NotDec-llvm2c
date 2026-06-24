@@ -419,6 +419,14 @@ bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   return false;
 }
 
+bool nonCaseSuccessorReachesBlock(const CFGBlock &Block, BlockId Target) {
+  if (Block.Terminator == TerminatorKind::Switch) {
+    return !Block.Successors.empty() && Block.Successors.front() == Target;
+  }
+  return std::find(Block.Successors.begin(), Block.Successors.end(), Target) !=
+         Block.Successors.end();
+}
+
 bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
                                 const GotoManager &Gotos, BlockId Source,
                                 BlockId Target) {
@@ -811,6 +819,59 @@ bool copyLinearRegionForPredecessors(StructuredCFG &Graph,
   return true;
 }
 
+bool redirectSwitchCases(StructuredCFG &Graph, BlockId OldTarget,
+                         BlockId NewTarget,
+                         const std::vector<BlockId> &SwitchPreds) {
+  for (BlockId Pred : SwitchPreds) {
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock == nullptr ||
+        PredBlock->Terminator != TerminatorKind::Switch ||
+        !switchCaseReachesBlock(*PredBlock, OldTarget)) {
+      return false;
+    }
+  }
+
+  for (BlockId Pred : SwitchPreds) {
+    CFGBlock *PredBlock = Graph.getBlock(Pred);
+    for (SwitchCase &Case : PredBlock->Cases) {
+      if (Case.Target == OldTarget) {
+        Case.Target = NewTarget;
+      }
+    }
+  }
+  return true;
+}
+
+bool copyLinearRegionForSwitchCases(StructuredCFG &Graph,
+                                    const LinearRegion &Region,
+                                    const std::vector<BlockId> &SwitchPreds,
+                                    std::vector<BlockId> &OutCopies) {
+  StructuredCFG Snapshot = Graph;
+  std::optional<DuplicatedRegion> CopyRegion = Graph.duplicateRegion(Region.Blocks);
+  if (!CopyRegion.has_value()) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
+                                   SwitchPreds)) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  BlockId CopyHead = CopyRegion->copyOf(Region.Head);
+  if (CopyHead == InvalidBlockId ||
+      !redirectSwitchCases(Graph, Region.Head, CopyHead, SwitchPreds)) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    OutCopies.push_back(Copy);
+  }
+  return true;
+}
+
 std::size_t statementCountInRegion(const StructuredCFG &Graph,
                                    const LinearRegion &Region) {
   std::size_t Count = 0;
@@ -946,17 +1007,6 @@ bool LoweredSwitchSimplifier::runOnGraph(
     }
 
     std::vector<BlockId> AllPreds = predecessorsOf(Graph, TargetId);
-    bool AllSwitchPreds = true;
-    for (BlockId Pred : AllPreds) {
-      const CFGBlock *PredBlock = Graph.getBlock(Pred);
-      if (PredBlock == nullptr || PredBlock->Terminator != TerminatorKind::Switch) {
-        AllSwitchPreds = false;
-        break;
-      }
-    }
-    if (!AllSwitchPreds) {
-      continue;
-    }
 
     LinearRegion Region = findLinearCopyRegion(Graph, TargetId);
     if (Region.Blocks.size() <= 1) {
@@ -969,6 +1019,14 @@ bool LoweredSwitchSimplifier::runOnGraph(
     std::vector<BlockId> UpdatedPreds;
     std::vector<BlockId> Copies;
     bool DeleteOriginal = sameBlockSet(AllPreds, Preds);
+    for (BlockId Pred : AllPreds) {
+      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      if (PredBlock == nullptr ||
+          nonCaseSuccessorReachesBlock(*PredBlock, TargetId)) {
+        DeleteOriginal = false;
+        break;
+      }
+    }
     if (DeleteOriginal) {
       StructuredCFG DeletionProbe = Candidate;
       if (!DeletionProbe.removeBlocks(Region.Blocks)) {
@@ -976,8 +1034,8 @@ bool LoweredSwitchSimplifier::runOnGraph(
       }
     }
     for (const std::vector<BlockId> &Component : PredComponents) {
-      if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
-                                           Copies)) {
+      if (!copyLinearRegionForSwitchCases(Candidate, Region, Component,
+                                          Copies)) {
         continue;
       }
       UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(), Component.end());
