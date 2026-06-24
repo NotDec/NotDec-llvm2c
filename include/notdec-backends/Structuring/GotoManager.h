@@ -8,6 +8,12 @@
 
 namespace notdec::backend::structuring {
 
+enum class StructuredGotoEdgeKind {
+  Unknown,
+  SwitchCase,
+  SwitchDefault,
+};
+
 // Minimal Angr-style goto summary for shared structuring output. It is kept in
 // the backend-independent layer so SAILR deoptimization can reason about gotos
 // before either the C or Solidity renderer sees the tree.
@@ -15,6 +21,7 @@ struct StructuredGoto {
   BlockId Source = InvalidBlockId;
   BlockId Target = InvalidBlockId;
   NodeId Node = InvalidNodeId;
+  StructuredGotoEdgeKind EdgeKind = StructuredGotoEdgeKind::Unknown;
 
   bool operator<(const StructuredGoto &Other) const {
     if (Source != Other.Source) {
@@ -23,7 +30,10 @@ struct StructuredGoto {
     if (Target != Other.Target) {
       return Target < Other.Target;
     }
-    return Node < Other.Node;
+    if (Node != Other.Node) {
+      return Node < Other.Node;
+    }
+    return EdgeKind < Other.EdgeKind;
   }
 };
 

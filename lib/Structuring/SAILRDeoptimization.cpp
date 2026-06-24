@@ -1401,14 +1401,22 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
                                    const StructuringEvaluation &Current) {
   std::map<BlockId, std::vector<BlockId>> PredsByTarget;
   std::map<BlockId, LinearRegion> RegionsByTarget;
+  std::map<std::pair<BlockId, BlockId>, std::set<StructuredGotoEdgeKind>>
+      GotoEdgeKinds;
 
   for (const CFGBlock &Block : Graph.blocks()) {
     std::vector<StructuredGoto> Gotos = Current.Gotos.gotosInBlock(Block.Id);
-    if (Gotos.empty() || Gotos.size() >= 2) {
+    if (Gotos.empty()) {
       continue;
     }
 
     BlockId Target = Gotos.front().Target;
+    bool SameTarget = std::all_of(
+        Gotos.begin(), Gotos.end(),
+        [Target](const StructuredGoto &Goto) { return Goto.Target == Target; });
+    if (!SameTarget) {
+      continue;
+    }
     if (!Graph.hasEdge(Block.Id, Target)) {
       continue;
     }
@@ -1422,6 +1430,10 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     }
 
     PredsByTarget[Target].push_back(Block.Id);
+    std::set<StructuredGotoEdgeKind> &Kinds = GotoEdgeKinds[{Block.Id, Target}];
+    for (const StructuredGoto &Goto : Gotos) {
+      Kinds.insert(Goto.EdgeKind);
+    }
     RegionsByTarget.emplace(Target, std::move(Region));
   }
 
@@ -1439,8 +1451,8 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     }
     const LinearRegion &Region = RegionIt->second;
 
-    std::vector<BlockId> CurrentPreds = predecessorsOf(Graph, Target);
-    bool DeleteOriginal = sameBlockSet(CurrentPreds, PredsToUpdate);
+    bool DeleteOriginal = sameBlockSet(predecessorsOf(Graph, Target),
+                                       PredsToUpdate);
     StructuredCFG Candidate = Graph;
     if (DeleteOriginal) {
       StructuredCFG DeletionProbe = Candidate;
@@ -1473,8 +1485,29 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
         bool UsesNonCaseEdge =
             blockUsesNonSwitchCaseEdge(Candidate, Pred, Target);
         if (UsesCaseEdge && UsesNonCaseEdge) {
-          HasAmbiguousSwitchPred = true;
-          break;
+          const std::set<StructuredGotoEdgeKind> *Kinds = nullptr;
+          auto KindIt = GotoEdgeKinds.find({Pred, Target});
+          if (KindIt != GotoEdgeKinds.end()) {
+            Kinds = &KindIt->second;
+          }
+          bool HasCaseKind =
+              Kinds != nullptr &&
+              Kinds->count(StructuredGotoEdgeKind::SwitchCase) != 0;
+          bool HasDefaultKind =
+              Kinds != nullptr &&
+              Kinds->count(StructuredGotoEdgeKind::SwitchDefault) != 0;
+          bool HasUnknownKind =
+              Kinds == nullptr ||
+              Kinds->count(StructuredGotoEdgeKind::Unknown) != 0;
+          if (HasCaseKind && !HasUnknownKind) {
+            CasePreds.push_back(Pred);
+          } else if (HasDefaultKind && !HasUnknownKind) {
+            NonCasePreds.push_back(Pred);
+          } else {
+            HasAmbiguousSwitchPred = true;
+            break;
+          }
+          continue;
         }
         if (UsesCaseEdge) {
           CasePreds.push_back(Pred);
@@ -1502,8 +1535,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
                           Component.end());
     }
 
-    if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
-        sameBlockSet(CurrentPreds, UpdatedPreds)) {
+    if (DeleteOriginal && predecessorsOf(Candidate, Target).empty()) {
       if (!Candidate.removeBlocks(Region.Blocks)) {
         return false;
       }

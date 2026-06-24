@@ -684,6 +684,45 @@ void testGotoManagerCollectsIfGotoSources() {
   assert(Manager.gotosInBlock(10).empty());
 }
 
+void testGotoManagerCollectsSwitchGotoEdgeKinds() {
+  StructuredTree Tree;
+
+  StructuredNode DefaultGoto;
+  DefaultGoto.Kind = StructuredNodeKind::Goto;
+  DefaultGoto.Target = 20;
+  NodeId DefaultId = Tree.addNode(std::move(DefaultGoto));
+
+  StructuredNode CaseGoto;
+  CaseGoto.Kind = StructuredNodeKind::Goto;
+  CaseGoto.Target = 30;
+  NodeId CaseId = Tree.addNode(std::move(CaseGoto));
+
+  StructuredNode Switch;
+  Switch.Kind = StructuredNodeKind::Switch;
+  Switch.Block = 10;
+  Switch.Default = DefaultId;
+  Switch.StructuredCases.push_back({{}, 30, CaseId});
+  Tree.setRoot(Tree.addNode(std::move(Switch)));
+
+  GotoManager Manager = GotoManager::collect(Tree);
+  assert(Manager.size() == 2);
+
+  std::vector<StructuredGoto> Gotos = Manager.gotosInBlock(10);
+  assert(Gotos.size() == 2);
+  bool SawDefault = false;
+  bool SawCase = false;
+  for (const StructuredGoto &Goto : Gotos) {
+    if (Goto.Target == 20) {
+      SawDefault = Goto.EdgeKind == StructuredGotoEdgeKind::SwitchDefault;
+    }
+    if (Goto.Target == 30) {
+      SawCase = Goto.EdgeKind == StructuredGotoEdgeKind::SwitchCase;
+    }
+  }
+  assert(SawDefault);
+  assert(SawCase);
+}
+
 void testStructuringEvaluatorCollectsGotoSummary() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -1900,6 +1939,63 @@ void testCrossJumpReverterRedirectsSwitchCasesOnly() {
   const CFGBlock *CopyExit = Cfg.getBlock(CopyTail->Successors.front());
   assert(CopyExit != nullptr);
   assert(CopyExit->Successors.empty());
+}
+
+void testCrossJumpReverterUsesSwitchCaseGotoKind() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {1});
+  Switch.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({61});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {4});
+  Tail.Statements.push_back({62});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(4, {}));
+
+  StructuredTree Tree;
+
+  StructuredNode DefaultGoto;
+  DefaultGoto.Kind = StructuredNodeKind::Goto;
+  DefaultGoto.Target = 1;
+  NodeId DefaultId = Tree.addNode(std::move(DefaultGoto));
+
+  StructuredNode CaseGoto;
+  CaseGoto.Kind = StructuredNodeKind::Goto;
+  CaseGoto.Target = 1;
+  NodeId CaseId = Tree.addNode(std::move(CaseGoto));
+
+  StructuredNode SwitchNode;
+  SwitchNode.Kind = StructuredNodeKind::Switch;
+  SwitchNode.Block = 0;
+  SwitchNode.Default = DefaultId;
+  SwitchNode.StructuredCases.push_back({{}, 1, CaseId});
+  Tree.setRoot(Tree.addNode(std::move(SwitchNode)));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::collect(Tree);
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *SwitchBlock = Cfg.getBlock(0);
+  assert(SwitchBlock != nullptr);
+  assert(SwitchBlock->Successors == std::vector<BlockId>{1});
+  assert(SwitchBlock->Cases.size() == 1);
+  assert(SwitchBlock->Cases.front().Target != 1);
+  assert(Cfg.getBlock(1) != nullptr);
+
+  const CFGBlock *CopyHead = Cfg.getBlock(SwitchBlock->Cases.front().Target);
+  assert(CopyHead != nullptr);
+  assert(CopyHead->BodyBlock == CopyHead->Id);
+  assert(hasSinglePayload(CopyHead->Statements, 61));
 }
 
 void testDuplicationReverterMergesExactDuplicateBlocks() {
@@ -6478,6 +6574,7 @@ int main() {
   testStructurerRegistryNames();
   testGotoManagerCollectsSequenceGotoSources();
   testGotoManagerCollectsIfGotoSources();
+  testGotoManagerCollectsSwitchGotoEdgeKinds();
   testStructuringEvaluatorCollectsGotoSummary();
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
@@ -6519,6 +6616,7 @@ int main() {
   testCrossJumpReverterCopiesConnectedPredsOnce();
   testCrossJumpReverterSkipsAmbiguousSwitchCaseDefaultTarget();
   testCrossJumpReverterRedirectsSwitchCasesOnly();
+  testCrossJumpReverterUsesSwitchCaseGotoKind();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();

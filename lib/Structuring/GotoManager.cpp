@@ -26,6 +26,7 @@ BlockId sourceBlockForNode(const StructuredNode &Node, BlockId CurrentSource) {
 }
 
 void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
+                  StructuredGotoEdgeKind EdgeKind,
                   std::set<StructuredGoto> &Gotos) {
   const StructuredNode *Node = Tree.getNode(Id);
   if (Node == nullptr) {
@@ -35,30 +36,36 @@ void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
   BlockId Source = sourceBlockForNode(*Node, CurrentSource);
   if (Node->Kind == StructuredNodeKind::Goto &&
       Node->Target != InvalidBlockId) {
-    Gotos.insert({Source, Node->Target, Id});
+    Gotos.insert({Source, Node->Target, Id, EdgeKind});
   }
 
   for (NodeId Child : Node->Children) {
-    collectGotos(Tree, Child, Source, Gotos);
+    collectGotos(Tree, Child, Source, StructuredGotoEdgeKind::Unknown, Gotos);
     const StructuredNode *ChildNode = Tree.getNode(Child);
     if (ChildNode != nullptr && ChildNode->Block != InvalidBlockId) {
       Source = ChildNode->Block;
     }
   }
   for (const StructuredSwitchCase &Case : Node->StructuredCases) {
-    collectGotos(Tree, Case.Body, Source, Gotos);
+    collectGotos(Tree, Case.Body, Source, StructuredGotoEdgeKind::SwitchCase,
+                 Gotos);
   }
-  collectGotos(Tree, Node->Then, Source, Gotos);
-  collectGotos(Tree, Node->Else, Source, Gotos);
-  collectGotos(Tree, Node->Body, Source, Gotos);
-  collectGotos(Tree, Node->Default, Source, Gotos);
+  collectGotos(Tree, Node->Then, Source, StructuredGotoEdgeKind::Unknown,
+               Gotos);
+  collectGotos(Tree, Node->Else, Source, StructuredGotoEdgeKind::Unknown,
+               Gotos);
+  collectGotos(Tree, Node->Body, Source, StructuredGotoEdgeKind::Unknown,
+               Gotos);
+  collectGotos(Tree, Node->Default, Source,
+               StructuredGotoEdgeKind::SwitchDefault, Gotos);
 }
 
 } // namespace
 
 GotoManager GotoManager::collect(const StructuredTree &Tree) {
   GotoManager Manager;
-  collectGotos(Tree, Tree.root(), InvalidBlockId, Manager.Gotos);
+  collectGotos(Tree, Tree.root(), InvalidBlockId,
+               StructuredGotoEdgeKind::Unknown, Manager.Gotos);
   return Manager;
 }
 
