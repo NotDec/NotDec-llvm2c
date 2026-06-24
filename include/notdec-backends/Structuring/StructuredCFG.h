@@ -69,6 +69,7 @@ struct PayloadMaterializeContext {
   BlockId SourceBlock = InvalidBlockId;
   BlockId BodyBlock = InvalidBlockId;
   BlockId CopyBlock = InvalidBlockId;
+  BlockId CopiedFromBlock = InvalidBlockId;
   BlockId OriginalPredecessor = InvalidBlockId;
   BlockId NewPredecessor = InvalidBlockId;
   BlockId OriginalTarget = InvalidBlockId;
@@ -105,6 +106,10 @@ struct CFGBlock {
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
   bool BodyMaterialized = false;
+  // Immediate source of this copy. SourceBlock keeps the original semantic
+  // source across copy-of-copy chains; CopiedFromBlock records the concrete
+  // block that was duplicated this time.
+  BlockId CopiedFromBlock = InvalidBlockId;
   // Synthetic forwarders and their copies stand for a virtualized original edge.
   BlockId SyntheticSource = InvalidBlockId;
   BlockId SyntheticTarget = InvalidBlockId;

@@ -103,6 +103,7 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
   Copy.SourceBlock = SourceBlock->SourceBlock == InvalidBlockId
                          ? SourceBlock->Id
                          : SourceBlock->SourceBlock;
+  Copy.CopiedFromBlock = SourceBlock->Id;
   Copy.CopyKind = Kind;
   Copy.CreatedBy = Creator;
   Copy.BodyMaterialized = false;
@@ -225,6 +226,7 @@ bool StructuredCFG::materializeBlockBody(BlockId Id,
   Context.SourceBlock = Body->SourceBlock;
   Context.BodyBlock = BodyId;
   Context.CopyBlock = Id;
+  Context.CopiedFromBlock = Block->CopiedFromBlock;
   Context.OriginalPredecessor = OriginalPredecessor;
   Context.NewPredecessor = NewPredecessor;
   Context.OriginalCases = Body->Cases;

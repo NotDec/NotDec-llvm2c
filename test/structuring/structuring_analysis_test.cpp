@@ -728,6 +728,7 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(Copy != nullptr);
   assert(Copy->Origin == CFGBlockOrigin::Copied);
   assert(Copy->SourceBlock == 10);
+  assert(Copy->CopiedFromBlock == 10);
   assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
   assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
   assert(!Copy->BodyMaterialized);
@@ -742,6 +743,7 @@ void testStructuredCFGDuplicatesBlockBodySource() {
   assert(SecondCopy != nullptr);
   assert(SecondCopy->Origin == CFGBlockOrigin::Copied);
   assert(SecondCopy->SourceBlock == 10);
+  assert(SecondCopy->CopiedFromBlock == CopyId);
   assert(SecondCopy->CopyKind == CFGBlockCopyKind::RegionCopy);
   assert(!SecondCopy->BodyMaterialized);
   assert(SecondCopy->BodyBlock == 10);
@@ -776,6 +778,7 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
         assert(Context.SourceBlock == 10);
         assert(Context.BodyBlock == 10);
         assert(Context.CopyBlock == 13);
+        assert(Context.CopiedFromBlock == 10);
         assert(Context.OriginalPredecessor == 90);
         assert(Context.NewPredecessor == 91);
         assert(Context.OriginalCases.size() == 1);
@@ -1130,6 +1133,7 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
         assert(Context.SourceBlock == 10);
         assert(Context.BodyBlock == 10);
         assert(Context.CopyBlock == CopySwitchId);
+        assert(Context.CopiedFromBlock == 10);
         assert(Context.OriginalPredecessor == 90);
         assert(Context.NewPredecessor == 91);
         assert(Context.OriginalCases.size() == 2);
