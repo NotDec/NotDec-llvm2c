@@ -2392,9 +2392,7 @@ void testCrossJumpReverterUsesSwitchCaseGotoKind() {
 void testCrossJumpReverterUsesSwitchDefaultGotoKind() {
   StructuredCFG Cfg;
 
-  CFGBlock Switch = switchBlock(0, {1});
-  Switch.Cases.push_back({{}, 1});
-  Cfg.addBlock(std::move(Switch));
+  Cfg.addBlock(switchBlock(0, {1, 1}));
 
   CFGBlock Target = block(1, {2});
   Target.Statements.push_back({71});
@@ -2435,8 +2433,9 @@ void testCrossJumpReverterUsesSwitchDefaultGotoKind() {
 
   const CFGBlock *SwitchBlock = Cfg.getBlock(0);
   assert(SwitchBlock != nullptr);
-  assert(SwitchBlock->Successors.size() == 1);
+  assert(SwitchBlock->Successors.size() == 2);
   assert(SwitchBlock->Successors.front() != 1);
+  assert(SwitchBlock->Successors[1] == 1);
   assert(SwitchBlock->Cases.size() == 1);
   assert(SwitchBlock->Cases.front().Target == 1);
   assert(Cfg.getBlock(1) != nullptr);
@@ -4345,8 +4344,10 @@ void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
   assert(Switch0 != nullptr && Switch3 != nullptr);
   assert(Switch0->Successors.front() == 2);
   assert(Switch3->Successors.front() == 5);
+  assert(Switch3->Successors.size() == 2);
   assert(Switch0->Cases.front().Target == 1);
   assert(Switch3->Cases.front().Target != 1);
+  assert(Switch3->Successors[1] == Switch3->Cases.front().Target);
 
   const CFGBlock *Goto = Cfg.getBlock(Switch3->Cases.front().Target);
   assert(Goto != nullptr);

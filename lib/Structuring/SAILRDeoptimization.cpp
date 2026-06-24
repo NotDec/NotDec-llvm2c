@@ -489,6 +489,11 @@ bool redirectSwitchCases(StructuredCFG &Graph, BlockId OldTarget,
 
   for (BlockId Pred : SwitchPreds) {
     CFGBlock *PredBlock = Graph.getBlock(Pred);
+    for (std::size_t I = 1; I < PredBlock->Successors.size(); ++I) {
+      if (PredBlock->Successors[I] == OldTarget) {
+        PredBlock->Successors[I] = NewTarget;
+      }
+    }
     for (SwitchCase &Case : PredBlock->Cases) {
       if (Case.Target == OldTarget) {
         Case.Target = NewTarget;
@@ -912,6 +917,13 @@ bool redirectNonSwitchCaseEdges(StructuredCFG &Graph, BlockId OldTarget,
 
   for (BlockId Pred : Preds) {
     CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock->Terminator == TerminatorKind::Switch) {
+      if (!PredBlock->Successors.empty() &&
+          PredBlock->Successors.front() == OldTarget) {
+        PredBlock->Successors.front() = NewTarget;
+      }
+      continue;
+    }
     for (BlockId &Succ : PredBlock->Successors) {
       if (Succ == OldTarget) {
         Succ = NewTarget;
