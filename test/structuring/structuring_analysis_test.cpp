@@ -3510,6 +3510,50 @@ void testSwitchDefaultCaseDuplicatorCommitsRewriteAtomically() {
   assert(Cfg.getBlock(Switch3->Successors.front()) != nullptr);
 }
 
+void testSwitchDefaultCaseDuplicatorSkipsPayloadRewriteFailure() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+  Cfg.addBlock(switchBlock(3, {1, 4}));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({41});
+  Cfg.addBlock(std::move(Default));
+
+  Cfg.addBlock(block(2, {5}));
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {}));
+
+  bool SawAbort = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &, PayloadMaterializeKind Kind,
+          PayloadRef, std::size_t) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::Statement) {
+          return std::nullopt;
+        }
+        return PayloadRef{};
+      });
+  Cfg.setPayloadMaterializeResultHook(
+      [&](const PayloadMaterializeContext &,
+          PayloadMaterializeResult Result,
+          const std::vector<PayloadRef> &) {
+        if (Result == PayloadMaterializeResult::Aborted) {
+          SawAbort = true;
+        }
+      });
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(SawAbort);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(3) != nullptr);
+  assert(Cfg.getBlock(0)->Successors.front() == 1);
+  assert(Cfg.getBlock(3)->Successors.front() == 1);
+}
+
 void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -7229,6 +7273,7 @@ int main() {
   testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
+  testSwitchDefaultCaseDuplicatorSkipsPayloadRewriteFailure();
   testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
