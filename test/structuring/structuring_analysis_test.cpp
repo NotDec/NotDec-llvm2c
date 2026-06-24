@@ -2231,6 +2231,72 @@ void testReturnDuplicatorLowReportsGroupedPredecessorRewrite() {
   assert(Copy->Terminator == TerminatorKind::Return);
 }
 
+void testReturnDuplicatorLowCopiesGroupedReturnPredsWithPayloadRewrite() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(2, {1}));
+  Cfg.addBlock(block(3, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({15});
+  Cfg.addBlock(std::move(Ret));
+
+  std::vector<std::vector<BlockId>> SeenOriginalGroups;
+  std::vector<std::vector<BlockId>> SeenNewGroups;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::Statement) {
+          assert(Context.OriginalPredecessors == Context.NewPredecessors);
+          SeenOriginalGroups.push_back(Context.OriginalPredecessors);
+          SeenNewGroups.push_back(Context.NewPredecessors);
+          return PayloadRef{Payload.Id + 100};
+        }
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(SeenOriginalGroups.size() == 2);
+  assert(SeenNewGroups.size() == 2);
+  assert((SeenOriginalGroups[0] == std::vector<BlockId>({0, 2}) ||
+          SeenOriginalGroups[1] == std::vector<BlockId>({0, 2})));
+  assert((SeenOriginalGroups[0] == std::vector<BlockId>({3}) ||
+          SeenOriginalGroups[1] == std::vector<BlockId>({3})));
+  assert(SeenOriginalGroups == SeenNewGroups);
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block2 = Cfg.getBlock(2);
+  const CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block0 != nullptr && Block2 != nullptr && Block3 != nullptr);
+  assert(Block0->Successors.size() == 2);
+  assert(Block0->Successors.front() == 2 || Block0->Successors.back() == 2);
+  assert(Block2->Successors.size() == 1);
+  assert(Block3->Successors.size() == 1);
+  BlockId Copy0Id = Block0->Successors.front() == 2 ? Block0->Successors.back()
+                                                    : Block0->Successors.front();
+  const CFGBlock *Copy0 = Cfg.getBlock(Copy0Id);
+  const CFGBlock *Copy2 = Cfg.getBlock(Block2->Successors.front());
+  const CFGBlock *Copy3 = Cfg.getBlock(Block3->Successors.front());
+  assert(Copy0 != nullptr && Copy2 != nullptr && Copy3 != nullptr);
+  assert(Copy0->Id == Copy2->Id);
+  assert(Copy0->Id != Copy3->Id);
+  assert(Copy0->BodyBlock == Copy0->Id);
+  assert(Copy2->BodyBlock == Copy2->Id);
+  assert(Copy3->BodyBlock == Copy3->Id);
+  assert(hasSinglePayload(Copy0->Statements, 115));
+  assert(hasSinglePayload(Copy2->Statements, 115));
+  assert(hasSinglePayload(Copy3->Statements, 115));
+}
+
 void testReturnDuplicatorLowCommitsCopyAtomically() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -6310,6 +6376,7 @@ int main() {
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowReportsGroupedPredecessorRewrite();
+  testReturnDuplicatorLowCopiesGroupedReturnPredsWithPayloadRewrite();
   testReturnDuplicatorLowCommitsCopyAtomically();
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();
