@@ -106,6 +106,32 @@ tail:
         "contains": ["malloc", "return 0;"],
         "absent": ["goto dup1", "goto dup2"],
     },
+    {
+        "name": "duplication_too_sensitive_proxy",
+        "angr_test": "test_deduplication_too_sensitive_split_3",
+        "semantic": "DuplicationReverter / keep-legit-duplicate proxy",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %then, label %else
+
+then:
+  %a = add i32 %x, 1
+  br label %merge
+
+else:
+  %b = add i32 %x, 1
+  br label %merge
+
+merge:
+  %c = phi i32 [ %a, %then ], [ %b, %else ]
+  ret i32 %c
+}
+""",
+        "contains": ["return x + 1;"],
+        "absent": ["malloc", "goto then", "goto else"],
+    },
 ]
 
 
