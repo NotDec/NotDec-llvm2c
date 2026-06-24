@@ -978,21 +978,22 @@ bool SwitchReusedEntryRewriter::runOnGraph(
     StructuredCFG &Graph, const StructuringEvaluation &Current) {
   (void)Current;
 
+  StructuredCFG Candidate = Graph;
   std::vector<BlockId> EntryIds;
-  EntryIds.reserve(Graph.blocks().size());
-  for (const CFGBlock &Entry : Graph.blocks()) {
+  EntryIds.reserve(Candidate.blocks().size());
+  for (const CFGBlock &Entry : Candidate.blocks()) {
     EntryIds.push_back(Entry.Id);
   }
 
   std::map<BlockId, std::vector<BlockId>> SwitchPredsByEntry;
   for (BlockId EntryId : EntryIds) {
-    const CFGBlock *Entry = Graph.getBlock(EntryId);
+    const CFGBlock *Entry = Candidate.getBlock(EntryId);
     if (Entry == nullptr) {
       continue;
     }
 
     std::vector<BlockId> SwitchPreds;
-    for (const CFGBlock &PredBlock : Graph.blocks()) {
+    for (const CFGBlock &PredBlock : Candidate.blocks()) {
       if (switchCaseReachesBlock(PredBlock, EntryId)) {
         SwitchPreds.push_back(PredBlock.Id);
       }
@@ -1017,19 +1018,19 @@ bool SwitchReusedEntryRewriter::runOnGraph(
 
   bool Changed = false;
   for (const auto &[EntryId, SwitchPreds] : SwitchPredsByEntry) {
-    const CFGBlock *Entry = Graph.getBlock(EntryId);
+    const CFGBlock *Entry = Candidate.getBlock(EntryId);
     if (Entry == nullptr) {
       continue;
     }
 
+    bool EntryChanged = false;
     for (std::size_t I = 1; I < SwitchPreds.size(); ++I) {
       BlockId Pred = SwitchPreds[I];
-      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      const CFGBlock *PredBlock = Candidate.getBlock(Pred);
       if (PredBlock == nullptr || !switchCaseReachesBlock(*PredBlock, EntryId)) {
         continue;
       }
 
-      StructuredCFG Candidate = Graph;
       BlockId Goto = Candidate.createSyntheticGoto(
           Pred, EntryId, CFGBlockCreator::SAILRDeoptimization);
       if (Goto == InvalidBlockId ||
@@ -1037,11 +1038,17 @@ bool SwitchReusedEntryRewriter::runOnGraph(
         continue;
       }
 
-      Graph = std::move(Candidate);
+      EntryChanged = true;
+    }
+
+    if (EntryChanged) {
       Changed = true;
     }
   }
 
+  if (Changed) {
+    Graph = std::move(Candidate);
+  }
   return Changed;
 }
 
@@ -1096,6 +1103,7 @@ bool LoweredSwitchSimplifier::runOnGraph(
         materializePredecessorComponents(Graph, Preds);
     std::vector<BlockId> UpdatedPreds;
     std::vector<BlockId> Copies;
+    bool Failed = false;
     bool DeleteOriginal = sameBlockSet(AllPreds, Preds);
     for (BlockId Pred : AllPreds) {
       const CFGBlock *PredBlock = Graph.getBlock(Pred);
@@ -1114,9 +1122,14 @@ bool LoweredSwitchSimplifier::runOnGraph(
     for (const std::vector<BlockId> &Component : PredComponents) {
       if (!copyLinearRegionForSwitchCases(Candidate, Region, Component,
                                           Copies)) {
-        continue;
+        Failed = true;
+        break;
       }
       UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(), Component.end());
+    }
+
+    if (Failed) {
+      continue;
     }
 
     if (DeleteOriginal && sameBlockSet(AllPreds, UpdatedPreds)) {
@@ -1147,31 +1160,32 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     StructuredCFG &Graph, const StructuringEvaluation &Current) {
   (void)Current;
 
+  StructuredCFG Candidate = Graph;
   std::map<BlockId, std::vector<BlockId>> SwitchPredsByDefault;
   std::map<BlockId, BlockId> KeepPredForDefault;
   std::map<BlockId, LinearRegion> DefaultRegions;
 
-  for (const CFGBlock &Block : Graph.blocks()) {
-    BlockId DefaultTarget = defaultSwitchSuccessor(Graph, Block);
+  for (const CFGBlock &Block : Candidate.blocks()) {
+    BlockId DefaultTarget = defaultSwitchSuccessor(Candidate, Block);
     if (DefaultTarget == InvalidBlockId) {
       continue;
     }
 
-    const CFGBlock *DefaultBlock = Graph.getBlock(DefaultTarget);
+    const CFGBlock *DefaultBlock = Candidate.getBlock(DefaultTarget);
     if (DefaultBlock == nullptr) {
       continue;
     }
     SwitchPredsByDefault[DefaultTarget].push_back(Block.Id);
-    if (Graph.successorsOf(DefaultTarget).size() != 1) {
+    if (Candidate.successorsOf(DefaultTarget).size() != 1) {
       continue;
     }
 
-    std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
+    std::vector<BlockId> Preds = predecessorsOf(Candidate, DefaultTarget);
     if (Preds.size() <= 1) {
       continue;
     }
 
-    LinearRegion Region = findLinearRegionFromHead(Graph, DefaultTarget);
+    LinearRegion Region = findLinearRegionFromHead(Candidate, DefaultTarget);
     if (Region.Head == InvalidBlockId) {
       continue;
     }
@@ -1186,22 +1200,22 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
       continue;
     }
 
-    StructuredCFG Candidate = Graph;
+    StructuredCFG DefaultCandidate = Candidate;
     bool RewroteDefault = false;
     bool Failed = false;
     for (BlockId SwitchPred : SwitchPreds) {
-      if (!Candidate.hasEdge(SwitchPred, DefaultTarget)) {
+      if (!DefaultCandidate.hasEdge(SwitchPred, DefaultTarget)) {
         Failed = true;
         break;
       }
 
-      BlockId Forwarder = Candidate.createSyntheticForwarder(
+      BlockId Forwarder = DefaultCandidate.createSyntheticForwarder(
           SwitchPred, DefaultTarget, CFGBlockCreator::SAILRDeoptimization);
       if (Forwarder == InvalidBlockId ||
-          !replaceDefaultSwitchSuccessor(Candidate, SwitchPred, DefaultTarget,
+          !replaceDefaultSwitchSuccessor(DefaultCandidate, SwitchPred, DefaultTarget,
                                          Forwarder)) {
         if (Forwarder != InvalidBlockId) {
-          Candidate.removeBlock(Forwarder);
+          DefaultCandidate.removeBlock(Forwarder);
         }
         Failed = true;
         break;
@@ -1210,18 +1224,20 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
       RewroteDefault = true;
     }
 
-    if (RewroteDefault && !Failed) {
-      Graph = std::move(Candidate);
-      Changed = true;
+    if (Failed || !RewroteDefault) {
+      continue;
     }
+
+    Candidate = std::move(DefaultCandidate);
+    Changed = true;
   }
 
   for (const auto &[DefaultTarget, KeepPred] : KeepPredForDefault) {
-    const CFGBlock *KeepSwitch = Graph.getBlock(KeepPred);
-    std::vector<BlockId> Preds = predecessorsOf(Graph, DefaultTarget);
+    const CFGBlock *KeepSwitch = Candidate.getBlock(KeepPred);
+    std::vector<BlockId> Preds = predecessorsOf(Candidate, DefaultTarget);
     std::vector<BlockId> PredsToUpdate;
     for (BlockId Pred : Preds) {
-      const CFGBlock *PredBlock = Graph.getBlock(Pred);
+      const CFGBlock *PredBlock = Candidate.getBlock(Pred);
       if (PredBlock != nullptr &&
           PredBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder &&
           PredBlock->SyntheticTarget == DefaultTarget) {
@@ -1231,7 +1247,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
         continue;
       }
       if (KeepSwitch != nullptr &&
-          reachesBlockFromNonDefaultSwitchSuccessor(Graph, *KeepSwitch,
+          reachesBlockFromNonDefaultSwitchSuccessor(Candidate, *KeepSwitch,
                                                     DefaultTarget, Pred)) {
         continue;
       }
@@ -1248,10 +1264,9 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
 
     const LinearRegion &Region = RegionIt->second;
 
-    StructuredCFG Candidate = Graph;
     std::vector<BlockId> Copies;
     std::vector<std::vector<BlockId>> PredComponents =
-        materializePredecessorComponents(Graph, PredsToUpdate);
+        materializePredecessorComponents(Candidate, PredsToUpdate);
     bool Failed = false;
     for (const std::vector<BlockId> &Component : PredComponents) {
       if (!copyLinearRegionForPredecessors(Candidate, Region, Component,
@@ -1266,11 +1281,13 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     }
 
     if (!Copies.empty()) {
-      Graph = std::move(Candidate);
       Changed = true;
     }
   }
 
+  if (Changed) {
+    Graph = std::move(Candidate);
+  }
   return Changed;
 }
 
@@ -1422,12 +1439,18 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     std::vector<std::vector<BlockId>> PredComponents =
         materializePredecessorComponents(Graph, PredsToUpdate);
     std::vector<BlockId> UpdatedPreds;
+    bool Failed = false;
     for (const std::vector<BlockId> &Component : PredComponents) {
       if (!copyRegionForPredecessors(Candidate, Region, Component, Copies)) {
-        continue;
+        Failed = true;
+        break;
       }
       UpdatedPreds.insert(UpdatedPreds.end(), Component.begin(),
                           Component.end());
+    }
+
+    if (Failed) {
+      continue;
     }
 
     if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&

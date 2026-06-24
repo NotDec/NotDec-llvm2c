@@ -248,9 +248,25 @@ bool StructuredCFG::materializeBlockBodyImpl(
     return false;
   }
   BlockId BodyId = bodyBlock(Id);
+  PayloadMaterializeContext Context;
+  Context.SourceBlock = Block->SourceBlock;
+  Context.BodyBlock = BodyId;
+  Context.CopyBlock = Id;
+  Context.CopiedFromBlock = Block->CopiedFromBlock;
+  Context.CopyKind = Block->CopyKind;
+  Context.CreatedBy = Block->CreatedBy;
   if (BodyId == Id) {
+    Context.OriginalCases = Block->Cases;
+    Context.NewCases = Block->Cases;
+    Context.OriginalSuccessors = Block->Successors;
+    Context.NewSuccessors = Block->Successors;
+    Context.OriginalTerminator = Block->Terminator;
+    Context.NewTerminator = Block->Terminator;
     Block->BodyBlock = Id;
     Block->BodyMaterialized = true;
+    if (MaterializeResultHook) {
+      MaterializeResultHook(Context, PayloadMaterializeResult::Committed, {});
+    }
     return true;
   }
 
@@ -266,6 +282,12 @@ bool StructuredCFG::materializeBlockBodyImpl(
     // Fast path for current production backends. CFG identity stays on this
     // block: successors and switch targets must keep any copied-region rewrites
     // that were already applied.
+    Context.OriginalCases = Body->Cases;
+    Context.NewCases = Block->Cases;
+    Context.OriginalSuccessors = Body->Successors;
+    Context.NewSuccessors = Block->Successors;
+    Context.OriginalTerminator = Body->Terminator;
+    Context.NewTerminator = Block->Terminator;
     Block->Statements = Body->Statements;
     Block->Terminator = Body->Terminator;
     Block->Condition = Body->Condition;
@@ -275,14 +297,13 @@ bool StructuredCFG::materializeBlockBodyImpl(
 
     Block->BodyBlock = Id;
     Block->BodyMaterialized = true;
+    if (MaterializeResultHook) {
+      MaterializeResultHook(Context, PayloadMaterializeResult::Committed, {});
+    }
     return true;
   }
 
-  PayloadMaterializeContext Context;
   Context.SourceBlock = Body->SourceBlock;
-  Context.BodyBlock = BodyId;
-  Context.CopyBlock = Id;
-  Context.CopiedFromBlock = Block->CopiedFromBlock;
   if (!OriginalPredecessors.empty()) {
     Context.OriginalPredecessor = OriginalPredecessors.front();
   }

@@ -1499,8 +1499,13 @@ clang::ASTContext &SAFuncContext::getASTContext() {
 
 void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
                     HTypeResult &HT, const char *DebugDir) {
-  std::map<std::pair<llvm::Function *, std::string>, HType *> NameMapUpper;
-  std::map<std::pair<llvm::Function *, std::string>, HType *> NameMapLower;
+  // Keep both the demoted stack slot type and the original Phi type name.
+  // The stack slot carries a pointer to the original Phi type; later passes
+  // only need to see that demoted slot, not the deleted Phi node itself.
+  std::map<std::pair<llvm::Function *, std::string>, HType *>
+      SlotNameMapUpper;
+  std::map<std::pair<llvm::Function *, std::string>, HType *>
+      SlotNameMapLower;
   std::set<std::pair<llvm::Function *, std::string>> ContraVariantNameSet;
   std::set<const llvm::Value *> DemotedValues;
   auto PointerSize = M.getDataLayout().getPointerSize();
@@ -1529,8 +1534,8 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
             ContraVariantNameSet.insert(NameKey);
           }
           DemotedValues.insert(&PN);
-          auto ItUpper = NameMapUpper.insert({NameKey, UpperTy});
-          auto ItLower = NameMapLower.insert({NameKey, LowerTy});
+          auto ItUpper = SlotNameMapUpper.insert({NameKey, UpperTy});
+          auto ItLower = SlotNameMapLower.insert({NameKey, LowerTy});
           assert(ItUpper.second && "decompileModule: duplicate phi name?");
           assert(ItLower.second && "decompileModule: duplicate phi name?");
         }
@@ -1601,9 +1606,10 @@ void demoteSSAFixHT(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
             auto N = N1.substr(0, N1.length() - 8);
             AI.setName(N);
             auto Key = std::make_pair(&F, N);
-            auto UpperIt = NameMapUpper.find(Key);
-            auto LowerIt = NameMapLower.find(Key);
-            if (UpperIt == NameMapUpper.end() || LowerIt == NameMapLower.end()) {
+            auto UpperIt = SlotNameMapUpper.find(Key);
+            auto LowerIt = SlotNameMapLower.find(Key);
+            if (UpperIt == SlotNameMapUpper.end() ||
+                LowerIt == SlotNameMapLower.end()) {
               continue;
             }
             auto UpperTy = UpperIt->second;
