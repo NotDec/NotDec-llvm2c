@@ -95,6 +95,26 @@ struct HTypeResult {
       }
     }
   }
+  void eraseTypesForDemotedValues(const std::set<const llvm::Value *> &Values) {
+    auto References = [&Values](const ExtValuePtr &Value) {
+      if (auto *V = std::get_if<llvm::Value *>(&Value)) {
+        return *V != nullptr && Values.count(*V) != 0;
+      }
+      if (auto *C = std::get_if<UConstant>(&Value)) {
+        return (C->Val != nullptr && Values.count(C->Val) != 0) ||
+               (C->User != nullptr && Values.count(C->User) != 0);
+      }
+      if (auto *S = std::get_if<StackObject>(&Value)) {
+        return S->Allocator != nullptr && Values.count(S->Allocator) != 0;
+      }
+      if (auto *H = std::get_if<HeapObject>(&Value)) {
+        return H->Allocator != nullptr && Values.count(H->Allocator) != 0;
+      }
+      return false;
+    };
+    eraseValueTypesIf(References);
+    eraseContraVariantValuesIf(References);
+  }
   void print(llvm::raw_ostream &OS) const {
     // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
     // 因此这里先创建并预热一个 formatter，再统一打印 decl/type/memory，
