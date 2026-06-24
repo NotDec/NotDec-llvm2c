@@ -99,7 +99,7 @@ struct CFGBlock {
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
   bool BodyMaterialized = false;
-  // Synthetic forwarders stand for a virtualized original edge.
+  // Synthetic forwarders and their copies stand for a virtualized original edge.
   BlockId SyntheticSource = InvalidBlockId;
   BlockId SyntheticTarget = InvalidBlockId;
 

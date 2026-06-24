@@ -1353,6 +1353,31 @@ void testStructuredCFGDuplicateRegionRewritesInternalEdges() {
   assert(hasSinglePayload(CopyBody->Statements, 31));
 }
 
+void testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  BlockId Forwarder = Cfg.createSyntheticForwarder(
+      10, 2, CFGBlockCreator::SAILRDeoptimization);
+  assert(Forwarder != InvalidBlockId);
+  Cfg.addBlock(block(2, {}));
+
+  std::optional<DuplicatedRegion> CopyRegion =
+      Cfg.duplicateRegion({Forwarder});
+  assert(CopyRegion.has_value());
+
+  BlockId CopyId = CopyRegion->copyOf(Forwarder);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Id != Forwarder);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Forwarder);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->Successors == std::vector<BlockId>{2});
+  assert(Copy->SyntheticSource == 10);
+  assert(Copy->SyntheticTarget == 2);
+}
+
 void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -5929,6 +5954,7 @@ int main() {
   testStructuredCFGSuccessorsOfIncludesCaseTargets();
   testStructuredCFGSuccessorsOfDeduplicatesCaseTargets();
   testStructuredCFGDuplicateRegionRewritesInternalEdges();
+  testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
