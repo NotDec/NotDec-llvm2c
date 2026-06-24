@@ -1,6 +1,21 @@
 #include "notdec-backends/Structuring/StructuringOptimizationPass.h"
 
 namespace notdec::backend::structuring {
+namespace {
+
+ControlFlowStructureCounter
+qualityWithGotos(ControlFlowStructureCounter Quality,
+                 const GotoManager &Gotos) {
+  Quality.GotoTargets.clear();
+  for (const StructuredGoto &Goto : Gotos.gotos()) {
+    if (Goto.Target != InvalidBlockId) {
+      ++Quality.GotoTargets[Goto.Target];
+    }
+  }
+  return Quality;
+}
+
+} // namespace
 
 GotoManager StructuringOptimizationPass::getNewGotos(
     const StructuredCFG &Cfg, const StructuringEvaluation &Initial,
@@ -19,10 +34,10 @@ bool StructuringOptimizationPass::needsInitialEvaluation() const {
 bool StructuringOptimizationPass::acceptsFinalEvaluation(
     const StructuredCFG &Cfg, const StructuringEvaluation &Initial,
     const StructuringEvaluation &Current) const {
+  GotoManager FinalGotos = getNewGotos(Cfg, Initial, Current);
   if (Options.PreventNewGotos || Options.StrictlyLessGotos) {
     std::size_t InitialGotos = Initial.Gotos.size();
-    GotoManager NewGotos = getNewGotos(Cfg, Initial, Current);
-    std::size_t CurrentGotos = NewGotos.size();
+    std::size_t CurrentGotos = FinalGotos.size();
     if (Options.StrictlyLessGotos) {
       if (CurrentGotos >= InitialGotos) {
         return false;
@@ -32,9 +47,13 @@ bool StructuringOptimizationPass::acceptsFinalEvaluation(
     }
   }
 
-  if (Options.MustImproveRelativeQuality &&
-      !improvesRelativeStructuringQuality(Initial.Quality, Current.Quality)) {
-    return false;
+  if (Options.MustImproveRelativeQuality) {
+    ControlFlowStructureCounter FilteredCurrentQuality =
+        qualityWithGotos(Current.Quality, FinalGotos);
+    if (!improvesRelativeStructuringQuality(Initial.Quality,
+                                            FilteredCurrentQuality)) {
+      return false;
+    }
   }
 
   return true;

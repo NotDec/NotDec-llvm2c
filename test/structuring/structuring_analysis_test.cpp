@@ -334,6 +334,36 @@ protected:
   }
 };
 
+class RetargetFirstSuccessorIgnoringNewGotosPass
+    : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  const char *name() const override {
+    return "RetargetFirstSuccessorIgnoringNewGotosPass";
+  }
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    CFGBlock *Block = Graph.getBlock(0);
+    if (Block == nullptr || Block->Successors != std::vector<BlockId>({2})) {
+      return false;
+    }
+    Block->Successors = {1};
+    return true;
+  }
+
+  GotoManager getNewGotos(const StructuredCFG &Cfg,
+                          const StructuringEvaluation &Initial,
+                          const StructuringEvaluation &Current) const override {
+    (void)Cfg;
+    (void)Current;
+    return Initial.Gotos;
+  }
+};
+
 class RecoverThenRemoveSuccessorPass : public StructuringOptimizationPass {
 public:
   using StructuringOptimizationPass::StructuringOptimizationPass;
@@ -5007,6 +5037,26 @@ void testStructuringOptimizationPassCanOverrideNewGotos() {
   assert(Block0->Successors.front() == 1);
 }
 
+void testStructuringOptimizationPassUsesFilteredGotosForQuality() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {}));
+  Cfg.addBlock(block(2, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = true;
+  Options.MustImproveRelativeQuality = true;
+  CFGEdgeGotoRegionStructurer Structurer;
+  RetargetFirstSuccessorIgnoringNewGotosPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors == std::vector<BlockId>{1});
+}
+
 void testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -7620,6 +7670,7 @@ int main() {
   testStructuringOptimizationPassRejectsNewGotos();
   testStructuringOptimizationPassEnforcesStrictlyLessGotos();
   testStructuringOptimizationPassCanOverrideNewGotos();
+  testStructuringOptimizationPassUsesFilteredGotosForQuality();
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testStructuringOptimizationPassRejectsOnlyRolledBackChanges();
