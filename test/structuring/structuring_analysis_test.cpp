@@ -1559,6 +1559,57 @@ void testStructuredCFGDuplicateCopyKeepsSwitchBodySource() {
   assert(CaseRewrites == 1);
 }
 
+void testStructuredCFGMaterializeCopyOfCopyKeepsSwitchIdentity() {
+  StructuredCFG Cfg;
+
+  CFGBlock Source = switchBlock(10, {11, 12});
+  Source.Condition = {70};
+  Source.Cases.front().Value = {71};
+  Cfg.addBlock(std::move(Source));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(12, {}));
+
+  BlockId CopyId = Cfg.duplicateBlock(10, {11, 12});
+  assert(CopyId == 13);
+  BlockId CopyCopyId = Cfg.duplicateBlock(CopyId, {11, 12});
+  assert(CopyCopyId == 14);
+
+  bool SawCopyOfCopy = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t Index) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::SwitchCaseValue) {
+          return Payload;
+        }
+
+        assert(Context.SourceBlock == 10);
+        assert(Context.BodyBlock == 10);
+        assert(Context.CopyBlock == CopyCopyId);
+        assert(Context.CopiedFromBlock == CopyId);
+        assert(Context.OriginalCases.size() == 1);
+        assert(Context.NewCases.size() == 1);
+        assert(Context.OriginalCases.front().Target == 12);
+        assert(Context.NewCases.front().Target == 12);
+        assert(Context.OriginalSuccessors == std::vector<BlockId>({11, 12}));
+        assert(Context.NewSuccessors == std::vector<BlockId>({11, 12}));
+        assert(Context.OriginalTarget == 12);
+        assert(Context.NewTarget == 12);
+        assert(Index == 0);
+        SawCopyOfCopy = true;
+        return PayloadRef{Payload.Id + 1000};
+      });
+
+  assert(Cfg.materializeBlockBody(CopyCopyId));
+  const CFGBlock *CopyCopy = Cfg.getBlock(CopyCopyId);
+  assert(CopyCopy != nullptr);
+  assert(CopyCopy->BodyMaterialized);
+  assert(CopyCopy->BodyBlock == CopyCopyId);
+  assert(CopyCopy->Cases.front().Value.Id == 1071);
+  assert(CopyCopy->Cases.front().Target == 12);
+  assert(SawCopyOfCopy);
+}
+
 void testStructuredCFGMaterializeRejectsMismatchedSwitchCases() {
   StructuredCFG Cfg;
 
@@ -7578,6 +7629,7 @@ int main() {
   testStructuredCFGMaterializeFastPathReportsCommit();
   testStructuredCFGMaterializeFastPathKeepsCopiedSwitchIdentity();
   testStructuredCFGMaterializeSelfReportsFullContext();
+  testStructuredCFGMaterializeCopyOfCopyKeepsSwitchIdentity();
   testStructuredCFGMaterializeReportsGroupedPredecessors();
   testStructuredCFGMaterializeRewriteFailureIsAtomic();
   testGotoStructurerRendersVirtualBlockBodySource();
