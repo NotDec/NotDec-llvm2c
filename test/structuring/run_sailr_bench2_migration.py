@@ -276,8 +276,8 @@ exit:
     {
         "name": "switch_case_recovery_proxy",
         "angr_test": "test_reverting_switch_lowering_cksum_digest_print_filename",
-        "semantic": "LoweredSwitchSimplifier / switch recovery proxy",
-        "input": Path("external/NotDec-llvm2c/test/rellic/decomp/switch.c.ll"),
+        "semantic": "LoweredSwitchSimplifier / real switch recovery sample",
+        "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/switch_case_recovery.ll"),
         "contains": [
             "switch (a)",
             "case 1:",
