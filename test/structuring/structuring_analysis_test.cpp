@@ -929,6 +929,9 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
 
   const CFGBlock *Copy = Cfg.getBlock(CopyId);
   assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == 10);
+  assert(Copy->CopiedFromBlock == 10);
   assert(Copy->BodyMaterialized);
   assert(Copy->BodyBlock == CopyId);
   assert((Copy->Successors == std::vector<BlockId>{11, 12}));
@@ -1959,6 +1962,7 @@ void testStructuredCFGDuplicateSyntheticGotoReportsTargets() {
   assert(Copy->SourceBlock == Goto);
   assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
   assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->BodyBlock == Goto);
   assert(Copy->Successors.empty());
   assert(Copy->SyntheticSource == 10);
   assert(Copy->SyntheticTarget == 2);
@@ -1971,6 +1975,43 @@ void testStructuredCFGDuplicateSyntheticGotoReportsTargets() {
   assert(Copy->SyntheticSource == 10);
   assert(Copy->SyntheticTarget == 2);
   assert(SawGoto);
+}
+
+void testStructuredCFGDuplicateSyntheticGotoKeepsCopyIdentityChain() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  BlockId Goto = Cfg.createSyntheticGoto(30, 2, CFGBlockCreator::SAILRDeoptimization);
+  assert(Goto != InvalidBlockId);
+  Cfg.addBlock(block(2, {}));
+
+  std::optional<DuplicatedRegion> CopyRegion =
+      Cfg.duplicateRegion({Goto});
+  assert(CopyRegion.has_value());
+
+  BlockId CopyId = CopyRegion->copyOf(Goto);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Goto);
+  assert(Copy->CopiedFromBlock == Goto);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->BodyBlock == Goto);
+  assert(Copy->SyntheticSource == 30);
+  assert(Copy->SyntheticTarget == 2);
+
+  assert(Cfg.materializeBlockBody(CopyId));
+  Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Goto);
+  assert(Copy->CopiedFromBlock == Goto);
+  assert(Copy->CopyKind == CFGBlockCopyKind::RegionCopy);
+  assert(Copy->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Copy->SyntheticSource == 30);
+  assert(Copy->SyntheticTarget == 2);
 }
 
 void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
@@ -7710,6 +7751,7 @@ int main() {
   testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity();
   testStructuredCFGDuplicateSyntheticForwarderReportsTargets();
   testStructuredCFGDuplicateSyntheticGotoReportsTargets();
+  testStructuredCFGDuplicateSyntheticGotoKeepsCopyIdentityChain();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();

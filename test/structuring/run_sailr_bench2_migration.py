@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
 CASES = [
     {
         "name": "return_tail_cleanup",
@@ -44,7 +46,7 @@ CASES = [
     {
         "name": "switch_reuse_proxy",
         "angr_test": "test_decompiling_sha384sum_digest_bsd_split_3",
-        "semantic": "LoweredSwitchSimplifier / switch reuse proxy",
+        "semantic": "LoweredSwitchSimplifier / switch reuse proxy (scaffold)",
         "ir": r"""
 define i32 @main(i32 %x) {
 entry:
@@ -82,7 +84,7 @@ exit:
     {
         "name": "duplication_reverter_proxy",
         "angr_test": "test_true_a_graph_deduplication",
-        "semantic": "DuplicationReverter / duplicated tail proxy",
+        "semantic": "DuplicationReverter / duplicated tail proxy (scaffold)",
         "ir": r"""
 declare i32 @malloc(i64)
 
@@ -109,7 +111,7 @@ tail:
     {
         "name": "duplication_too_sensitive_proxy",
         "angr_test": "test_deduplication_too_sensitive_split_3",
-        "semantic": "DuplicationReverter / keep-legit-duplicate proxy",
+        "semantic": "DuplicationReverter / keep-legit-duplicate proxy (scaffold)",
         "ir": r"""
 define i32 @main(i32 %x) {
 entry:
@@ -133,6 +135,79 @@ merge:
         "absent": ["malloc", "goto then", "goto else", "phi"],
     },
     {
+        "name": "early_return_proxy",
+        "angr_test": "test_decompiling_uname_main",
+        "semantic": "ReturnDuplicatorLow / early return proxy",
+        "ir": r"""
+declare void @a()
+
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %ret, label %cont
+
+ret:
+  ret i32 1
+
+cont:
+  call void @a()
+  ret i32 0
+}
+""",
+        "contains": ["if (x == 0)", "return 1;", "return 0;"],
+        "absent": ["goto ret", "goto cont"],
+    },
+    {
+        "name": "switch_case_recovery_proxy",
+        "angr_test": "test_reverting_switch_lowering_cksum_digest_print_filename",
+        "semantic": "LoweredSwitchSimplifier / switch recovery proxy",
+        "input": Path("external/NotDec-llvm2c/test/rellic/decomp/switch.c.ll"),
+        "contains": [
+            "switch (a)",
+            "case 1:",
+            "case 12:",
+            "case 123:",
+            "default:",
+            "return *(int *)&temp_1;",
+        ],
+        "absent": ["goto "],
+    },
+    {
+        "name": "switch_cluster_proxy",
+        "angr_test": "test_reverting_switch_clustering_and_lowering_fmt_main",
+        "semantic": "LoweredSwitchSimplifier / switch clustering proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+
+define i32 @main(i32 %x) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+default:
+  call void @a()
+  br label %exit
+
+case1:
+  call void @b()
+  br label %exit
+
+case2:
+  call void @c()
+  br label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
+        "absent": ["goto case1", "goto case2", "goto default"],
+    },
+    {
         "name": "condensing_real_lighttpd",
         "angr_test": "test_who_condensing_opt_reversion",
         "semantic": "CrossJumpReverter / real condensing sample",
@@ -152,6 +227,8 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     if input_path is None:
         input_path = work_dir / f"{case['name']}.ll"
         input_path.write_text(case["ir"].strip() + "\n")
+    elif not input_path.is_absolute():
+        input_path = REPO_ROOT / input_path
     output_path = work_dir / f"{case['name']}.c"
     proc = subprocess.run(
         [
