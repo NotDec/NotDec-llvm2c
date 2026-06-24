@@ -3563,6 +3563,72 @@ void testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion() {
   assert(hasSinglePayload(Cfg.getBlock(5)->Statements, 33));
 }
 
+void testSwitchDefaultCaseDuplicatorKeepsPredSensitiveCopiesSeparate() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock Default = block(1, {4});
+  Default.Statements.push_back({31});
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock Tail = block(4, {});
+  Tail.Statements.push_back({32});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(6, {3, 1}));
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &Context, PayloadMaterializeKind Kind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::Statement) {
+          return Payload;
+        }
+        assert(Context.OriginalPredecessor != InvalidBlockId);
+        assert(Context.NewPredecessor != InvalidBlockId);
+        assert(Context.OriginalPredecessors.size() == 1);
+        assert(Context.NewPredecessors.size() == 1);
+        return PayloadRef{Payload.Id + Context.NewPredecessor * 1000};
+      },
+      /*SupportsPredecessorRewrite=*/true);
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  const CFGBlock *Pred3 = Cfg.getBlock(3);
+  const CFGBlock *Pred6 = Cfg.getBlock(6);
+  assert(DefaultBlock != nullptr && Pred3 != nullptr && Pred6 != nullptr);
+  assert(DefaultBlock->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(DefaultBlock->Statements, 31));
+
+  BlockId Copy3Id = Pred3->Successors.front();
+  BlockId Copy6Id = Pred6->Successors[1];
+  assert(Copy3Id != 1);
+  assert(Copy6Id != 1);
+  assert(Copy3Id != Copy6Id);
+
+  const CFGBlock *Copy3 = Cfg.getBlock(Copy3Id);
+  const CFGBlock *Copy6 = Cfg.getBlock(Copy6Id);
+  assert(Copy3 != nullptr && Copy6 != nullptr);
+  assert(Copy3->SourceBlock == 1);
+  assert(Copy6->SourceBlock == 1);
+  assert(hasSinglePayload(Copy3->Statements, 31 + 3 * 1000));
+  assert(hasSinglePayload(Copy6->Statements, 31 + 6 * 1000));
+
+  const CFGBlock *Copy3Tail = Cfg.getBlock(Copy3->Successors.front());
+  const CFGBlock *Copy6Tail = Cfg.getBlock(Copy6->Successors.front());
+  assert(Copy3Tail != nullptr && Copy6Tail != nullptr);
+  assert(Copy3Tail->SourceBlock == 4);
+  assert(Copy6Tail->SourceBlock == 4);
+  assert(hasSinglePayload(Copy3Tail->Statements, 32 + Copy3->Id * 1000));
+  assert(hasSinglePayload(Copy6Tail->Statements, 32 + Copy6->Id * 1000));
+}
+
 void testSwitchReusedEntryRewriterCreatesGotoForReusedEntryBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {3, 1}));
@@ -6900,6 +6966,7 @@ int main() {
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
+  testSwitchDefaultCaseDuplicatorKeepsPredSensitiveCopiesSeparate();
   testSwitchDefaultCaseDuplicatorCommitsRewriteAtomically();
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
