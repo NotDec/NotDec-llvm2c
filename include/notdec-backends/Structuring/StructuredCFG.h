@@ -73,6 +73,8 @@ struct PayloadMaterializeContext {
   BlockId NewPredecessor = InvalidBlockId;
   BlockId OriginalTarget = InvalidBlockId;
   BlockId NewTarget = InvalidBlockId;
+  std::vector<SwitchCase> OriginalCases;
+  std::vector<SwitchCase> NewCases;
   std::vector<BlockId> OriginalSuccessors;
   std::vector<BlockId> NewSuccessors;
   TerminatorKind OriginalTerminator = TerminatorKind::Fallthrough;

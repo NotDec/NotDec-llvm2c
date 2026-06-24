@@ -778,6 +778,12 @@ void testStructuredCFGMaterializeRewritesCopiedPayloads() {
         assert(Context.CopyBlock == 13);
         assert(Context.OriginalPredecessor == 90);
         assert(Context.NewPredecessor == 91);
+        assert(Context.OriginalCases.size() == 1);
+        assert(Context.NewCases.size() == 1);
+        assert(Context.OriginalCases.front().Value.Id == 71);
+        assert(Context.NewCases.front().Value.Id == InvalidPayloadId);
+        assert(Context.OriginalCases.front().Target == 12);
+        assert(Context.NewCases.front().Target == 12);
         assert(Context.OriginalSuccessors == std::vector<BlockId>({11, 12}));
         assert(Context.NewSuccessors == std::vector<BlockId>({11, 12}));
         assert(Context.OriginalTerminator == TerminatorKind::Switch);
@@ -1126,6 +1132,16 @@ void testStructuredCFGMaterializesCopiedSwitchWithoutRewritingTargets() {
         assert(Context.CopyBlock == CopySwitchId);
         assert(Context.OriginalPredecessor == 90);
         assert(Context.NewPredecessor == 91);
+        assert(Context.OriginalCases.size() == 2);
+        assert(Context.NewCases.size() == 2);
+        assert(Context.OriginalCases[0].Value.Id == 71);
+        assert(Context.OriginalCases[1].Value.Id == 72);
+        assert(Context.NewCases[0].Value.Id == InvalidPayloadId);
+        assert(Context.NewCases[1].Value.Id == InvalidPayloadId);
+        assert(Context.OriginalCases[0].Target == 12);
+        assert(Context.OriginalCases[1].Target == 11);
+        assert(Context.NewCases[0].Target == 12);
+        assert(Context.NewCases[1].Target == CopyBodyId);
         assert(Context.OriginalSuccessors == std::vector<BlockId>({11, 12}));
         assert(Context.NewSuccessors ==
                std::vector<BlockId>({CopyBodyId, 12}));
