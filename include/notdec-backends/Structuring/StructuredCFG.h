@@ -164,6 +164,9 @@ public:
   BlockId createSyntheticGoto(
       BlockId Source, BlockId Target,
       CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
+  BlockId createSyntheticGotoEdge(
+      BlockId Source, BlockId Target,
+      CFGBlockCreator Creator = CFGBlockCreator::StructuredCFG);
   BlockId duplicateBlock(
       BlockId Source, std::vector<BlockId> Successors,
       CFGBlockCopyKind CopyKind = CFGBlockCopyKind::RegionCopy,

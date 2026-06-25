@@ -1183,11 +1183,11 @@ void testGotoStructurerRendersSyntheticForwarder() {
 void testGotoStructurerRendersSyntheticGoto() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(10, {}));
-  BlockId Synthetic = Cfg.createSyntheticGoto(20, 10);
+  BlockId Synthetic = Cfg.createSyntheticGotoEdge(20, 10);
 
   StructuredTree Tree = GotoStructurer().structure(Cfg);
   bool FoundSyntheticBody = false;
-  bool FoundSyntheticGoto = false;
+  std::size_t SyntheticGotoCount = 0;
   for (const StructuredNode &Node : Tree.nodes()) {
     if (Node.Kind == StructuredNodeKind::BasicBlock &&
         Node.Block == Synthetic) {
@@ -1195,12 +1195,12 @@ void testGotoStructurerRendersSyntheticGoto() {
       assert(Node.Statements.empty());
     }
     if (Node.Kind == StructuredNodeKind::Goto && Node.Target == 10) {
-      FoundSyntheticGoto = true;
+      ++SyntheticGotoCount;
     }
   }
 
   assert(FoundSyntheticBody);
-  assert(FoundSyntheticGoto);
+  assert(SyntheticGotoCount == 1);
 }
 
 void testSolidityBodyBuilderRendersVirtualBlockBodySource() {
@@ -2068,6 +2068,15 @@ void testStructuredCFGCreateSyntheticBlock() {
   assert(GotoBlock->Successors.empty());
   assert(GotoBlock->SyntheticSource == 30);
   assert(GotoBlock->SyntheticTarget == 10);
+
+  BlockId GotoEdge = Cfg.createSyntheticGotoEdge(40, 10);
+  const CFGBlock *GotoEdgeBlock = Cfg.getBlock(GotoEdge);
+  assert(GotoEdgeBlock != nullptr);
+  assert(GotoEdgeBlock->Origin == CFGBlockOrigin::Synthetic);
+  assert(GotoEdgeBlock->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(GotoEdgeBlock->Successors == std::vector<BlockId>{10});
+  assert(GotoEdgeBlock->SyntheticSource == 40);
+  assert(GotoEdgeBlock->SyntheticTarget == 10);
 }
 
 void testCrossJumpReverterDuplicatesLinearGotoTarget() {
@@ -4053,8 +4062,8 @@ void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault() {
   assert(Goto1->SyntheticSource == 3);
   assert(Goto0->SyntheticTarget == 1);
   assert(Goto1->SyntheticTarget == 1);
-  assert(Goto0->Successors.empty());
-  assert(Goto1->Successors.empty());
+  assert(Goto0->Successors == std::vector<BlockId>{1});
+  assert(Goto1->Successors == std::vector<BlockId>{1});
 }
 
 void testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders() {
@@ -4131,8 +4140,8 @@ void testSwitchDefaultCaseDuplicatorGotosTerminalSharedDefault() {
   assert(Goto1->Origin == CFGBlockOrigin::Synthetic);
   assert(Goto0->CopyKind == CFGBlockCopyKind::SyntheticGoto);
   assert(Goto1->CopyKind == CFGBlockCopyKind::SyntheticGoto);
-  assert(Goto0->Successors.empty());
-  assert(Goto1->Successors.empty());
+  assert(Goto0->Successors == std::vector<BlockId>{1});
+  assert(Goto1->Successors == std::vector<BlockId>{1});
   assert(Goto0->SyntheticSource == 0);
   assert(Goto1->SyntheticSource == 3);
   assert(Goto0->SyntheticTarget == 1);

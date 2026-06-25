@@ -105,6 +105,18 @@ BlockId StructuredCFG::createSyntheticGoto(BlockId Source, BlockId Target,
   return Id;
 }
 
+BlockId StructuredCFG::createSyntheticGotoEdge(BlockId Source, BlockId Target,
+                                               CFGBlockCreator Creator) {
+  BlockId Id = createSyntheticGoto(Source, Target, Creator);
+  CFGBlock *Block = getBlock(Id);
+  if (Block == nullptr) {
+    return InvalidBlockId;
+  }
+
+  Block->Successors = {Target};
+  return Id;
+}
+
 BlockId StructuredCFG::duplicateBlock(BlockId Source,
                                       std::vector<BlockId> Successors,
                                       CFGBlockCopyKind Kind,

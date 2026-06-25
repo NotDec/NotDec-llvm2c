@@ -1301,7 +1301,7 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
 
       BlockId RewriteBlock =
           SharedDefaultMode == SharedDefaultRewriteMode::SyntheticGoto
-              ? DefaultCandidate.createSyntheticGoto(
+              ? DefaultCandidate.createSyntheticGotoEdge(
                     SwitchPred, DefaultTarget,
                     CFGBlockCreator::SAILRDeoptimization)
               : DefaultCandidate.createSyntheticForwarder(
@@ -1335,7 +1335,8 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     for (BlockId Pred : Preds) {
       const CFGBlock *PredBlock = Candidate.getBlock(Pred);
       if (PredBlock != nullptr &&
-          PredBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder &&
+          (PredBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder ||
+           PredBlock->CopyKind == CFGBlockCopyKind::SyntheticGoto) &&
           PredBlock->SyntheticTarget == DefaultTarget) {
         continue;
       }

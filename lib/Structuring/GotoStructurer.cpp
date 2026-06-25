@@ -109,6 +109,9 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
       break;
     }
     case TerminatorKind::Fallthrough:
+      if (isSyntheticGotoBlock(Block)) {
+        break;
+      }
       for (BlockId Succ : Block.Successors) {
         Root.Children.push_back(Tree.addNode(makeGoto(Succ)));
       }
