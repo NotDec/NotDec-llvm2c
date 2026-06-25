@@ -475,6 +475,15 @@ bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   return false;
 }
 
+bool switchCaseEdgeReachesBlock(const CFGBlock &Block, BlockId Target) {
+  if (!switchCaseReachesBlock(Block, Target)) {
+    return false;
+  }
+  std::size_t CaseSuccessorStart = Block.Successors.empty() ? 0 : 1;
+  return std::find(Block.Successors.begin() + CaseSuccessorStart,
+                   Block.Successors.end(), Target) != Block.Successors.end();
+}
+
 bool redirectSwitchCases(StructuredCFG &Graph, BlockId OldTarget,
                          BlockId NewTarget,
                          const std::vector<BlockId> &SwitchPreds) {
@@ -1065,7 +1074,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
 
     std::vector<BlockId> SwitchPreds;
     for (const CFGBlock &PredBlock : Candidate.blocks()) {
-      if (switchCaseReachesBlock(PredBlock, EntryId)) {
+      if (switchCaseEdgeReachesBlock(PredBlock, EntryId)) {
         SwitchPreds.push_back(PredBlock.Id);
       }
     }
@@ -1098,7 +1107,8 @@ bool SwitchReusedEntryRewriter::runOnGraph(
     for (std::size_t I = 1; I < SwitchPreds.size(); ++I) {
       BlockId Pred = SwitchPreds[I];
       const CFGBlock *PredBlock = Candidate.getBlock(Pred);
-      if (PredBlock == nullptr || !switchCaseReachesBlock(*PredBlock, EntryId)) {
+      if (PredBlock == nullptr ||
+          !switchCaseEdgeReachesBlock(*PredBlock, EntryId)) {
         continue;
       }
 

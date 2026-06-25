@@ -4507,6 +4507,35 @@ void testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail() {
   assert(hasSinglePayload(TailAfterRewrite->Statements, 24));
 }
 
+void testSwitchReusedEntryRewriterKeepsLowestSwitchIdEntry() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(10, {12, 1}));
+  Cfg.addBlock(block(12, {}));
+  Cfg.addBlock(switchBlock(0, {11, 1}));
+  Cfg.addBlock(block(1, {20}));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(20, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch10 = Cfg.getBlock(10);
+  assert(Switch0 != nullptr && Switch10 != nullptr);
+  assert(Switch0->Cases.front().Target == 1);
+  assert(Switch10->Cases.front().Target != 1);
+
+  const CFGBlock *Goto = Cfg.getBlock(Switch10->Cases.front().Target);
+  assert(Goto != nullptr);
+  assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto->SyntheticSource == 10);
+  assert(Goto->SyntheticTarget == 1);
+  assert(Goto->Successors.empty());
+}
+
 void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {2, 1}));
@@ -4537,6 +4566,33 @@ void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
   assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
   assert(Goto->SyntheticSource == 3);
   assert(Goto->SyntheticTarget == 1);
+}
+
+void testSwitchReusedEntryRewriterRequiresRealCaseEdge() {
+  StructuredCFG Cfg;
+  CFGBlock Switch0 = switchBlock(0, {2, 1});
+  Cfg.addBlock(std::move(Switch0));
+
+  CFGBlock Switch3 = switchBlock(3, {5, 6});
+  Switch3.Cases.front().Target = 1;
+  Cfg.addBlock(std::move(Switch3));
+
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(4, {}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Switch3Block = Cfg.getBlock(3);
+  assert(Switch3Block != nullptr);
+  assert(Switch3Block->Cases.front().Target == 1);
+  assert(Switch3Block->Successors == std::vector<BlockId>({5, 6}));
 }
 
 void testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets() {
@@ -7826,7 +7882,9 @@ int main() {
   testReturnDuplicatorLowRollsBackGroupedPredecessorFailure();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
+  testSwitchReusedEntryRewriterKeepsLowestSwitchIdEntry();
   testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched();
+  testSwitchReusedEntryRewriterRequiresRealCaseEdge();
   testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets();
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
   testSwitchReusedEntryRewriterSkipsTooManyReusedEntries();
