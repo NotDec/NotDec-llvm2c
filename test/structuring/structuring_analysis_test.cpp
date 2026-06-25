@@ -2660,6 +2660,30 @@ void testDuplicationReverterMatchesTrueAGraphDeduplication() {
   assert(hasSinglePayload(Merged->Statements, 71));
 }
 
+void testDuplicationReverterKeepsProgrammerWrittenDuplication() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {}));
+
+  CFGBlock *Block1 = Cfg.getBlock(1);
+  CFGBlock *Block2 = Cfg.getBlock(2);
+  assert(Block1 != nullptr && Block2 != nullptr);
+  Block1->Statements.push_back({81});
+  Block2->Statements.push_back({81});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(2) != nullptr);
+  std::vector<BlockId> ExpectedSuccs = {1, 2};
+  assert(Cfg.getBlock(0)->Successors == ExpectedSuccs);
+}
+
 void testDuplicationReverterCommitsMergeAtomically() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -7946,6 +7970,7 @@ int main() {
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testDuplicationReverterMatchesTrueAGraphDeduplication();
+  testDuplicationReverterKeepsProgrammerWrittenDuplication();
   testDuplicationReverterCommitsMergeAtomically();
   testDuplicationReverterRedirectsSwitchPredecessorCases();
   testDuplicationReverterSkipsWhenDropCannotBeRemoved();
