@@ -1,5 +1,6 @@
 
 #include "notdec-backends/Structuring/StructurerRegistry.h"
+#include "notdec-backends/Structuring/SAILRDeoptimization.h"
 
 struct StructurerChoice {
   std::string_view Name =
@@ -58,14 +59,73 @@ static cl::opt<bool>
         "filter-unused-definitions",
         cl::desc("Only print referenced type declarations and definitions."),
         cl::init(false), cl::cat(NotdecLLVM2CCat));
+struct SAILRDefaultRewriteModeChoice {
+  ::notdec::llvm2c::SAILRDefaultRewriteMode Mode =
+      ::notdec::llvm2c::SAILRDefaultRewriteMode::SyntheticGoto;
+
+  friend bool operator==(const SAILRDefaultRewriteModeChoice &Lhs,
+                         const SAILRDefaultRewriteModeChoice &Rhs) {
+    return Lhs.Mode == Rhs.Mode;
+  }
+};
+
+namespace llvm::cl {
+template <> struct OptionValue<SAILRDefaultRewriteModeChoice> final
+    : OptionValueCopy<SAILRDefaultRewriteModeChoice> {
+  using WrapperType = SAILRDefaultRewriteModeChoice;
+
+  OptionValue() = default;
+  OptionValue(const SAILRDefaultRewriteModeChoice &V) { this->setValue(V); }
+
+  OptionValue<SAILRDefaultRewriteModeChoice> &
+  operator=(const SAILRDefaultRewriteModeChoice &V) {
+    this->setValue(V);
+    return *this;
+  }
+};
+} // namespace llvm::cl
+
+static cl::opt<SAILRDefaultRewriteModeChoice> sailrDefaultRewriteMode(
+    "sailr-default-rewrite-mode",
+    cl::desc("Choose the shared SAILR switch-default rewrite mode."),
+    cl::init(SAILRDefaultRewriteModeChoice{}), cl::cat(NotdecLLVM2CCat));
+static bool InitSAILRDefaultRewriteModeChoices = []() {
+  auto &Parser = sailrDefaultRewriteMode.getParser();
+  Parser.addLiteralOption(
+      "goto", SAILRDefaultRewriteModeChoice{
+                  ::notdec::llvm2c::SAILRDefaultRewriteMode::SyntheticGoto},
+      "use Angr-style synthetic goto blocks");
+  Parser.addLiteralOption(
+      "forwarder", SAILRDefaultRewriteModeChoice{
+                       ::notdec::llvm2c::SAILRDefaultRewriteMode::
+                           SyntheticForwarder},
+      "use the older synthetic-forwarder rewrite");
+  return true;
+}();
+static cl::opt<bool> sailrUseSyntheticForwarder(
+    "sailr-use-synthetic-forwarder",
+    cl::desc("Compatibility alias for --sailr-default-rewrite-mode=forwarder."),
+    cl::init(false), cl::cat(NotdecLLVM2CCat));
 
 ::notdec::llvm2c::Options getLLVM2COptions() {
+  ::notdec::llvm2c::SAILRDefaultRewriteMode DefaultRewriteMode =
+      ::notdec::llvm2c::normalizeSAILRDefaultRewriteMode(
+          sailrUseSyntheticForwarder, sailrDefaultRewriteMode.getValue().Mode);
   ::notdec::llvm2c::Options Opts = {
       .noDemoteSSA = noDemoteSSA,
       .enableColor = enableColor,
       .filterUnusedDefinitions = filterUnusedDefinitions,
+      .sailrDefaultRewriteMode = DefaultRewriteMode,
       .structurer = std::string(Algo.getValue().Name),
       .workDir = "",
   };
+  ::notdec::backend::structuring::setDefaultSAILRDeoptimizationPipelineOptions(
+      {.SharedDefaultMode =
+           DefaultRewriteMode ==
+                   ::notdec::llvm2c::SAILRDefaultRewriteMode::SyntheticForwarder
+               ? ::notdec::backend::structuring::SwitchDefaultCaseDuplicator::
+                     SharedDefaultRewriteMode::SyntheticForwarder
+               : ::notdec::backend::structuring::SwitchDefaultCaseDuplicator::
+                     SharedDefaultRewriteMode::SyntheticGoto});
   return Opts;
 }

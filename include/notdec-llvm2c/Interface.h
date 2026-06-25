@@ -14,10 +14,24 @@
 
 namespace notdec::llvm2c {
 
+enum class SAILRDefaultRewriteMode {
+  SyntheticGoto,
+  SyntheticForwarder,
+};
+
+inline SAILRDefaultRewriteMode
+normalizeSAILRDefaultRewriteMode(bool UseSyntheticForwarder,
+                                 SAILRDefaultRewriteMode SelectedMode) {
+  return UseSyntheticForwarder ? SAILRDefaultRewriteMode::SyntheticForwarder
+                               : SelectedMode;
+}
+
 struct Options {
   bool noDemoteSSA = false;
   bool enableColor = false;
   bool filterUnusedDefinitions = false;
+  SAILRDefaultRewriteMode sailrDefaultRewriteMode =
+      SAILRDefaultRewriteMode::SyntheticGoto;
   std::string structurer;
   std::string workDir;
 };

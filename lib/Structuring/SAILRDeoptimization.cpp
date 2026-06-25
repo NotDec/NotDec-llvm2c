@@ -1728,6 +1728,17 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
   return Changed;
 }
 
+SAILRDeoptimizationPipelineOptions &
+defaultSAILRDeoptimizationPipelineOptions() {
+  static SAILRDeoptimizationPipelineOptions Options;
+  return Options;
+}
+
+void setDefaultSAILRDeoptimizationPipelineOptions(
+    SAILRDeoptimizationPipelineOptions Options) {
+  defaultSAILRDeoptimizationPipelineOptions() = Options;
+}
+
 StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline(
     SAILRDeoptimizationPipelineOptions Options) {
   StructuringOptimizationPipeline Pipeline;

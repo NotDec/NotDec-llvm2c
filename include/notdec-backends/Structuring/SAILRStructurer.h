@@ -14,7 +14,7 @@ public:
   SAILRStructurer(bool ImprovePhoenix = true, unsigned PostDomMaxEdges = 10,
                   unsigned PostDomMaxGraphSize = 50,
                   SAILRDeoptimizationPipelineOptions DeoptOptions =
-                      SAILRDeoptimizationPipelineOptions())
+                      defaultSAILRDeoptimizationPipelineOptions())
       : ImprovePhoenix(ImprovePhoenix), PostDomMaxEdges(PostDomMaxEdges),
         PostDomMaxGraphSize(PostDomMaxGraphSize),
         DeoptOptions(DeoptOptions) {}

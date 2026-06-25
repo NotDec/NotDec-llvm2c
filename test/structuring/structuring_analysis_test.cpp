@@ -1203,6 +1203,41 @@ void testGotoStructurerRendersSyntheticGoto() {
   assert(SyntheticGotoCount == 1);
 }
 
+void testPhoenixStructurerRendersElseIfScope() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  CFGBlock Then = block(1, {3});
+  Then.Statements.push_back({41});
+  Cfg.addBlock(std::move(Then));
+
+  CFGBlock Else = block(2, {3});
+  Else.Statements.push_back({42});
+  Cfg.addBlock(std::move(Else));
+
+  CFGBlock Merge = block(3, {});
+  Merge.Terminator = TerminatorKind::Return;
+  Merge.Statements.push_back({43});
+  Cfg.addBlock(std::move(Merge));
+
+  StructuredTree Tree = PhoenixStructurer().structure(Cfg);
+  bool FoundIf = false;
+  bool FoundThen = false;
+  bool FoundElse = false;
+  for (const StructuredNode &Node : Tree.nodes()) {
+    if (Node.Kind == StructuredNodeKind::If) {
+      FoundIf = true;
+    } else if (Node.Kind == StructuredNodeKind::BasicBlock && Node.Block == 1) {
+      FoundThen = hasSinglePayload(Node.Statements, 41);
+    } else if (Node.Kind == StructuredNodeKind::BasicBlock && Node.Block == 2) {
+      FoundElse = hasSinglePayload(Node.Statements, 42);
+    }
+  }
+
+  assert(FoundIf);
+  assert(FoundThen);
+  assert(FoundElse);
+}
+
 void testSolidityBodyBuilderRendersVirtualBlockBodySource() {
   std::vector<std::string> Payloads = {"copy-body"};
   StructuredTree Tree;
@@ -2014,6 +2049,58 @@ void testStructuredCFGDuplicateSyntheticGotoKeepsCopyIdentityChain() {
   assert(Copy->SyntheticTarget == 2);
 }
 
+void testStructuredCFGMaterializeCopiedSyntheticGotoKeepsIdentity() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  BlockId Goto = Cfg.createSyntheticGoto(30, 2, CFGBlockCreator::SAILRDeoptimization);
+  assert(Goto != InvalidBlockId);
+  Cfg.addBlock(block(2, {}));
+
+  bool SawCommit = false;
+  Cfg.setPayloadMaterializeResultHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeResult Result,
+          const std::vector<PayloadRef> &Payloads) {
+        assert(Context.SourceBlock == Goto);
+        assert(Context.BodyBlock == Goto);
+        assert(Context.CopyBlock != InvalidBlockId);
+        assert(Context.CopiedFromBlock == Goto);
+        assert(Context.SyntheticSource == 30);
+        assert(Context.SyntheticTarget == 2);
+        assert(Context.CopyKind == CFGBlockCopyKind::RegionCopy);
+        assert(Context.CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+        assert(Result == PayloadMaterializeResult::Committed);
+        assert(Payloads.empty());
+        SawCommit = true;
+      });
+
+  std::optional<DuplicatedRegion> CopyRegion =
+      Cfg.duplicateRegion({Goto});
+  assert(CopyRegion.has_value());
+
+  BlockId CopyId = CopyRegion->copyOf(Goto);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Goto);
+  assert(Copy->CopiedFromBlock == Goto);
+  assert(Copy->BodyBlock == Goto);
+  assert(Copy->SyntheticSource == 30);
+  assert(Copy->SyntheticTarget == 2);
+
+  assert(Cfg.materializeBlockBody(CopyId));
+  Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->Origin == CFGBlockOrigin::Copied);
+  assert(Copy->SourceBlock == Goto);
+  assert(Copy->CopiedFromBlock == Goto);
+  assert(Copy->BodyMaterialized);
+  assert(Copy->BodyBlock == CopyId);
+  assert(Copy->SyntheticSource == 30);
+  assert(Copy->SyntheticTarget == 2);
+  assert(SawCommit);
+}
+
 void testStructuredCFGDuplicateRegionRollsBackOnMissingBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2684,6 +2771,32 @@ void testDuplicationReverterKeepsProgrammerWrittenDuplication() {
   assert(Cfg.getBlock(0)->Successors == ExpectedSuccs);
 }
 
+void testDuplicationReverterMergesDuplicatedTailProxyShape() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {}));
+
+  CFGBlock *Block1 = Cfg.getBlock(1);
+  CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block1 != nullptr && Block3 != nullptr);
+  Block1->Statements.push_back({71});
+  Block3->Statements.push_back({71});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(3) == nullptr);
+  const CFGBlock *Merged = Cfg.getBlock(1);
+  assert(Merged != nullptr);
+  assert(Merged->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(Merged->Statements, 71));
+}
+
 void testDuplicationReverterCommitsMergeAtomically() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -2930,6 +3043,56 @@ void testDuplicationReverterKeepsValidEndGotos() {
   assert(Filtered.size() == 2);
   assert(Filtered.isGotoEdge(0, 1));
   assert(Filtered.isGotoEdge(1, 2));
+}
+
+void testDuplicationReverterSeparatesWrittenAndMergeableDuplication() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+
+  CFGBlock Mergeable1 = block(1, {3});
+  Mergeable1.Statements.push_back({91});
+  Cfg.addBlock(std::move(Mergeable1));
+
+  CFGBlock Mergeable2 = block(2, {3});
+  Mergeable2.Statements.push_back({91});
+  Cfg.addBlock(std::move(Mergeable2));
+
+  Cfg.addBlock(block(3, {}));
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(2) != nullptr);
+  std::vector<BlockId> ExpectedSuccs = {1, 2};
+  assert(Cfg.getBlock(0)->Successors == ExpectedSuccs);
+}
+
+void testDuplicationReverterKeepsPayloadDivergentDuplicateBranches() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {3});
+  ThenBlock.Statements.push_back({101});
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {3});
+  ElseBlock.Statements.push_back({102});
+  Cfg.addBlock(std::move(ElseBlock));
+
+  Cfg.addBlock(block(3, {}));
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(hasSinglePayload(Cfg.getBlock(1)->Statements, 101));
+  assert(hasSinglePayload(Cfg.getBlock(2)->Statements, 102));
 }
 
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
@@ -4265,6 +4428,38 @@ void testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse() {
   assert(hasSinglePayload(DefaultBlock->Statements, 24));
 }
 
+void testLoweredSwitchSimplifierKeepsSwitchReuseShape() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {9, 1, 2, 3}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {4}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(9, {}));
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Cases.size() == 3);
+  assert(Switch->Successors.front() == 9);
+  assert(!Changed || Switch->Cases[0].Target != 1 ||
+         Switch->Cases[1].Target != 2 || Switch->Cases[2].Target != 3);
+
+  const CFGBlock *Case1 = Cfg.getBlock(1);
+  const CFGBlock *Case2 = Cfg.getBlock(2);
+  const CFGBlock *Case3 = Cfg.getBlock(3);
+  assert(Case1 != nullptr && Case2 != nullptr && Case3 != nullptr);
+  assert(Case1->Successors == std::vector<BlockId>{4});
+  assert(Case2->Successors == std::vector<BlockId>{4});
+  assert(Case3->Successors == std::vector<BlockId>{4});
+}
+
 void testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -5236,6 +5431,58 @@ void testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse() {
   assert(hasSinglePayload(CopyTail->Statements, 82));
 }
 
+void testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {20, 10}));
+  Cfg.addBlock(switchBlock(1, {10, 30}));
+
+  CFGBlock OuterDefault = block(10, {11});
+  OuterDefault.Statements.push_back({41});
+  Cfg.addBlock(std::move(OuterDefault));
+
+  CFGBlock InnerSwitch = switchBlock(11, {12, 13});
+  InnerSwitch.Cases.front().Value = {510};
+  InnerSwitch.Cases.back().Value = {511};
+  Cfg.addBlock(std::move(InnerSwitch));
+
+  CFGBlock Inner1 = block(12, {14});
+  Inner1.Statements.push_back({42});
+  Cfg.addBlock(std::move(Inner1));
+
+  CFGBlock Inner2 = block(13, {14});
+  Inner2.Statements.push_back({43});
+  Cfg.addBlock(std::move(Inner2));
+
+  CFGBlock Exit = block(14, {});
+  Exit.Terminator = TerminatorKind::Return;
+  Exit.Statements.push_back({44});
+  Cfg.addBlock(std::move(Exit));
+
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(30, {}));
+
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch1 = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Switch1 != nullptr);
+  assert(Switch0->Successors.size() == 2);
+  assert(Switch1->Successors.size() == 2);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(10) != nullptr);
+  assert(Cfg.getBlock(11) != nullptr);
+  assert(Cfg.getBlock(12) != nullptr);
+  assert(Cfg.getBlock(13) != nullptr);
+  assert(hasSinglePayload(Cfg.getBlock(10)->Statements, 41));
+  assert(hasSinglePayload(Cfg.getBlock(12)->Statements, 42));
+  assert(hasSinglePayload(Cfg.getBlock(13)->Statements, 43));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -5520,6 +5767,14 @@ void testSAILRDeoptimizationPipelineCanUseSharedDefaultForwarders() {
   assert(Forwarder1->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
   assert(Forwarder0->SyntheticTarget == 1);
   assert(Forwarder1->SyntheticTarget == 1);
+}
+
+void testSAILRDefaultSharedRewriteModeUsesSyntheticGoto() {
+  SAILRDeoptimizationPipelineOptions Options =
+      defaultSAILRDeoptimizationPipelineOptions();
+  assert(Options.SharedDefaultMode ==
+         SwitchDefaultCaseDuplicator::SharedDefaultRewriteMode::
+             SyntheticGoto);
 }
 
 void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
@@ -7943,6 +8198,7 @@ int main() {
   testGotoStructurerRendersVirtualBlockBodySource();
   testGotoStructurerRendersSyntheticForwarder();
   testGotoStructurerRendersSyntheticGoto();
+  testPhoenixStructurerRendersElseIfScope();
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
@@ -7966,11 +8222,14 @@ int main() {
   testStructuredCFGDuplicateSyntheticForwarderReportsTargets();
   testStructuredCFGDuplicateSyntheticGotoReportsTargets();
   testStructuredCFGDuplicateSyntheticGotoKeepsCopyIdentityChain();
+  testStructuredCFGMaterializeCopiedSyntheticGotoKeepsIdentity();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testDuplicationReverterMatchesTrueAGraphDeduplication();
   testDuplicationReverterKeepsProgrammerWrittenDuplication();
+  testDuplicationReverterMergesDuplicatedTailProxyShape();
+  testDuplicationReverterKeepsPayloadDivergentDuplicateBranches();
   testDuplicationReverterCommitsMergeAtomically();
   testDuplicationReverterRedirectsSwitchPredecessorCases();
   testDuplicationReverterSkipsWhenDropCannotBeRemoved();
@@ -7979,6 +8238,7 @@ int main() {
   testDuplicationReverterFiltersFutureIrreducibleGotos();
   testDuplicationReverterKeepsGotosWithinEndpointCutoff();
   testDuplicationReverterKeepsValidEndGotos();
+  testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
@@ -8021,11 +8281,13 @@ int main() {
   testLoweredSwitchSimplifierCopiesTerminalForkCaseRegion();
   testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
   testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse();
+  testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault();
   testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders();
   testSwitchDefaultCaseDuplicatorGotosTerminalSharedDefault();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
+  testLoweredSwitchSimplifierKeepsSwitchReuseShape();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
   testSwitchDefaultCaseDuplicatorKeepsPredSensitiveCopiesSeparate();
@@ -8047,6 +8309,7 @@ int main() {
   testStructuringOptimizationPipelineSkipsRejectedPassAndContinues();
   testSAILRDeoptimizationPipelineMatchesAngrOrder();
   testSAILRDeoptimizationPipelineCanUseSharedDefaultForwarders();
+  testSAILRDefaultSharedRewriteModeUsesSyntheticGoto();
   testSAILRDeoptimizationDefaultOptionsMatchAngr();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();

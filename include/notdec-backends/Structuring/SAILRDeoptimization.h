@@ -137,6 +137,11 @@ struct SAILRDeoptimizationPipelineOptions {
       SwitchDefaultCaseDuplicator::SharedDefaultRewriteMode::SyntheticGoto;
 };
 
+SAILRDeoptimizationPipelineOptions &
+defaultSAILRDeoptimizationPipelineOptions();
+void setDefaultSAILRDeoptimizationPipelineOptions(
+    SAILRDeoptimizationPipelineOptions Options);
+
 StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline(
     SAILRDeoptimizationPipelineOptions Options =
         SAILRDeoptimizationPipelineOptions());
