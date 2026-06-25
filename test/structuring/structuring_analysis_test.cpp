@@ -2631,6 +2631,35 @@ void testDuplicationReverterMergesExactDuplicateBlocks() {
   assert(hasSinglePayload(NewBlock1->Statements, 7));
 }
 
+void testDuplicationReverterMatchesTrueAGraphDeduplication() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {}));
+
+  CFGBlock *Block1 = Cfg.getBlock(1);
+  CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block1 != nullptr && Block3 != nullptr);
+  Block1->Statements.push_back({71});
+  Block3->Statements.push_back({71});
+  Block1->BodyMaterialized = true;
+  Block3->BodyMaterialized = true;
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(3) == nullptr);
+
+  const CFGBlock *Merged = Cfg.getBlock(1);
+  assert(Merged != nullptr);
+  assert(Merged->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(Merged->Statements, 71));
+}
+
 void testDuplicationReverterCommitsMergeAtomically() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -7916,6 +7945,7 @@ int main() {
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
+  testDuplicationReverterMatchesTrueAGraphDeduplication();
   testDuplicationReverterCommitsMergeAtomically();
   testDuplicationReverterRedirectsSwitchPredecessorCases();
   testDuplicationReverterSkipsWhenDropCannotBeRemoved();
