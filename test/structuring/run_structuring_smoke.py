@@ -141,6 +141,31 @@ exit:
         "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
     },
     {
+        "name": "fmt_deduplication_like",
+        "ir": r"""
+declare void @xdectoumax()
+
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %left, label %right
+
+left:
+  call void @xdectoumax()
+  br label %merge
+
+right:
+  call void @xdectoumax()
+  br label %merge
+
+merge:
+  ret i32 0
+}
+""",
+        "contains": ["xdectoumax()", "xdectoumax()", "return 0;"],
+        "absent": ["goto left", "goto right"],
+    },
+    {
         "name": "real_switch_fixture",
         "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/switch_case_recovery.ll"),
         "contains": ["switch (a)", "case 1:", "case 12:", "case 123:",
@@ -156,6 +181,44 @@ exit:
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
+    },
+    {
+        "name": "shared_synthetic_goto_switch_reuse",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+default:
+  call void @a()
+  br label %merge
+
+case1:
+  call void @b()
+  br label %merge
+
+case2:
+  call void @c()
+  br label %merge
+
+merge:
+  %cond = icmp eq i32 %y, 0
+  br i1 %cond, label %default, label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["goto structured_block_1;", "goto structured_block_2;",
+                      "goto structured_block_3;"],
+        "absent": ["unknown"],
     },
     {
         "name": "switch_before_sequence",
@@ -231,6 +294,18 @@ merge:
 """,
         "contains": ["if (x == 0)", "return 1;", "return 0;"],
         "absent": ["phi"],
+    },
+    {
+        "name": "phi_demote_before_structuring_htype",
+        "input": Path("test/type-recovery/llvm-ir/cases/09_OffsetLoop.ll"),
+        "contains": ["while", "break;", "return"],
+        "absent": ["phi"],
+    },
+    {
+        "name": "phi_demote_before_structuring_htype_summary",
+        "input": Path("test/type-recovery/llvm-ir/cases/09_OffsetLoop.ll"),
+        "contains": ["while", "break;", "return"],
+        "absent": ["phi", "notdec.phi"],
     },
     {
         "name": "linear_do_while",
@@ -364,6 +439,15 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     return failures
 
 
+def resolve_notdec_llvm2c(exe: Path) -> Path:
+    if exe.exists():
+        return exe
+    fallback = REPO_ROOT / "build/external/NotDec-llvm2c/bin/notdec-llvm2c"
+    if fallback.exists():
+        return fallback
+    return exe
+
+
 def run_sailr_improved_phoenix_case(notdec_llvm2c: Path,
                                     work_dir: Path) -> list[str]:
     case = next(c for c in CASES if c["name"] == "linear_while_break")
@@ -397,14 +481,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notdec-llvm2c", required=True, type=Path)
     args = parser.parse_args()
+    notdec_llvm2c = resolve_notdec_llvm2c(args.notdec_llvm2c)
 
     all_failures = []
     with tempfile.TemporaryDirectory(prefix="notdec-structuring-") as tmp:
         work_dir = Path(tmp)
         for case in CASES:
-            all_failures.extend(run_case(args.notdec_llvm2c, work_dir, case))
+            all_failures.extend(run_case(notdec_llvm2c, work_dir, case))
         all_failures.extend(
-            run_sailr_improved_phoenix_case(args.notdec_llvm2c, work_dir))
+            run_sailr_improved_phoenix_case(notdec_llvm2c, work_dir))
 
     if all_failures:
         print("\n".join(all_failures))
