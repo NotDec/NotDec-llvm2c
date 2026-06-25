@@ -5403,11 +5403,44 @@ void testSAILRDeoptimizationPipelineMatchesAngrOrder() {
   assert((Pipeline.passNames() == std::vector<std::string>{
                                       "SwitchDefaultCaseDuplicator",
                                       "DuplicationReverter",
+                                      "SwitchReusedEntryRewriter",
                                       "LoweredSwitchSimplifier",
                                       "ReturnDuplicatorLow",
                                       "CrossJumpReverter",
-                                      "SwitchReusedEntryRewriter",
                                   }));
+}
+
+void testSAILRDeoptimizationPipelineCanUseSharedDefaultForwarders() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+  Cfg.addBlock(switchBlock(3, {1, 4}));
+  Cfg.addBlock(block(1, {5}));
+  Cfg.addBlock(block(2, {5}));
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {}));
+
+  SAILRDeoptimizationPipelineOptions Options;
+  Options.SharedDefaultMode =
+      SwitchDefaultCaseDuplicator::SharedDefaultRewriteMode::SyntheticForwarder;
+
+  PhoenixStructurer Structurer;
+  StructuringOptimizationPipeline Pipeline =
+      buildSAILRDeoptimizationPipeline(Options);
+  StructuringOptimizationPipelineResult Result = Pipeline.run(Cfg, Structurer);
+
+  assert(Result.Changed);
+  const CFGBlock *Switch0 = Result.Output.getBlock(0);
+  const CFGBlock *Switch1 = Result.Output.getBlock(3);
+  assert(Switch0 != nullptr && Switch1 != nullptr);
+  const CFGBlock *Forwarder0 =
+      Result.Output.getBlock(Switch0->Successors.front());
+  const CFGBlock *Forwarder1 =
+      Result.Output.getBlock(Switch1->Successors.front());
+  assert(Forwarder0 != nullptr && Forwarder1 != nullptr);
+  assert(Forwarder0->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
+  assert(Forwarder1->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
+  assert(Forwarder0->SyntheticTarget == 1);
+  assert(Forwarder1->SyntheticTarget == 1);
 }
 
 void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
@@ -7931,6 +7964,7 @@ int main() {
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
   testStructuringOptimizationPipelineSkipsRejectedPassAndContinues();
   testSAILRDeoptimizationPipelineMatchesAngrOrder();
+  testSAILRDeoptimizationPipelineCanUseSharedDefaultForwarders();
   testSAILRDeoptimizationDefaultOptionsMatchAngr();
   testRecursiveStructurerVisitsChildBeforeParent();
   testRecursiveStructurerVisitsDissolvedChildMembers();

@@ -1593,6 +1593,7 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     if (!SameTarget) {
       continue;
     }
+
     if (!Graph.hasEdge(Block.Id, Target)) {
       continue;
     }
@@ -1727,14 +1728,16 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
   return Changed;
 }
 
-StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline() {
+StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline(
+    SAILRDeoptimizationPipelineOptions Options) {
   StructuringOptimizationPipeline Pipeline;
-  Pipeline.addPass(std::make_unique<SwitchDefaultCaseDuplicator>());
+  Pipeline.addPass(std::make_unique<SwitchDefaultCaseDuplicator>(
+      SwitchDefaultCaseDuplicator::defaultOptions(), Options.SharedDefaultMode));
   Pipeline.addPass(std::make_unique<DuplicationReverter>());
+  Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
   Pipeline.addPass(std::make_unique<LoweredSwitchSimplifier>());
   Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
-  Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
   return Pipeline;
 }
 

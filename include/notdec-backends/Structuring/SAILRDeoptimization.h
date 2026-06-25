@@ -132,7 +132,14 @@ private:
   std::size_t MaxDuplicatedStatements;
 };
 
-StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline();
+struct SAILRDeoptimizationPipelineOptions {
+  SwitchDefaultCaseDuplicator::SharedDefaultRewriteMode SharedDefaultMode =
+      SwitchDefaultCaseDuplicator::SharedDefaultRewriteMode::SyntheticGoto;
+};
+
+StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline(
+    SAILRDeoptimizationPipelineOptions Options =
+        SAILRDeoptimizationPipelineOptions());
 
 } // namespace notdec::backend::structuring
 

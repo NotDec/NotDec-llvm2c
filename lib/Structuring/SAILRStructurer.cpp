@@ -1,7 +1,5 @@
 #include "notdec-backends/Structuring/SAILRStructurer.h"
 
-#include "notdec-backends/Structuring/SAILRDeoptimization.h"
-
 #include <algorithm>
 #include <utility>
 
@@ -111,7 +109,8 @@ filterByReturnTarget(const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
 } // namespace
 
 StructuredTree SAILRStructurer::structure(const StructuredCFG &Cfg) {
-  StructuringOptimizationPipeline Pipeline = buildSAILRDeoptimizationPipeline();
+  StructuringOptimizationPipeline Pipeline =
+      buildSAILRDeoptimizationPipeline(DeoptOptions);
   StructuringOptimizationPipelineResult Result = Pipeline.run(Cfg, *this);
   return PhoenixStructurer::structure(Result.Changed ? Result.Output : Cfg);
 }

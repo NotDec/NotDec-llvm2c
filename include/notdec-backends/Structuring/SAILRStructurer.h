@@ -2,6 +2,7 @@
 #define NOTDEC_BACKENDS_STRUCTURING_SAILRSTRUCTURER_H
 
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
+#include "notdec-backends/Structuring/SAILRDeoptimization.h"
 
 namespace notdec::backend::structuring {
 
@@ -11,9 +12,12 @@ namespace notdec::backend::structuring {
 class SAILRStructurer : public PhoenixStructurer {
 public:
   SAILRStructurer(bool ImprovePhoenix = true, unsigned PostDomMaxEdges = 10,
-                  unsigned PostDomMaxGraphSize = 50)
+                  unsigned PostDomMaxGraphSize = 50,
+                  SAILRDeoptimizationPipelineOptions DeoptOptions =
+                      SAILRDeoptimizationPipelineOptions())
       : ImprovePhoenix(ImprovePhoenix), PostDomMaxEdges(PostDomMaxEdges),
-        PostDomMaxGraphSize(PostDomMaxGraphSize) {}
+        PostDomMaxGraphSize(PostDomMaxGraphSize),
+        DeoptOptions(DeoptOptions) {}
 
   StructuredTree structure(const StructuredCFG &Cfg) override;
 
@@ -31,6 +35,7 @@ private:
   bool ImprovePhoenix;
   unsigned PostDomMaxEdges;
   unsigned PostDomMaxGraphSize;
+  SAILRDeoptimizationPipelineOptions DeoptOptions;
 };
 
 } // namespace notdec::backend::structuring
