@@ -198,6 +198,93 @@ void testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes() {
   assert(HT.hasValueType(A, true));
 }
 
+void testDemoteSSAFixHTMovesNamedPhiTypesToDemotedAlloca() {
+  llvm::LLVMContext Ctx;
+  llvm::Module M("phi-demote-test-named", Ctx);
+  M.setDataLayout("e-p:32:32");
+
+  auto *SinkTy = llvm::FunctionType::get(llvm::Type::getVoidTy(Ctx),
+                                         {llvm::Type::getInt32Ty(Ctx)}, false);
+  auto *Sink = llvm::Function::Create(SinkTy, llvm::GlobalValue::ExternalLinkage,
+                                      "sink", M);
+  llvm::Type *I1 = llvm::Type::getInt1Ty(Ctx);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Ctx);
+  auto *FTy = llvm::FunctionType::get(I32, {I1, I32, I32}, false);
+  auto *F = llvm::Function::Create(FTy, llvm::GlobalValue::ExternalLinkage,
+                                   "named_phi", M);
+
+  auto ArgIt = F->arg_begin();
+  llvm::Argument *Cond = &*ArgIt++;
+  llvm::Argument *A = &*ArgIt++;
+  llvm::Argument *B = &*ArgIt++;
+
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", F);
+  auto *Then = llvm::BasicBlock::Create(Ctx, "then", F);
+  auto *Else = llvm::BasicBlock::Create(Ctx, "else", F);
+  auto *Merge = llvm::BasicBlock::Create(Ctx, "merge", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  Builder.CreateCondBr(Cond, Then, Else);
+  Builder.SetInsertPoint(Then);
+  Builder.CreateBr(Merge);
+  Builder.SetInsertPoint(Else);
+  Builder.CreateBr(Merge);
+  Builder.SetInsertPoint(Merge);
+
+  auto *Phi = Builder.CreatePHI(I32, 2, "mergev");
+  Phi->addIncoming(A, Then);
+  Phi->addIncoming(B, Else);
+  Builder.CreateCall(Sink, {Phi});
+  Builder.CreateRet(Builder.CreateAdd(Phi, llvm::ConstantInt::get(I32, 1)));
+
+  notdec::llvm2c::HTypeResult HT;
+  HT.HTCtx = std::make_shared<notdec::ast::HTypeContext>();
+  auto *I32Ty = HT.HTCtx->getIntegerType(false, 32, false);
+  HT.ValueTypesLower.insert({Phi, I32Ty});
+  HT.ValueTypesUpper.insert({Phi, I32Ty});
+  HT.ContraVariantValues.insert(Phi);
+
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB;
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  notdec::llvm2c::demoteSSAFixHT(M, MAM, HT, nullptr);
+
+  assert(!hasPhi(*F));
+  llvm::AllocaInst *PhiSlot = nullptr;
+  for (llvm::BasicBlock &BB : *F) {
+    for (llvm::Instruction &I : BB) {
+      if (auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&I)) {
+        if (AI->getAllocatedType()->isIntegerTy()) {
+          PhiSlot = AI;
+        }
+      }
+    }
+  }
+
+  assert(PhiSlot != nullptr);
+  assert(HT.hasValueType(PhiSlot, true));
+  assert(HT.hasValueType(PhiSlot, false));
+  assert(HT.getValueType(PhiSlot, true) != nullptr);
+  assert(HT.getValueType(PhiSlot, false) != nullptr);
+  assert(HT.getValueType(PhiSlot, true)->isPointerType());
+  assert(HT.getValueType(PhiSlot, false)->isPointerType());
+  assert(HT.getValueType(PhiSlot, true)->getPointeeType() == I32Ty);
+  assert(HT.getValueType(PhiSlot, false)->getPointeeType() == I32Ty);
+  assert(HT.prefersUpperValueType(PhiSlot));
+  assert(HT.ContraVariantValues.count(PhiSlot) != 0);
+  assert(HT.ValueTypesLower.count(Phi) == 0);
+  assert(HT.ValueTypesUpper.count(Phi) == 0);
+  (void)Sink;
+}
+
 void testHTypeResultErasesTypesForDemotedValues() {
   llvm::LLVMContext Ctx;
   llvm::Module M("phi-demote-htype-cleanup", Ctx);
@@ -257,6 +344,7 @@ void testHTypeResultErasesTypesForDemotedValues() {
 int main() {
   testDemoteSSAFixHTKeepsUnnamedPhiTypes();
   testDemoteSSAFixHTDropsPhiRefsFromWrittenTypes();
+  testDemoteSSAFixHTMovesNamedPhiTypesToDemotedAlloca();
   testHTypeResultErasesTypesForDemotedValues();
   return 0;
 }
