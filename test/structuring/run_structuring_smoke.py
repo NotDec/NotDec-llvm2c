@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
 CASES = [
     {
         "name": "linear_while",
@@ -137,6 +139,13 @@ exit:
 }
 """,
         "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
+    },
+    {
+        "name": "real_switch_fixture",
+        "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/switch_case_recovery.ll"),
+        "contains": ["switch (a)", "case 1:", "case 12:", "case 123:",
+                      "default:", "return *(int *)&temp_1;"],
+        "absent": ["goto ", "case 7:"],
     },
     {
         "name": "switch_before_sequence",
@@ -296,9 +305,13 @@ exit:
 
 
 def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
-    input_path = work_dir / f"{case['name']}.ll"
     output_path = work_dir / f"{case['name']}.c"
-    input_path.write_text(case["ir"].strip() + "\n")
+    input_path = case.get("input")
+    if input_path is None:
+        input_path = work_dir / f"{case['name']}.ll"
+        input_path.write_text(case["ir"].strip() + "\n")
+    elif not input_path.is_absolute():
+        input_path = REPO_ROOT / input_path
 
     proc = subprocess.run(
         [
