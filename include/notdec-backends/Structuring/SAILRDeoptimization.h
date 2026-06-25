@@ -48,17 +48,30 @@ private:
 
 class SwitchDefaultCaseDuplicator : public StructuringOptimizationPass {
 public:
+  // Angr models a reused switch default as a synthetic goto block. The
+  // forwarder mode keeps the older NotDec behavior available for comparison.
+  enum class SharedDefaultRewriteMode {
+    SyntheticGoto,
+    SyntheticForwarder,
+  };
+
   static StructuringOptimizationOptions defaultOptions();
 
   explicit SwitchDefaultCaseDuplicator(
-      StructuringOptimizationOptions Options = defaultOptions())
-      : StructuringOptimizationPass(Options) {}
+      StructuringOptimizationOptions Options = defaultOptions(),
+      SharedDefaultRewriteMode SharedDefaultMode =
+          SharedDefaultRewriteMode::SyntheticGoto)
+      : StructuringOptimizationPass(Options),
+        SharedDefaultMode(SharedDefaultMode) {}
 
   const char *name() const override { return "SwitchDefaultCaseDuplicator"; }
 
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override;
+
+private:
+  SharedDefaultRewriteMode SharedDefaultMode;
 };
 
 class SwitchReusedEntryRewriter : public StructuringOptimizationPass {

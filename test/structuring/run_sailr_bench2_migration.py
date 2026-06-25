@@ -274,7 +274,7 @@ exit:
         "absent": ["goto head", "goto c;"],
     },
     {
-        "name": "switch_case_recovery_proxy",
+        "name": "switch_case_recovery_real",
         "angr_test": "test_reverting_switch_lowering_cksum_digest_print_filename",
         "semantic": "LoweredSwitchSimplifier / real switch recovery sample",
         "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/switch_case_recovery.ll"),

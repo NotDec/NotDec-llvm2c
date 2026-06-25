@@ -3997,7 +3997,7 @@ void testSwitchDefaultCaseDuplicatorCommitsRewriteAtomically() {
   assert(Cfg.getBlock(Switch3->Successors.front()) != nullptr);
 }
 
-void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
+void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
   Cfg.addBlock(switchBlock(3, {1, 4}));
@@ -4032,23 +4032,60 @@ void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   assert(DefaultBlock->Successors == std::vector<BlockId>{5});
   assert(hasSinglePayload(DefaultBlock->Statements, 21));
 
+  const CFGBlock *Goto0 = Cfg.getBlock(Switch0->Successors.front());
+  const CFGBlock *Goto1 = Cfg.getBlock(Switch1->Successors.front());
+  assert(Goto0 != nullptr && Goto1 != nullptr);
+  assert(Goto0->BodyBlock == Goto0->Id);
+  assert(Goto1->BodyBlock == Goto1->Id);
+  assert(Goto0->Statements.empty());
+  assert(Goto1->Statements.empty());
+  assert(Goto0->Terminator == TerminatorKind::Fallthrough);
+  assert(Goto1->Terminator == TerminatorKind::Fallthrough);
+  assert(Goto0->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto1->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto0->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto1->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto0->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Goto1->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(Goto0->BodyMaterialized);
+  assert(Goto1->BodyMaterialized);
+  assert(Goto0->SyntheticSource == 0);
+  assert(Goto1->SyntheticSource == 3);
+  assert(Goto0->SyntheticTarget == 1);
+  assert(Goto1->SyntheticTarget == 1);
+  assert(Goto0->Successors.empty());
+  assert(Goto1->Successors.empty());
+}
+
+void testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+  Cfg.addBlock(switchBlock(3, {1, 4}));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({21});
+  Cfg.addBlock(std::move(Default));
+
+  Cfg.addBlock(block(2, {5}));
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions(),
+      SwitchDefaultCaseDuplicator::SharedDefaultRewriteMode::
+          SyntheticForwarder);
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch1 = Cfg.getBlock(3);
+  assert(Switch0 != nullptr && Switch1 != nullptr);
   const CFGBlock *Forwarder0 = Cfg.getBlock(Switch0->Successors.front());
   const CFGBlock *Forwarder1 = Cfg.getBlock(Switch1->Successors.front());
   assert(Forwarder0 != nullptr && Forwarder1 != nullptr);
-  assert(Forwarder0->BodyBlock == Forwarder0->Id);
-  assert(Forwarder1->BodyBlock == Forwarder1->Id);
-  assert(Forwarder0->Statements.empty());
-  assert(Forwarder1->Statements.empty());
-  assert(Forwarder0->Terminator == TerminatorKind::Fallthrough);
-  assert(Forwarder1->Terminator == TerminatorKind::Fallthrough);
-  assert(Forwarder0->Origin == CFGBlockOrigin::Synthetic);
-  assert(Forwarder1->Origin == CFGBlockOrigin::Synthetic);
   assert(Forwarder0->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
   assert(Forwarder1->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
-  assert(Forwarder0->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
-  assert(Forwarder1->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
-  assert(Forwarder0->BodyMaterialized);
-  assert(Forwarder1->BodyMaterialized);
   assert(Forwarder0->SyntheticSource == 0);
   assert(Forwarder1->SyntheticSource == 3);
   assert(Forwarder0->SyntheticTarget == 1);
@@ -4057,7 +4094,7 @@ void testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders() {
   assert(Forwarder1->Successors == std::vector<BlockId>{1});
 }
 
-void testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault() {
+void testSwitchDefaultCaseDuplicatorGotosTerminalSharedDefault() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
   Cfg.addBlock(switchBlock(3, {1, 4}));
@@ -4087,19 +4124,19 @@ void testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault() {
   assert(DefaultBlock->Terminator == TerminatorKind::Return);
   assert(hasSinglePayload(DefaultBlock->Statements, 24));
 
-  const CFGBlock *Forwarder0 = Cfg.getBlock(Switch0->Successors.front());
-  const CFGBlock *Forwarder1 = Cfg.getBlock(Switch3->Successors.front());
-  assert(Forwarder0 != nullptr && Forwarder1 != nullptr);
-  assert(Forwarder0->Origin == CFGBlockOrigin::Synthetic);
-  assert(Forwarder1->Origin == CFGBlockOrigin::Synthetic);
-  assert(Forwarder0->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
-  assert(Forwarder1->CopyKind == CFGBlockCopyKind::SyntheticForwarder);
-  assert(Forwarder0->Successors == std::vector<BlockId>{1});
-  assert(Forwarder1->Successors == std::vector<BlockId>{1});
-  assert(Forwarder0->SyntheticSource == 0);
-  assert(Forwarder1->SyntheticSource == 3);
-  assert(Forwarder0->SyntheticTarget == 1);
-  assert(Forwarder1->SyntheticTarget == 1);
+  const CFGBlock *Goto0 = Cfg.getBlock(Switch0->Successors.front());
+  const CFGBlock *Goto1 = Cfg.getBlock(Switch3->Successors.front());
+  assert(Goto0 != nullptr && Goto1 != nullptr);
+  assert(Goto0->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto1->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto0->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto1->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto0->Successors.empty());
+  assert(Goto1->Successors.empty());
+  assert(Goto0->SyntheticSource == 0);
+  assert(Goto1->SyntheticSource == 3);
+  assert(Goto0->SyntheticTarget == 1);
+  assert(Goto1->SyntheticTarget == 1);
 }
 
 void testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse() {
@@ -7803,8 +7840,9 @@ int main() {
   testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
   testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
-  testSwitchDefaultCaseDuplicatorInsertsSharedDefaultForwarders();
-  testSwitchDefaultCaseDuplicatorForwardsTerminalSharedDefault();
+  testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault();
+  testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders();
+  testSwitchDefaultCaseDuplicatorGotosTerminalSharedDefault();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();

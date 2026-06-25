@@ -148,6 +148,16 @@ exit:
         "absent": ["goto ", "case 7:"],
     },
     {
+        "name": "real_condensing_fixture",
+        "input": Path(
+            "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
+            "lighttpd/1-main_init_once.ll"
+        ),
+        "contains": ["goto structured_block_1;", "goto structured_block_4;",
+                      "goto structured_block_6;"],
+        "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
+    },
+    {
         "name": "switch_before_sequence",
         "ir": r"""
 declare void @a()

@@ -1289,13 +1289,19 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
         break;
       }
 
-      BlockId Forwarder = DefaultCandidate.createSyntheticForwarder(
-          SwitchPred, DefaultTarget, CFGBlockCreator::SAILRDeoptimization);
-      if (Forwarder == InvalidBlockId ||
+      BlockId RewriteBlock =
+          SharedDefaultMode == SharedDefaultRewriteMode::SyntheticGoto
+              ? DefaultCandidate.createSyntheticGoto(
+                    SwitchPred, DefaultTarget,
+                    CFGBlockCreator::SAILRDeoptimization)
+              : DefaultCandidate.createSyntheticForwarder(
+                    SwitchPred, DefaultTarget,
+                    CFGBlockCreator::SAILRDeoptimization);
+      if (RewriteBlock == InvalidBlockId ||
           !replaceDefaultSwitchSuccessor(DefaultCandidate, SwitchPred, DefaultTarget,
-                                         Forwarder)) {
-        if (Forwarder != InvalidBlockId) {
-          DefaultCandidate.removeBlock(Forwarder);
+                                         RewriteBlock)) {
+        if (RewriteBlock != InvalidBlockId) {
+          DefaultCandidate.removeBlock(RewriteBlock);
         }
         Failed = true;
         break;
