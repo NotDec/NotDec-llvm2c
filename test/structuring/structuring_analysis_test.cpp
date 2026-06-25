@@ -4790,6 +4790,48 @@ void testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail() {
   assert(hasSinglePayload(TailAfterRewrite->Statements, 24));
 }
 
+void testSwitchReusedEntryRewriterPreservesReusedEntryTail() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {3, 1}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(switchBlock(2, {5, 1}));
+  Cfg.addBlock(block(3, {6}));
+  Cfg.addBlock(block(4, {6}));
+  Cfg.addBlock(block(5, {}));
+  Cfg.addBlock(block(6, {}));
+
+  CFGBlock *Entry = Cfg.getBlock(1);
+  CFGBlock *Tail = Cfg.getBlock(4);
+  assert(Entry != nullptr && Tail != nullptr);
+  Entry->Statements.push_back({22});
+  Tail->Statements.push_back({24});
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *EntryBlock = Cfg.getBlock(1);
+  const CFGBlock *TailBlock = Cfg.getBlock(4);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch2 = Cfg.getBlock(2);
+  assert(EntryBlock != nullptr && TailBlock != nullptr && Switch0 != nullptr &&
+         Switch2 != nullptr);
+  assert(hasSinglePayload(EntryBlock->Statements, 22));
+  assert(hasSinglePayload(TailBlock->Statements, 24));
+  assert(Switch0->Cases.front().Target == 1);
+  assert(Switch2->Cases.front().Target != 1);
+
+  const CFGBlock *Goto = Cfg.getBlock(Switch2->Cases.front().Target);
+  assert(Goto != nullptr);
+  assert(Goto->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto->Successors.empty());
+  assert(Goto->SyntheticSource == 2);
+  assert(Goto->SyntheticTarget == 1);
+}
+
 void testSwitchReusedEntryRewriterKeepsLowestSwitchIdEntry() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(10, {12, 1}));
@@ -8266,6 +8308,7 @@ int main() {
   testReturnDuplicatorLowRollsBackGroupedPredecessorFailure();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
+  testSwitchReusedEntryRewriterPreservesReusedEntryTail();
   testSwitchReusedEntryRewriterKeepsLowestSwitchIdEntry();
   testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched();
   testSwitchReusedEntryRewriterRequiresRealCaseEdge();
