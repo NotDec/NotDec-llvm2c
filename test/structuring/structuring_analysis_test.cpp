@@ -1634,8 +1634,8 @@ void testSolidityBodyBuilderReadsCopiedSharedPhiAssignments() {
 
   assert(containsLineSubstring(Out, "p_copy1 = a;"));
   assert(containsLineSubstring(Out, "p = b;"));
-  assert(containsLineSubstring(Out, "return p_copy1"));
-  assert(containsLineSubstring(Out, "return p"));
+  assert(containsLineSubstring(Out, "return p_copy1;"));
+  assert(containsLineSubstring(Out, "return p;"));
 }
 
 void testSolidityBodyBuilderRewritesCopiedDephicationVVars() {
