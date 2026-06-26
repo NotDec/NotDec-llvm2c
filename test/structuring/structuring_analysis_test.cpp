@@ -3568,6 +3568,58 @@ void testDuplicationReverterMatchesTrueAGraphDeduplication() {
   assert(hasSinglePayload(Merged->Statements, 71));
 }
 
+void testDuplicationReverterMergesCopiedPayloadByOrigin() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(4, {}));
+
+  CFGBlock Source = block(1, {4});
+  Source.Statements.push_back({72});
+  Cfg.addBlock(std::move(Source));
+
+  std::vector<BlockId> SeenOrigins;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Kind != PayloadMaterializeKind::Statement) {
+          return Payload;
+        }
+        assert(Context.OriginalPredecessor != InvalidBlockId);
+        assert(Context.NewPredecessor != InvalidBlockId);
+        SeenOrigins.push_back(Payload.Id);
+        return PayloadRef{Payload.Id + Context.NewPredecessor * 1000};
+      },
+      /*SupportsPredecessorRewrite=*/true);
+
+  BlockId Copy1 = Cfg.duplicateBlock(1, {4});
+  BlockId Copy2 = Cfg.duplicateBlock(1, {4});
+  assert(Copy1 != InvalidBlockId && Copy2 != InvalidBlockId);
+  assert(Cfg.materializeBlockBody(Copy1, 10, 11));
+  assert(Cfg.materializeBlockBody(Copy2, 20, 21));
+
+  assert(Cfg.payloadOrigin(Cfg.getBlock(Copy1)->Statements.front().Id) == 72);
+  assert(Cfg.payloadOrigin(Cfg.getBlock(Copy2)->Statements.front().Id) == 72);
+
+  Cfg.getBlock(0)->Successors = {Copy1};
+  Cfg.getBlock(2)->Successors = {Copy2};
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(Copy2) == nullptr);
+
+  const CFGBlock *Merged = Cfg.getBlock(Copy1);
+  assert(Merged != nullptr);
+  assert(Merged->Origin == CFGBlockOrigin::Copied);
+  assert(Merged->SourceBlock == 1);
+  assert(Merged->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(Merged->Statements, 11072));
+}
+
 void testDuplicationReverterMergesExactDuplicateBlocksWithCopiedSuccessorReference() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -9690,6 +9742,7 @@ int main() {
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testDuplicationReverterMatchesTrueAGraphDeduplication();
+  testDuplicationReverterMergesCopiedPayloadByOrigin();
   testDuplicationReverterMergesExactDuplicateBlocksWithCopiedSuccessorReference();
   testDuplicationReverterKeepsProgrammerWrittenDuplication();
   testDuplicationReverterMergesDuplicatedTailProxyShape();

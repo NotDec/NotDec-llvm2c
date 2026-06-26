@@ -279,6 +279,21 @@ bool StructuredCFG::hasGroupedPredecessorRewritePayloadMaterializeHook()
   return MaterializeHookSupportsGroupedPredecessorRewrite;
 }
 
+PayloadId StructuredCFG::payloadOrigin(PayloadId Id) const {
+  auto It = PayloadOrigins.find(Id);
+  if (It == PayloadOrigins.end()) {
+    return Id;
+  }
+  return It->second;
+}
+
+void StructuredCFG::setPayloadOrigin(PayloadId Id, PayloadId SourceId) {
+  if (Id == InvalidPayloadId || SourceId == InvalidPayloadId) {
+    return;
+  }
+  PayloadOrigins[Id] = payloadOrigin(SourceId);
+}
+
 BlockId StructuredCFG::bodyBlock(BlockId Id) const {
   const CFGBlock *Block = getBlock(Id);
   if (Block == nullptr) {
@@ -380,6 +395,18 @@ bool StructuredCFG::materializeBlockBodyImpl(
     for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
       Block->Cases[I].Value = Body->Cases[I].Value;
     }
+    for (std::size_t I = 0; I < Block->Statements.size() &&
+                            I < Body->Statements.size(); ++I) {
+      setPayloadOrigin(Block->Statements[I].Id, Body->Statements[I].Id);
+    }
+    if (Block->Condition.isValid() && Body->Condition.isValid()) {
+      setPayloadOrigin(Block->Condition.Id, Body->Condition.Id);
+    }
+    for (std::size_t I = 0; I < Block->Cases.size(); ++I) {
+      if (Block->Cases[I].Value.isValid() && Body->Cases[I].Value.isValid()) {
+        setPayloadOrigin(Block->Cases[I].Value.Id, Body->Cases[I].Value.Id);
+      }
+    }
 
     Block->BodyBlock = Id;
     Block->BodyMaterialized = true;
@@ -442,6 +469,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
         return AbortMaterialize();
       }
       appendGeneratedPayload(GeneratedPayloads, Payload, *Rewritten);
+      setPayloadOrigin(Rewritten->Id, Payload.Id);
       Payload = *Rewritten;
     }
     Statements.push_back(Payload);
@@ -455,6 +483,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
       return AbortMaterialize();
     }
     appendGeneratedPayload(GeneratedPayloads, Condition, *Rewritten);
+    setPayloadOrigin(Rewritten->Id, Condition.Id);
     Condition = *Rewritten;
   }
 
@@ -471,6 +500,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
         return AbortMaterialize();
       }
       appendGeneratedPayload(GeneratedPayloads, Payload, *Rewritten);
+      setPayloadOrigin(Rewritten->Id, Payload.Id);
       Payload = *Rewritten;
     }
     CaseValues.push_back(Payload);
@@ -487,6 +517,18 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Block->Condition = Condition;
   for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
     Block->Cases[I].Value = CaseValues[I];
+  }
+  for (std::size_t I = 0; I < Block->Statements.size() &&
+                          I < Body->Statements.size(); ++I) {
+    setPayloadOrigin(Block->Statements[I].Id, Body->Statements[I].Id);
+  }
+  if (Block->Condition.isValid() && Body->Condition.isValid()) {
+    setPayloadOrigin(Block->Condition.Id, Body->Condition.Id);
+  }
+  for (std::size_t I = 0; I < Block->Cases.size(); ++I) {
+    if (Block->Cases[I].Value.isValid() && Body->Cases[I].Value.isValid()) {
+      setPayloadOrigin(Block->Cases[I].Value.Id, Body->Cases[I].Value.Id);
+    }
   }
 
   Block->BodyBlock = Id;

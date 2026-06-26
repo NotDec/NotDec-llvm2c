@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace notdec::backend::structuring {
@@ -229,6 +230,7 @@ public:
   const std::vector<DephicationIncoming> &dephicationIncomings() const {
     return DephicationIncomings;
   }
+  PayloadId payloadOrigin(PayloadId Id) const;
   DephicationEdgeContext dephicationEdgeContext(BlockId EdgeBlock) const;
   DephicationEdgeContext dephicationBlockContext(BlockId Block) const;
 
@@ -246,6 +248,7 @@ public:
   bool hasPayloadMaterializeHook() const;
   bool hasPredecessorRewritePayloadMaterializeHook() const;
   bool hasGroupedPredecessorRewritePayloadMaterializeHook() const;
+  void setPayloadOrigin(PayloadId Id, PayloadId SourceId);
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
   bool materializeBlockBody(BlockId Id);
@@ -306,6 +309,7 @@ private:
   PayloadMaterializeResultHook MaterializeResultHook;
   bool MaterializeHookSupportsPredecessorRewrite = false;
   bool MaterializeHookSupportsGroupedPredecessorRewrite = false;
+  std::unordered_map<PayloadId, PayloadId> PayloadOrigins;
 };
 
 enum class StructuredNodeKind {

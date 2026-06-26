@@ -14,28 +14,32 @@ bool containsBlock(const std::vector<BlockId> &Blocks, BlockId Id) {
   return std::find(Blocks.begin(), Blocks.end(), Id) != Blocks.end();
 }
 
-bool samePayload(PayloadRef Lhs, PayloadRef Rhs) { return Lhs.Id == Rhs.Id; }
+bool samePayload(const StructuredCFG &Graph, PayloadRef Lhs, PayloadRef Rhs) {
+  return Graph.payloadOrigin(Lhs.Id) == Graph.payloadOrigin(Rhs.Id);
+}
 
-bool samePayloads(const std::vector<PayloadRef> &Lhs,
+bool samePayloads(const StructuredCFG &Graph,
+                  const std::vector<PayloadRef> &Lhs,
                   const std::vector<PayloadRef> &Rhs) {
   if (Lhs.size() != Rhs.size()) {
     return false;
   }
   for (std::size_t I = 0; I < Lhs.size(); ++I) {
-    if (!samePayload(Lhs[I], Rhs[I])) {
+    if (!samePayload(Graph, Lhs[I], Rhs[I])) {
       return false;
     }
   }
   return true;
 }
 
-bool sameSwitchCaseValues(const std::vector<SwitchCase> &Lhs,
+bool sameSwitchCaseValues(const StructuredCFG &Graph,
+                          const std::vector<SwitchCase> &Lhs,
                           const std::vector<SwitchCase> &Rhs) {
   if (Lhs.size() != Rhs.size()) {
     return false;
   }
   for (std::size_t I = 0; I < Lhs.size(); ++I) {
-    if (!samePayload(Lhs[I].Value, Rhs[I].Value)) {
+    if (!samePayload(Graph, Lhs[I].Value, Rhs[I].Value)) {
       return false;
     }
   }
@@ -99,7 +103,7 @@ bool sameSwitchCasesByReference(const StructuredCFG &Graph,
     return false;
   }
   for (std::size_t I = 0; I < Lhs.size(); ++I) {
-    if (!samePayload(Lhs[I].Value, Rhs[I].Value) ||
+    if (!samePayload(Graph, Lhs[I].Value, Rhs[I].Value) ||
         !sameBlockReference(Graph, Lhs[I].Target, Rhs[I].Target)) {
       return false;
     }
@@ -110,17 +114,17 @@ bool sameSwitchCasesByReference(const StructuredCFG &Graph,
 bool sameBlockShapeByReference(const StructuredCFG &Graph, const CFGBlock &Lhs,
                                const CFGBlock &Rhs) {
   return Lhs.Terminator == Rhs.Terminator &&
-         samePayload(Lhs.Condition, Rhs.Condition) &&
+         samePayload(Graph, Lhs.Condition, Rhs.Condition) &&
          sameSuccessorListByReference(Graph, Lhs.Successors, Rhs.Successors) &&
          sameSwitchCasesByReference(Graph, Lhs.Cases, Rhs.Cases) &&
-         samePayloads(Lhs.Statements, Rhs.Statements);
+         samePayloads(Graph, Lhs.Statements, Rhs.Statements);
 }
 
 bool sameBlockControlShapeByReference(const StructuredCFG &Graph,
                                       const CFGBlock &Lhs,
                                       const CFGBlock &Rhs) {
   return Lhs.Terminator == Rhs.Terminator &&
-         samePayload(Lhs.Condition, Rhs.Condition) &&
+         samePayload(Graph, Lhs.Condition, Rhs.Condition) &&
          sameSuccessorListByReference(Graph, Lhs.Successors, Rhs.Successors) &&
          sameSwitchCasesByReference(Graph, Lhs.Cases, Rhs.Cases);
 }
@@ -129,10 +133,10 @@ bool sameRegionTailShapeByReference(const StructuredCFG &Graph,
                                     const CFGBlock &Lhs,
                                     const CFGBlock &Rhs) {
   return Lhs.Terminator == Rhs.Terminator &&
-         samePayload(Lhs.Condition, Rhs.Condition) &&
+         samePayload(Graph, Lhs.Condition, Rhs.Condition) &&
          Lhs.Successors.size() == Rhs.Successors.size() &&
-         sameSwitchCaseValues(Lhs.Cases, Rhs.Cases) &&
-         samePayloads(Lhs.Statements, Rhs.Statements);
+         sameSwitchCaseValues(Graph, Lhs.Cases, Rhs.Cases) &&
+         samePayloads(Graph, Lhs.Statements, Rhs.Statements);
 }
 
 struct LinearRegion;
@@ -585,13 +589,14 @@ bool canSplitCommonStatementTailBlock(const StructuredCFG &Graph,
   return !hasDephicationContext(Graph, Block.Id);
 }
 
-std::size_t commonStatementSuffixLength(const std::vector<PayloadRef> &Lhs,
+std::size_t commonStatementSuffixLength(const StructuredCFG &Graph,
+                                        const std::vector<PayloadRef> &Lhs,
                                         const std::vector<PayloadRef> &Rhs) {
   std::size_t Common = 0;
   while (Common < Lhs.size() && Common < Rhs.size()) {
     PayloadRef LhsPayload = Lhs[Lhs.size() - Common - 1];
     PayloadRef RhsPayload = Rhs[Rhs.size() - Common - 1];
-    if (!samePayload(LhsPayload, RhsPayload)) {
+    if (!samePayload(Graph, LhsPayload, RhsPayload)) {
       break;
     }
     ++Common;
@@ -623,7 +628,8 @@ bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
     return false;
   }
 
-  CommonSuffix = commonStatementSuffixLength(Lhs->Statements, Rhs->Statements);
+  CommonSuffix =
+      commonStatementSuffixLength(Graph, Lhs->Statements, Rhs->Statements);
   return CommonSuffix > 0 && CommonSuffix < Lhs->Statements.size() &&
          CommonSuffix < Rhs->Statements.size();
 }
@@ -1299,6 +1305,28 @@ bool materializeDuplicatedRegion(StructuredCFG &Graph,
     if (!Graph.materializeBlockBody(Copy, std::move(OriginalPreds),
                                     std::move(NewPreds))) {
       return false;
+    }
+
+    const CFGBlock *OriginalBlock = Graph.getBlock(Original);
+    const CFGBlock *CopyBlock = Graph.getBlock(Copy);
+    if (OriginalBlock == nullptr || CopyBlock == nullptr) {
+      return false;
+    }
+    for (std::size_t I = 0; I < OriginalBlock->Statements.size() &&
+                            I < CopyBlock->Statements.size(); ++I) {
+      Graph.setPayloadOrigin(CopyBlock->Statements[I].Id,
+                             OriginalBlock->Statements[I].Id);
+    }
+    if (OriginalBlock->Condition.isValid() && CopyBlock->Condition.isValid()) {
+      Graph.setPayloadOrigin(CopyBlock->Condition.Id, OriginalBlock->Condition.Id);
+    }
+    for (std::size_t I = 0; I < OriginalBlock->Cases.size() &&
+                            I < CopyBlock->Cases.size(); ++I) {
+      if (OriginalBlock->Cases[I].Value.isValid() &&
+          CopyBlock->Cases[I].Value.isValid()) {
+        Graph.setPayloadOrigin(CopyBlock->Cases[I].Value.Id,
+                               OriginalBlock->Cases[I].Value.Id);
+      }
     }
   }
 
