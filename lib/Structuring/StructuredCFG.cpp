@@ -209,6 +209,7 @@ VVarId StructuredCFG::addDephicationVVar(std::string Name,
   VVarId Id = static_cast<VVarId>(DephicationVVars.size());
   DephicationVVars.push_back(
       {.Id = Id,
+       .SourceId = Id,
        .Name = std::move(Name),
        .MergeBlock = MergeBlock,
        .SourceMergeBlock = MergeBlock});
@@ -239,6 +240,14 @@ StructuredCFG::dephicationEdgeContext(BlockId EdgeBlock) const {
   Context.Incomings = dephicationIncomingsForEdge(EdgeBlock);
   Context.VVarCopies = dephicationVVarCopiesForIncomings(Context.Incomings);
   Context.VVars = dephicationVVarsForIncomings(Context.Incomings);
+  return Context;
+}
+
+DephicationEdgeContext
+StructuredCFG::dephicationBlockContext(BlockId Block) const {
+  DephicationEdgeContext Context;
+  Context.VVars = dephicationVVarsForMerge(Block);
+  Context.VVarCopies = dephicationVVarCopiesForVVars(Context.VVars);
   return Context;
 }
 
@@ -325,10 +334,13 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.SyntheticTarget = Block->SyntheticTarget;
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
-  DephicationEdgeContext EdgeContext = dephicationEdgeContext(Id);
-  Context.DephicationIncomings = EdgeContext.Incomings;
-  Context.DephicationVVarCopies = EdgeContext.VVarCopies;
-  Context.DephicationVVars = EdgeContext.VVars;
+  DephicationEdgeContext DephiContext = dephicationEdgeContext(Id);
+  if (DephiContext.Incomings.empty()) {
+    DephiContext = dephicationBlockContext(Id);
+  }
+  Context.DephicationIncomings = DephiContext.Incomings;
+  Context.DephicationVVarCopies = DephiContext.VVarCopies;
+  Context.DephicationVVars = DephiContext.VVars;
   if (BodyId == Id) {
     Context.OriginalCases = Block->Cases;
     Context.NewCases = Block->Cases;
@@ -394,10 +406,13 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.NewTerminator = Block->Terminator;
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
-  EdgeContext = dephicationEdgeContext(Id);
-  Context.DephicationIncomings = EdgeContext.Incomings;
-  Context.DephicationVVarCopies = EdgeContext.VVarCopies;
-  Context.DephicationVVars = EdgeContext.VVars;
+  DephiContext = dephicationEdgeContext(Id);
+  if (DephiContext.Incomings.empty()) {
+    DephiContext = dephicationBlockContext(Id);
+  }
+  Context.DephicationIncomings = DephiContext.Incomings;
+  Context.DephicationVVarCopies = DephiContext.VVarCopies;
+  Context.DephicationVVars = DephiContext.VVars;
 
   std::vector<PayloadRef> GeneratedPayloads;
   auto AbortMaterialize = [&]() {
@@ -720,6 +735,7 @@ StructuredCFG::duplicateDephicationVVars(const DuplicatedRegion &Region) {
 
     VVarId CopyId =
         addDephicationVVar(SourceVVar.Name, Region.copyOf(SourceVVar.MergeBlock));
+    DephicationVVars.back().SourceId = SourceVVar.SourceId;
     DephicationVVars.back().SourceMergeBlock = SourceVVar.SourceMergeBlock;
     CopiedVVars.emplace(SourceVVar.Id, CopyId);
   }
@@ -853,6 +869,29 @@ std::map<VVarId, VVarId> StructuredCFG::dephicationVVarCopiesForIncomings(
       continue;
     }
     Result.emplace(Incoming.SourceTarget, Incoming.Target);
+  }
+  return Result;
+}
+
+std::vector<DephicationVVar>
+StructuredCFG::dephicationVVarsForMerge(BlockId MergeBlock) const {
+  std::vector<DephicationVVar> Result;
+  for (const DephicationVVar &VVar : DephicationVVars) {
+    if (VVar.MergeBlock == MergeBlock && !VVar.Retired) {
+      Result.push_back(VVar);
+    }
+  }
+  return Result;
+}
+
+std::map<VVarId, VVarId> StructuredCFG::dephicationVVarCopiesForVVars(
+    const std::vector<DephicationVVar> &VVars) const {
+  std::map<VVarId, VVarId> Result;
+  for (const DephicationVVar &VVar : VVars) {
+    if (VVar.SourceId == InvalidVVarId || VVar.SourceId == VVar.Id) {
+      continue;
+    }
+    Result.emplace(VVar.SourceId, VVar.Id);
   }
   return Result;
 }

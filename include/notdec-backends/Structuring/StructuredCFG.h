@@ -83,6 +83,9 @@ enum class PayloadMaterializeResult {
 // can rewrite payloads without asking C or Solidity to infer Phi semantics.
 struct DephicationVVar {
   VVarId Id = InvalidVVarId;
+  // Original logical vvar for copied merge blocks. Originals point to
+  // themselves so consumers can build copy maps without matching by name.
+  VVarId SourceId = InvalidVVarId;
   std::string Name;
   BlockId MergeBlock = InvalidBlockId;
   BlockId SourceMergeBlock = InvalidBlockId;
@@ -227,6 +230,7 @@ public:
     return DephicationIncomings;
   }
   DephicationEdgeContext dephicationEdgeContext(BlockId EdgeBlock) const;
+  DephicationEdgeContext dephicationBlockContext(BlockId Block) const;
 
   const CFGBlock *getBlock(BlockId Id) const;
   CFGBlock *getBlock(BlockId Id);
@@ -286,6 +290,10 @@ private:
   std::vector<DephicationVVar>
   dephicationVVarsForIncomings(const std::vector<DephicationIncoming> &Incomings)
       const;
+  std::vector<DephicationVVar> dephicationVVarsForMerge(BlockId MergeBlock)
+      const;
+  std::map<VVarId, VVarId> dephicationVVarCopiesForVVars(
+      const std::vector<DephicationVVar> &VVars) const;
   BlockId nextBlockId() const;
   bool removeBlockInPlace(BlockId Id);
 
