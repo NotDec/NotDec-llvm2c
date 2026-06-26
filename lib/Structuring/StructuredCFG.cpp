@@ -149,7 +149,10 @@ BlockId StructuredCFG::duplicateBlock(BlockId Source,
     Case.Value = {};
   }
   Copy.Successors = std::move(Successors);
-  return addBlock(std::move(Copy));
+  BlockId SourceId = SourceBlock->Id;
+  BlockId CopyId = addBlock(std::move(Copy));
+  duplicateDephicationIncomings(SourceId, CopyId);
+  return CopyId;
 }
 
 BlockId DuplicatedRegion::copyOf(BlockId Original) const {
@@ -416,6 +419,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
   // Materializing copies renderer payload from the body source. CFG identity
   // stays on this block: successors and switch targets must keep any copied
   // region rewrites that were already applied.
+  std::vector<PayloadRef> OriginalStatements = Body->Statements;
   Block->Statements = std::move(Statements);
   Block->Terminator = Body->Terminator;
   Block->Condition = Condition;
@@ -425,6 +429,8 @@ bool StructuredCFG::materializeBlockBodyImpl(
 
   Block->BodyBlock = Id;
   Block->BodyMaterialized = true;
+  rewriteDephicationIncomingAssignments(Id, OriginalStatements,
+                                        Block->Statements);
   if (MaterializeResultHook) {
     MaterializeResultHook(Context, PayloadMaterializeResult::Committed,
                           GeneratedPayloads);
@@ -475,6 +481,7 @@ StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
   Copies.reserve(RegionBlocks.size());
 
   auto DropCopies = [&]() {
+    removeDephicationBlockReferences(Copies);
     Blocks.erase(std::remove_if(Blocks.begin(), Blocks.end(),
                                 [&](const CFGBlock &Block) {
                                   return std::find(Copies.begin(), Copies.end(),
@@ -522,6 +529,7 @@ StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
     }
   }
 
+  rewriteCopiedDephicationIncomings(Region);
   return Region;
 }
 
@@ -557,6 +565,7 @@ bool StructuredCFG::removeBlock(BlockId Id) {
   }
 
   Blocks = std::move(Candidate.Blocks);
+  DephicationIncomings = std::move(Candidate.DephicationIncomings);
   return true;
 }
 
@@ -601,6 +610,7 @@ bool StructuredCFG::removeBlockInPlace(BlockId Id) {
   }
 
   Blocks.erase(It);
+  removeDephicationBlockReferences({Id});
   return true;
 }
 
@@ -613,7 +623,76 @@ bool StructuredCFG::removeBlocks(const std::vector<BlockId> &Ids) {
   }
 
   Blocks = std::move(Candidate.Blocks);
+  DephicationIncomings = std::move(Candidate.DephicationIncomings);
   return true;
+}
+
+void StructuredCFG::duplicateDephicationIncomings(BlockId SourceEdgeBlock,
+                                                  BlockId CopyEdgeBlock) {
+  std::vector<DephicationIncoming> Copies;
+  for (const DephicationIncoming &Incoming : DephicationIncomings) {
+    if (Incoming.EdgeBlock != SourceEdgeBlock) {
+      continue;
+    }
+    DephicationIncoming Copy = Incoming;
+    Copy.EdgeBlock = CopyEdgeBlock;
+    Copies.push_back(std::move(Copy));
+  }
+  DephicationIncomings.insert(DephicationIncomings.end(), Copies.begin(),
+                              Copies.end());
+}
+
+void StructuredCFG::rewriteCopiedDephicationIncomings(
+    const DuplicatedRegion &Region) {
+  for (DephicationIncoming &Incoming : DephicationIncomings) {
+    const CFGBlock *EdgeBlock = getBlock(Incoming.EdgeBlock);
+    if (EdgeBlock == nullptr || EdgeBlock->Origin != CFGBlockOrigin::Copied) {
+      continue;
+    }
+    BlockId CopiedIncoming = Region.copyOf(Incoming.IncomingBlock);
+    if (CopiedIncoming != InvalidBlockId) {
+      Incoming.IncomingBlock = CopiedIncoming;
+    }
+    BlockId CopiedMerge = Region.copyOf(Incoming.MergeBlock);
+    if (CopiedMerge != InvalidBlockId) {
+      Incoming.MergeBlock = CopiedMerge;
+    }
+  }
+}
+
+void StructuredCFG::rewriteDephicationIncomingAssignments(
+    BlockId EdgeBlock, const std::vector<PayloadRef> &OriginalStatements,
+    const std::vector<PayloadRef> &RewrittenStatements) {
+  if (OriginalStatements.size() != RewrittenStatements.size()) {
+    return;
+  }
+
+  for (DephicationIncoming &Incoming : DephicationIncomings) {
+    if (Incoming.EdgeBlock != EdgeBlock) {
+      continue;
+    }
+    for (std::size_t I = 0; I < OriginalStatements.size(); ++I) {
+      if (Incoming.Assignment.Id == OriginalStatements[I].Id) {
+        Incoming.Assignment = RewrittenStatements[I];
+        break;
+      }
+    }
+  }
+}
+
+void StructuredCFG::removeDephicationBlockReferences(
+    const std::vector<BlockId> &Ids) {
+  auto MentionsRemovedBlock = [&](const DephicationIncoming &Incoming) {
+    return std::find(Ids.begin(), Ids.end(), Incoming.IncomingBlock) !=
+               Ids.end() ||
+           std::find(Ids.begin(), Ids.end(), Incoming.MergeBlock) !=
+               Ids.end() ||
+           std::find(Ids.begin(), Ids.end(), Incoming.EdgeBlock) != Ids.end();
+  };
+  DephicationIncomings.erase(
+      std::remove_if(DephicationIncomings.begin(), DephicationIncomings.end(),
+                     MentionsRemovedBlock),
+      DephicationIncomings.end());
 }
 
 BlockId StructuredCFG::nextBlockId() const {

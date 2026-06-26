@@ -2089,6 +2089,91 @@ void testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity() {
   assert(SawCommit);
 }
 
+void testStructuredCFGDuplicateDephicationEdgeCopiesMetadata() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+  Cfg.addBlock(block(3, {}));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({1, 4});
+  assert(CopyRegion.has_value());
+
+  BlockId CopyIncoming = CopyRegion->copyOf(1);
+  BlockId CopyEdge = CopyRegion->copyOf(4);
+  assert(CopyIncoming != InvalidBlockId);
+  assert(CopyEdge != InvalidBlockId);
+
+  const std::vector<DephicationIncoming> &Incomings =
+      Cfg.dephicationIncomings();
+  assert(Incomings.size() == 2);
+  assert(Incomings[0].IncomingBlock == 1);
+  assert(Incomings[0].MergeBlock == 3);
+  assert(Incomings[0].EdgeBlock == 4);
+  assert(Incomings[0].Assignment.Id == 40);
+  assert(Incomings[1].IncomingBlock == CopyIncoming);
+  assert(Incomings[1].MergeBlock == 3);
+  assert(Incomings[1].EdgeBlock == CopyEdge);
+  assert(Incomings[1].Assignment.Id == 40);
+
+  Cfg.setPayloadMaterializeHook(
+      [](const PayloadMaterializeContext &, PayloadMaterializeKind Kind,
+         PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::Statement) {
+          return PayloadRef{Payload.Id + 1000};
+        }
+        return Payload;
+      });
+  assert(Cfg.materializeBlockBody(CopyEdge));
+
+  const CFGBlock *CopyEdgeBlock = Cfg.getBlock(CopyEdge);
+  assert(CopyEdgeBlock != nullptr);
+  assert(CopyEdgeBlock->Statements.size() == 1);
+  assert(CopyEdgeBlock->Statements.front().Id == 1040);
+  assert(Cfg.dephicationIncomings()[1].Assignment.Id == 1040);
+}
+
+void testStructuredCFGRemoveBlockMaintainsDephicationMetadata() {
+  StructuredCFG Cfg;
+  CFGBlock Body = block(4, {3});
+  Body.Statements.push_back({40});
+  Cfg.addBlock(std::move(Body));
+
+  CFGBlock Copy = block(5, {3});
+  Copy.Origin = CFGBlockOrigin::Copied;
+  Copy.CopiedFromBlock = 4;
+  Copy.BodyBlock = 4;
+  Copy.BodyMaterialized = false;
+  Cfg.addBlock(std::move(Copy));
+  Cfg.addBlock(block(3, {}));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  CFGBlock *CopyBlock = Cfg.getBlock(5);
+  assert(CopyBlock != nullptr);
+  CopyBlock->Cases.push_back({{}, 3});
+  assert(!Cfg.removeBlock(4));
+  assert(Cfg.getBlock(4) != nullptr);
+  assert(Cfg.dephicationIncomings().size() == 1);
+  assert(Cfg.dephicationIncomings().front().EdgeBlock == 4);
+
+  CopyBlock->Cases.clear();
+  assert(Cfg.removeBlock(4));
+  assert(Cfg.getBlock(4) == nullptr);
+  assert(Cfg.dephicationIncomings().empty());
+}
+
 void testStructuredCFGDuplicateSyntheticForwarderReportsTargets() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -8418,6 +8503,8 @@ int main() {
   testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
   testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
   testSolidityBodyBuilderReadsSharedPhiAssignments();
+  testStructuredCFGDuplicateDephicationEdgeCopiesMetadata();
+  testStructuredCFGRemoveBlockMaintainsDephicationMetadata();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();
   testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure();

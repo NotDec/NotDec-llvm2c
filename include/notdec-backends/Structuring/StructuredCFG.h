@@ -244,6 +244,13 @@ private:
   bool materializeBlockBodyImpl(BlockId Id,
                                 std::vector<BlockId> OriginalPredecessors,
                                 std::vector<BlockId> NewPredecessors);
+  void duplicateDephicationIncomings(BlockId SourceEdgeBlock,
+                                     BlockId CopyEdgeBlock);
+  void rewriteCopiedDephicationIncomings(const DuplicatedRegion &Region);
+  void rewriteDephicationIncomingAssignments(
+      BlockId EdgeBlock, const std::vector<PayloadRef> &OriginalStatements,
+      const std::vector<PayloadRef> &RewrittenStatements);
+  void removeDephicationBlockReferences(const std::vector<BlockId> &Ids);
   BlockId nextBlockId() const;
   bool removeBlockInPlace(BlockId Id);
 
