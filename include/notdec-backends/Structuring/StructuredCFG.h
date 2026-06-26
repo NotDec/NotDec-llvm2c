@@ -102,6 +102,12 @@ struct DephicationIncoming {
   std::string IncomingName;
 };
 
+struct DephicationEdgeContext {
+  std::map<VVarId, VVarId> VVarCopies;
+  std::vector<DephicationVVar> VVars;
+  std::vector<DephicationIncoming> Incomings;
+};
+
 struct PayloadMaterializeContext {
   BlockId SourceBlock = InvalidBlockId;
   BlockId BodyBlock = InvalidBlockId;
@@ -219,6 +225,7 @@ public:
   const std::vector<DephicationIncoming> &dephicationIncomings() const {
     return DephicationIncomings;
   }
+  DephicationEdgeContext dephicationEdgeContext(BlockId EdgeBlock) const;
 
   const CFGBlock *getBlock(BlockId Id) const;
   CFGBlock *getBlock(BlockId Id);

@@ -227,6 +227,15 @@ void StructuredCFG::addDephicationIncoming(VVarId Target,
                                   .IncomingName = std::move(IncomingName)});
 }
 
+DephicationEdgeContext
+StructuredCFG::dephicationEdgeContext(BlockId EdgeBlock) const {
+  DephicationEdgeContext Context;
+  Context.Incomings = dephicationIncomingsForEdge(EdgeBlock);
+  Context.VVarCopies = dephicationVVarCopiesForIncomings(Context.Incomings);
+  Context.VVars = dephicationVVarsForIncomings(Context.Incomings);
+  return Context;
+}
+
 void StructuredCFG::setPayloadMaterializeHook(
     PayloadMaterializeHook Hook, bool SupportsPredecessorRewrite,
     bool SupportsGroupedPredecessorRewrite) {
@@ -310,11 +319,10 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.SyntheticTarget = Block->SyntheticTarget;
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
-  Context.DephicationIncomings = dephicationIncomingsForEdge(Id);
-  Context.DephicationVVarCopies =
-      dephicationVVarCopiesForIncomings(Context.DephicationIncomings);
-  Context.DephicationVVars =
-      dephicationVVarsForIncomings(Context.DephicationIncomings);
+  DephicationEdgeContext EdgeContext = dephicationEdgeContext(Id);
+  Context.DephicationIncomings = EdgeContext.Incomings;
+  Context.DephicationVVarCopies = EdgeContext.VVarCopies;
+  Context.DephicationVVars = EdgeContext.VVars;
   if (BodyId == Id) {
     Context.OriginalCases = Block->Cases;
     Context.NewCases = Block->Cases;
@@ -380,11 +388,10 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.NewTerminator = Block->Terminator;
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
-  Context.DephicationIncomings = dephicationIncomingsForEdge(Id);
-  Context.DephicationVVarCopies =
-      dephicationVVarCopiesForIncomings(Context.DephicationIncomings);
-  Context.DephicationVVars =
-      dephicationVVarsForIncomings(Context.DephicationIncomings);
+  EdgeContext = dephicationEdgeContext(Id);
+  Context.DephicationIncomings = EdgeContext.Incomings;
+  Context.DephicationVVarCopies = EdgeContext.VVarCopies;
+  Context.DephicationVVars = EdgeContext.VVars;
 
   std::vector<PayloadRef> GeneratedPayloads;
   auto AbortMaterialize = [&]() {

@@ -2206,6 +2206,52 @@ void testStructuredCFGDuplicateDephicationEdgeCopiesMetadata() {
   assert(Cfg.dephicationIncomings()[1].Assignment.Id == 1040);
 }
 
+void testStructuredCFGQueriesDephicationEdgeContext() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+  Cfg.addBlock(block(3, {}));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  DephicationEdgeContext OriginalContext = Cfg.dephicationEdgeContext(4);
+  assert(OriginalContext.Incomings.size() == 1);
+  assert(OriginalContext.VVars.size() == 1);
+  assert(OriginalContext.VVars.front().Id == VVar);
+  assert(OriginalContext.VVarCopies.empty());
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({1, 4, 3});
+  assert(CopyRegion.has_value());
+  BlockId CopyEdge = CopyRegion->copyOf(4);
+  BlockId CopyMerge = CopyRegion->copyOf(3);
+  assert(CopyEdge != InvalidBlockId);
+  assert(CopyMerge != InvalidBlockId);
+
+  DephicationEdgeContext CopyContext = Cfg.dephicationEdgeContext(CopyEdge);
+  assert(CopyContext.Incomings.size() == 1);
+  assert(CopyContext.VVars.size() == 1);
+  assert(CopyContext.VVars.front().MergeBlock == CopyMerge);
+  assert(CopyContext.VVarCopies.size() == 1);
+  assert(CopyContext.VVarCopies.begin()->first == VVar);
+  assert(CopyContext.VVarCopies.begin()->second ==
+         CopyContext.VVars.front().Id);
+
+  assert(Cfg.removeBlock(CopyMerge));
+  DephicationEdgeContext RetiredContext = Cfg.dephicationEdgeContext(CopyEdge);
+  assert(RetiredContext.Incomings.empty());
+  assert(RetiredContext.VVars.empty());
+  assert(RetiredContext.VVarCopies.empty());
+}
+
 void testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(1, {4}));
@@ -8605,6 +8651,7 @@ int main() {
   testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
   testSolidityBodyBuilderReadsSharedPhiAssignments();
   testStructuredCFGDuplicateDephicationEdgeCopiesMetadata();
+  testStructuredCFGQueriesDephicationEdgeContext();
   testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar();
   testStructuredCFGRemoveBlockMaintainsDephicationMetadata();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
