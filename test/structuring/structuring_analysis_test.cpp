@@ -103,6 +103,7 @@ public:
 class TestReturnDuplicatorLow : public ReturnDuplicatorLow {
 public:
   using ReturnDuplicatorLow::ReturnDuplicatorLow;
+  using ReturnDuplicatorLow::getNewGotos;
   using ReturnDuplicatorLow::runOnGraph;
 };
 
@@ -549,6 +550,51 @@ llvm::Function *makeSharedPhiFunction(llvm::LLVMContext &Context,
   auto *Phi2 = Builder.CreatePHI(I32Ty, 2, "y");
   Phi2->addIncoming(C, Then);
   Phi2->addIncoming(D, Else);
+  Builder.CreateRet(Phi);
+
+  return F;
+}
+
+llvm::Function *makeSharedPhiSwitchFunction(llvm::LLVMContext &Context,
+                                            llvm::Module &Module) {
+  llvm::IntegerType *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy = llvm::FunctionType::get(I32Ty, {I32Ty, I32Ty, I32Ty},
+                                       /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "phi_switch", Module);
+  auto ArgIt = F->arg_begin();
+  llvm::Value *X = &*ArgIt++;
+  X->setName("x");
+  llvm::Value *A = &*ArgIt++;
+  A->setName("a");
+  llvm::Value *B = &*ArgIt++;
+  B->setName("b");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Case1 = llvm::BasicBlock::Create(Context, "case1", F);
+  llvm::BasicBlock *Case2 = llvm::BasicBlock::Create(Context, "case2", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+  llvm::BasicBlock *Shared = llvm::BasicBlock::Create(Context, "shared", F);
+
+  llvm::IRBuilder<> Builder(Context);
+  Builder.SetInsertPoint(Entry);
+  llvm::SwitchInst *Switch = Builder.CreateSwitch(X, Default, 2);
+  Switch->addCase(llvm::ConstantInt::get(I32Ty, 1), Case1);
+  Switch->addCase(llvm::ConstantInt::get(I32Ty, 2), Case2);
+
+  Builder.SetInsertPoint(Case1);
+  Builder.CreateBr(Shared);
+
+  Builder.SetInsertPoint(Case2);
+  Builder.CreateBr(Shared);
+
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  Builder.SetInsertPoint(Shared);
+  auto *Phi = Builder.CreatePHI(I32Ty, 2, "p");
+  Phi->addIncoming(A, Case1);
+  Phi->addIncoming(B, Case2);
   Builder.CreateRet(Phi);
 
   return F;
@@ -1517,6 +1563,31 @@ void testSolidityBodyBuilderReadsSharedPhiAssignments() {
 
   assert(containsLineSubstring(Out, "x = a;"));
   assert(containsLineSubstring(Out, "x = b;"));
+}
+
+void testSolidityBodyBuilderReadsCopiedSharedPhiAssignments() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("solidity-copied-shared-phi-test", Context);
+  llvm::Function *F = makeSharedPhiSwitchFunction(Context, Module);
+
+  std::vector<std::string> Out =
+      notdec::backend::solidity::BodyBuilder::readBody(*F);
+
+  bool HasCopiedAssignment = std::find_if(
+                                 Out.begin(), Out.end(),
+                                 [](const std::string &Line) {
+                                   return Line.find("p_copy") !=
+                                              std::string::npos &&
+                                          Line.find(" = ") != std::string::npos;
+                                 }) != Out.end();
+  bool HasCopiedReturn = std::find_if(Out.begin(), Out.end(),
+                                      [](const std::string &Line) {
+                                        return Line.find("return p_copy") !=
+                                               std::string::npos;
+                                      }) != Out.end();
+
+  assert(HasCopiedAssignment);
+  assert(HasCopiedReturn);
 }
 
 void testSolidityBodyBuilderRewritesCopiedDephicationVVars() {
@@ -3933,6 +4004,75 @@ void testReturnDuplicatorLowUsesSwitchCaseGotoSource() {
   assert(CopyBranch->BodyMaterialized);
   assert(CopyBranch->BodyBlock == CopyBranch->Id);
   assert(CopyBranch->Terminator == TerminatorKind::Branch);
+}
+
+void testReturnDuplicatorLowNormalizesCopiedGotoTargets() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {});
+  Target.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(Target));
+
+  BlockId Copy = Cfg.duplicateBlock(1, {});
+  assert(Copy != InvalidBlockId);
+
+  StructuringEvaluation Initial;
+  Initial.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, Copy}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  GotoManager Filtered = Pass.getNewGotos(Cfg, Initial, Current);
+
+  assert(Filtered.size() == 1);
+  assert(Filtered.isGotoEdge(0, 1));
+  assert(!Filtered.isGotoEdge(0, Copy));
+}
+
+void testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {3, 1, 2}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {4}));
+  Cfg.addBlock(block(3, {}));
+
+  CFGBlock Branch = branchBlock(4, {5, 6});
+  Branch.Condition = {40};
+  Cfg.addBlock(std::move(Branch));
+
+  CFGBlock ThenRet = block(5, {});
+  ThenRet.Terminator = TerminatorKind::Return;
+  ThenRet.Statements.push_back({50});
+  Cfg.addBlock(std::move(ThenRet));
+
+  CFGBlock ElseRet = block(6, {});
+  ElseRet.Terminator = TerminatorKind::Return;
+  ElseRet.Statements.push_back({60});
+  Cfg.addBlock(std::move(ElseRet));
+
+  StructuringOptimizationOptions Options =
+      ReturnDuplicatorLow::defaultOptions();
+  Options.MaxOptIters = 1;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = true;
+
+  CFGEdgeGotoRegionStructurer Structurer;
+  ReturnDuplicatorLow Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  const CFGBlock *Case1 = Result.Output.getBlock(1);
+  const CFGBlock *Case2 = Result.Output.getBlock(2);
+  assert(Case1 != nullptr && Case2 != nullptr);
+  assert(Case1->Successors.size() == 1);
+  assert(Case2->Successors.size() == 1);
+  assert(Case1->Successors.front() != 4);
+  assert(Case2->Successors.front() != 4);
+  assert(Case1->Successors.front() != Case2->Successors.front());
+  assert(Result.Output.getBlock(4) == nullptr);
 }
 
 void testReturnDuplicatorLowReportsGroupedPredecessorRewrite() {
@@ -8921,6 +9061,7 @@ int main() {
   testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
   testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
   testSolidityBodyBuilderReadsSharedPhiAssignments();
+  testSolidityBodyBuilderReadsCopiedSharedPhiAssignments();
   testSolidityBodyBuilderRewritesCopiedDephicationVVars();
   testStructuredCFGDuplicateDephicationEdgeCopiesMetadata();
   testStructuredCFGQueriesDephicationEdgeContext();
@@ -8980,6 +9121,8 @@ int main() {
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowUsesSwitchCaseGotoSource();
+  testReturnDuplicatorLowNormalizesCopiedGotoTargets();
+  testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion();
   testReturnDuplicatorLowReportsGroupedPredecessorRewrite();
   testReturnDuplicatorLowCopiesGroupedReturnPredsWithPayloadRewrite();
   testReturnDuplicatorLowCommitsCopyAtomically();

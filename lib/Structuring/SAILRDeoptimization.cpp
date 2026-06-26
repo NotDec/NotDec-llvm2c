@@ -1475,10 +1475,36 @@ GotoManager DuplicationReverter::getNewGotos(
   return GotoManager::fromGotos(Filtered);
 }
 
+bool hasInitialSourceGoto(const StructuringEvaluation &Initial,
+                          const StructuredGoto &Goto, BlockId Target) {
+  for (const StructuredGoto &InitialGoto : Initial.Gotos.gotos()) {
+    if (InitialGoto.Source == Goto.Source && InitialGoto.Target == Target) {
+      return true;
+    }
+  }
+  return false;
+}
+
 StructuringOptimizationOptions ReturnDuplicatorLow::defaultOptions() {
   StructuringOptimizationOptions Options;
   Options.MaxOptIters = 4;
   return Options;
+}
+
+GotoManager ReturnDuplicatorLow::getNewGotos(
+    const StructuredCFG &Cfg, const StructuringEvaluation &Initial,
+    const StructuringEvaluation &Current) const {
+  std::vector<StructuredGoto> Normalized;
+  for (StructuredGoto Goto : Current.Gotos.gotos()) {
+    const CFGBlock *Target = Cfg.getBlock(Goto.Target);
+    if (Target != nullptr && Target->Origin == CFGBlockOrigin::Copied &&
+        Target->SourceBlock != InvalidBlockId &&
+        hasInitialSourceGoto(Initial, Goto, Target->SourceBlock)) {
+      Goto.Target = Target->SourceBlock;
+    }
+    Normalized.push_back(Goto);
+  }
+  return GotoManager::fromGotos(Normalized);
 }
 
 bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,

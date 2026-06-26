@@ -280,6 +280,13 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
     void collectStatements(const llvm::BasicBlock &BB,
                            std::vector<PayloadRef> &Out) override {
       for (const llvm::Instruction &I : BB) {
+        if (const auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(&I)) {
+          if (const llvm::Value *Value = Ret->getReturnValue()) {
+            Out.push_back(addPayload(
+                Payloads, "return " + llvmValueName(*Value, "ret") + ";"));
+          }
+          continue;
+        }
         if (std::optional<std::string> Kind =
                 BodyBuilder::getStringMetadata(I, "notdec.solidity.revert")) {
           Out.push_back(addPayload(
