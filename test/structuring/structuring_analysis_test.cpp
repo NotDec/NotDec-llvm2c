@@ -851,18 +851,23 @@ void testGotoManagerCollectsSwitchGotoEdgeKinds() {
   assert(Manager.size() == 2);
 
   std::vector<StructuredGoto> Gotos = Manager.gotosInBlock(10);
-  assert(Gotos.size() == 2);
+  assert(Gotos.size() == 1);
   bool SawDefault = false;
-  bool SawCase = false;
   for (const StructuredGoto &Goto : Gotos) {
     if (Goto.Target == 20) {
       SawDefault = Goto.EdgeKind == StructuredGotoEdgeKind::SwitchDefault;
     }
+  }
+  assert(SawDefault);
+
+  Gotos = Manager.gotosInBlock(30);
+  assert(Gotos.size() == 1);
+  bool SawCase = false;
+  for (const StructuredGoto &Goto : Gotos) {
     if (Goto.Target == 30) {
       SawCase = Goto.EdgeKind == StructuredGotoEdgeKind::SwitchCase;
     }
   }
-  assert(SawDefault);
   assert(SawCase);
 }
 
@@ -3231,27 +3236,10 @@ void testCrossJumpReverterUsesSwitchCaseGotoKind() {
 
   Cfg.addBlock(block(4, {}));
 
-  StructuredTree Tree;
-
-  StructuredNode DefaultGoto;
-  DefaultGoto.Kind = StructuredNodeKind::Goto;
-  DefaultGoto.Target = 1;
-  NodeId DefaultId = Tree.addNode(std::move(DefaultGoto));
-
-  StructuredNode CaseGoto;
-  CaseGoto.Kind = StructuredNodeKind::Goto;
-  CaseGoto.Target = 1;
-  NodeId CaseId = Tree.addNode(std::move(CaseGoto));
-
-  StructuredNode SwitchNode;
-  SwitchNode.Kind = StructuredNodeKind::Switch;
-  SwitchNode.Block = 0;
-  SwitchNode.Default = DefaultId;
-  SwitchNode.StructuredCases.push_back({{}, 1, CaseId});
-  Tree.setRoot(Tree.addNode(std::move(SwitchNode)));
-
   StructuringEvaluation Current;
-  Current.Gotos = GotoManager::collect(Tree);
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{
+          0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchCase}});
 
   TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
   bool Changed = Pass.runOnGraph(Cfg, Current);
@@ -3899,6 +3887,52 @@ void testReturnDuplicatorLowExpandsGotoPredToConnectedComponent() {
   assert(Copy->Terminator == TerminatorKind::Return);
   assert(Copy->BodyBlock == Copy->Id);
   assert(hasSinglePayload(Copy->Statements, 14));
+}
+
+void testReturnDuplicatorLowUsesSwitchCaseGotoSource() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {3, 1, 2}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {4}));
+  Cfg.addBlock(block(3, {}));
+
+  CFGBlock Branch = branchBlock(4, {5, 6});
+  Branch.Condition = {40};
+  Cfg.addBlock(std::move(Branch));
+
+  CFGBlock ThenRet = block(5, {});
+  ThenRet.Terminator = TerminatorKind::Return;
+  ThenRet.Statements.push_back({50});
+  Cfg.addBlock(std::move(ThenRet));
+
+  CFGBlock ElseRet = block(6, {});
+  ElseRet.Terminator = TerminatorKind::Return;
+  ElseRet.Statements.push_back({60});
+  Cfg.addBlock(std::move(ElseRet));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{
+          1, 4, InvalidNodeId, StructuredGotoEdgeKind::SwitchCase}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Case1 = Cfg.getBlock(1);
+  const CFGBlock *Case2 = Cfg.getBlock(2);
+  assert(Case1 != nullptr && Case2 != nullptr);
+  assert(Case1->Successors.size() == 1);
+  assert(Case2->Successors.size() == 1);
+  assert(Case1->Successors.front() != 4);
+  assert(Case2->Successors.front() == 4);
+
+  const CFGBlock *CopyBranch = Cfg.getBlock(Case1->Successors.front());
+  assert(CopyBranch != nullptr);
+  assert(CopyBranch->SourceBlock == 4);
+  assert(CopyBranch->BodyMaterialized);
+  assert(CopyBranch->BodyBlock == CopyBranch->Id);
+  assert(CopyBranch->Terminator == TerminatorKind::Branch);
 }
 
 void testReturnDuplicatorLowReportsGroupedPredecessorRewrite() {
@@ -8945,6 +8979,7 @@ int main() {
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
+  testReturnDuplicatorLowUsesSwitchCaseGotoSource();
   testReturnDuplicatorLowReportsGroupedPredecessorRewrite();
   testReturnDuplicatorLowCopiesGroupedReturnPredsWithPayloadRewrite();
   testReturnDuplicatorLowCommitsCopyAtomically();

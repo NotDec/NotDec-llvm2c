@@ -47,8 +47,13 @@ void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
     }
   }
   for (const StructuredSwitchCase &Case : Node->StructuredCases) {
-    collectGotos(Tree, Case.Body, Source, StructuredGotoEdgeKind::SwitchCase,
-                 Gotos);
+    // A case body is entered through its case target, not through the switch
+    // header. Dephication edge blocks may sit between the case block and the
+    // merge, so later SAILR passes need the goto source to stay on that case
+    // side of the edge.
+    BlockId CaseSource = Case.Target == InvalidBlockId ? Source : Case.Target;
+    collectGotos(Tree, Case.Body, CaseSource,
+                 StructuredGotoEdgeKind::SwitchCase, Gotos);
   }
   collectGotos(Tree, Node->Then, Source, StructuredGotoEdgeKind::Unknown,
                Gotos);
