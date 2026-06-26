@@ -74,6 +74,8 @@ std::vector<BlockId> predecessorsOf(const StructuredCFG &Graph,
   return Graph.predecessorsOf(Target);
 }
 
+bool reachesBlock(const StructuredCFG &Graph, BlockId Start, BlockId Target);
+
 bool sameBlockSet(std::vector<BlockId> A, std::vector<BlockId> B) {
   std::sort(A.begin(), A.end());
   std::sort(B.begin(), B.end());
@@ -389,6 +391,8 @@ bool canSplitCommonStatementTailBlock(const StructuredCFG &Graph,
       Block.CopyKind != CFGBlockCopyKind::None ||
       Block.CreatedBy != CFGBlockCreator::Input ||
       !Block.BodyMaterialized || Block.BodyBlock != Block.Id ||
+      Block.Terminator != TerminatorKind::Fallthrough ||
+      Block.Successors.size() != 1 ||
       Block.Statements.empty()) {
     return false;
   }
@@ -423,7 +427,8 @@ bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
       !sameBlockControlShape(*Lhs, *Rhs) ||
       !canSplitCommonStatementTailBlock(Graph, *Lhs) ||
       !canSplitCommonStatementTailBlock(Graph, *Rhs) ||
-      !disjointPredecessorSets(Graph, LhsId, RhsId)) {
+      !disjointPredecessorSets(Graph, LhsId, RhsId) ||
+      reachesBlock(Graph, LhsId, RhsId) || reachesBlock(Graph, RhsId, LhsId)) {
     return false;
   }
 
@@ -504,22 +509,33 @@ bool revertGotoRelatedCommonStatementTail(StructuredCFG &Graph,
       continue;
     }
 
+    BlockId BestOther = InvalidBlockId;
+    std::size_t BestSuffix = 0;
     for (BlockId OtherId : BlockIds) {
       std::size_t CommonSuffix = 0;
       if (!commonStatementTailCandidate(Graph, Goto.Target, OtherId,
                                         CommonSuffix)) {
         continue;
       }
-
-      StructuredCFG Candidate = Graph;
-      if (!extractCommonStatementTail(Candidate, Goto.Target, OtherId,
-                                      CommonSuffix)) {
-        continue;
+      if (CommonSuffix > BestSuffix ||
+          (CommonSuffix == BestSuffix && OtherId < BestOther)) {
+        BestOther = OtherId;
+        BestSuffix = CommonSuffix;
       }
-
-      Graph = std::move(Candidate);
-      return true;
     }
+
+    if (BestOther == InvalidBlockId) {
+      continue;
+    }
+
+    StructuredCFG Candidate = Graph;
+    if (!extractCommonStatementTail(Candidate, Goto.Target, BestOther,
+                                    BestSuffix)) {
+      continue;
+    }
+
+    Graph = std::move(Candidate);
+    return true;
   }
 
   return false;
