@@ -341,7 +341,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.DephicationIncomings = DephiContext.Incomings;
   Context.DephicationVVarCopies = DephiContext.VVarCopies;
   Context.DephicationVVars = DephiContext.VVars;
-  if (BodyId == Id) {
+  if (BodyId == Id && (Block->BodyMaterialized || !MaterializeHook)) {
     Context.OriginalCases = Block->Cases;
     Context.NewCases = Block->Cases;
     Context.OriginalSuccessors = Block->Successors;
@@ -616,8 +616,13 @@ bool StructuredCFG::redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
     }
   }
 
+  StructuredCFG Snapshot = *this;
   for (BlockId Pred : Preds) {
-    replaceEdge(Pred, OldTarget, NewTarget);
+    if (!redirectDephicationIncomingTarget(Pred, OldTarget, NewTarget) ||
+        !replaceEdge(Pred, OldTarget, NewTarget)) {
+      *this = std::move(Snapshot);
+      return false;
+    }
   }
   return true;
 }
@@ -786,6 +791,51 @@ void StructuredCFG::rewriteCopiedDephicationIncomingTargets(
   }
 }
 
+bool StructuredCFG::redirectDephicationIncomingTarget(BlockId EdgeBlock,
+                                                      BlockId OldMerge,
+                                                      BlockId NewMerge) {
+  DephicationEdgeContext NewMergeContext = dephicationBlockContext(NewMerge);
+  if (NewMergeContext.VVarCopies.empty()) {
+    return true;
+  }
+
+  std::vector<std::pair<std::size_t, VVarId>> Updates;
+  for (std::size_t I = 0; I < DephicationIncomings.size(); ++I) {
+    DephicationIncoming &Incoming = DephicationIncomings[I];
+    if (Incoming.EdgeBlock != EdgeBlock || Incoming.MergeBlock != OldMerge) {
+      continue;
+    }
+    auto It = NewMergeContext.VVarCopies.find(Incoming.SourceTarget);
+    if (It == NewMergeContext.VVarCopies.end()) {
+      continue;
+    }
+    Updates.push_back({I, It->second});
+  }
+  if (Updates.empty()) {
+    return true;
+  }
+
+  StructuredCFG Snapshot = *this;
+  for (const auto &[Index, Target] : Updates) {
+    DephicationIncomings[Index].Target = Target;
+    DephicationIncomings[Index].MergeBlock = NewMerge;
+  }
+
+  CFGBlock *Edge = getBlock(EdgeBlock);
+  if (Edge != nullptr) {
+    if (Edge->SyntheticTarget == OldMerge) {
+      Edge->SyntheticTarget = NewMerge;
+    }
+    Edge->BodyMaterialized = false;
+    Edge->BodyBlock = EdgeBlock;
+    if (!materializeBlockBody(EdgeBlock)) {
+      *this = std::move(Snapshot);
+      return false;
+    }
+  }
+  return true;
+}
+
 void StructuredCFG::removeDephicationVVarReferences(
     const std::vector<BlockId> &Ids) {
   for (DephicationVVar &VVar : DephicationVVars) {
@@ -862,9 +912,6 @@ std::map<VVarId, VVarId> StructuredCFG::dephicationVVarCopiesForIncomings(
     const std::vector<DephicationIncoming> &Incomings) const {
   std::map<VVarId, VVarId> Result;
   for (const DephicationIncoming &Incoming : Incomings) {
-    if (Incoming.SourceEdgeBlock == Incoming.EdgeBlock) {
-      continue;
-    }
     if (Incoming.SourceTarget == Incoming.Target) {
       continue;
     }

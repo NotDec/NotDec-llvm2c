@@ -498,6 +498,9 @@ bool redirectSwitchCases(StructuredCFG &Graph, BlockId OldTarget,
 
   for (BlockId Pred : SwitchPreds) {
     CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (!Graph.redirectDephicationIncomingTarget(Pred, OldTarget, NewTarget)) {
+      return false;
+    }
     for (std::size_t I = 1; I < PredBlock->Successors.size(); ++I) {
       if (PredBlock->Successors[I] == OldTarget) {
         PredBlock->Successors[I] = NewTarget;
@@ -590,6 +593,9 @@ bool replaceDefaultSwitchSuccessor(StructuredCFG &Graph, BlockId SwitchId,
     return false;
   }
 
+  if (!Graph.redirectDephicationIncomingTarget(SwitchId, OldTarget, NewTarget)) {
+    return false;
+  }
   Block->Successors.front() = NewTarget;
   return true;
 }
@@ -926,6 +932,9 @@ bool redirectNonSwitchCaseEdges(StructuredCFG &Graph, BlockId OldTarget,
 
   for (BlockId Pred : Preds) {
     CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (!Graph.redirectDephicationIncomingTarget(Pred, OldTarget, NewTarget)) {
+      return false;
+    }
     if (PredBlock->Terminator == TerminatorKind::Switch) {
       if (!PredBlock->Successors.empty() &&
           PredBlock->Successors.front() == OldTarget) {

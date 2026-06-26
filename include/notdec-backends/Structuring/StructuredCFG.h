@@ -261,6 +261,8 @@ public:
   bool replaceEdge(BlockId From, BlockId OldTarget, BlockId NewTarget);
   bool redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
                             const std::vector<BlockId> &Preds);
+  bool redirectDephicationIncomingTarget(BlockId EdgeBlock, BlockId OldMerge,
+                                         BlockId NewMerge);
   bool removeBlock(BlockId Id);
   bool removeBlocks(const std::vector<BlockId> &Ids);
 

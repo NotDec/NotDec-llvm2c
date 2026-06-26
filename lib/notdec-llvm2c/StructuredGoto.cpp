@@ -8,7 +8,9 @@
 
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
+#include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/AST/Stmt.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/Support/Casting.h>
 
@@ -24,6 +26,56 @@ namespace st = notdec::backend::structuring;
 
 namespace {
 
+clang::VarDecl *assignmentTargetVar(clang::Stmt *Stmt) {
+  auto *Assign = llvm::dyn_cast_or_null<clang::BinaryOperator>(Stmt);
+  if (Assign == nullptr || Assign->getOpcode() != clang::BO_Assign) {
+    return nullptr;
+  }
+  auto *Target =
+      llvm::dyn_cast_or_null<clang::DeclRefExpr>(getNoCast(Assign->getLHS()));
+  return Target == nullptr ? nullptr
+                           : llvm::dyn_cast<clang::VarDecl>(Target->getDecl());
+}
+
+class DeclRefRewriter : public StmtTransform<DeclRefRewriter> {
+  std::map<clang::ValueDecl *, clang::ValueDecl *> Replacements;
+
+public:
+  DeclRefRewriter(
+      clang::ASTContext &Ctx,
+      std::map<clang::ValueDecl *, clang::ValueDecl *> Replacements)
+      : StmtTransform<DeclRefRewriter>(Ctx),
+        Replacements(std::move(Replacements)) {}
+
+  ExprResult TransformDeclRefExpr(clang::DeclRefExpr *E) {
+    auto It = Replacements.find(E->getDecl());
+    if (It == Replacements.end()) {
+      return StmtTransform<DeclRefRewriter>::TransformDeclRefExpr(E);
+    }
+    clang::ValueDecl *NewDecl = It->second;
+    return clang::DeclRefExpr::Create(
+        this->Context, E->getQualifierLoc(), E->getTemplateKeywordLoc(),
+        NewDecl, E->refersToEnclosingVariableOrCapture(), E->getLocation(),
+        NewDecl->getType().getNonReferenceType(), E->getValueKind());
+  }
+};
+
+class DeclRefCollector
+    : public clang::RecursiveASTVisitor<DeclRefCollector> {
+  std::set<clang::ValueDecl *> &Decls;
+
+public:
+  explicit DeclRefCollector(std::set<clang::ValueDecl *> &Decls)
+      : Decls(Decls) {}
+
+  bool VisitDeclRefExpr(clang::DeclRefExpr *Ref) {
+    if (auto *Decl = Ref->getDecl()) {
+      Decls.insert(Decl);
+    }
+    return true;
+  }
+};
+
 class StructuredGotoAdapter {
   CFG &Cfg;
   clang::ASTContext &Ctx;
@@ -31,6 +83,8 @@ class StructuredGotoAdapter {
 
   std::vector<clang::Stmt *> Payloads;
   st::StructuredCFG SharedCfg;
+  std::map<st::VVarId, clang::VarDecl *> DephicationVarDecls;
+  std::map<clang::VarDecl *, clang::DeclStmt *> CopiedDephicationDecls;
   std::map<st::BlockId, clang::LabelStmt *> Labels;
   std::set<st::BlockId> TargetedLabels;
 
@@ -43,21 +97,19 @@ public:
         st::createStructurer(SA.getStructurerName());
     assert(Structurer != nullptr);
     SharedCfg = buildCFG();
-    // Keep copied payload ids distinct in the shared CFG even when the C path
-    // still reuses the same underlying Clang nodes.
     SharedCfg.setPayloadMaterializeHook(
-        [this](const st::PayloadMaterializeContext &, st::PayloadMaterializeKind,
-               st::PayloadRef Payload, std::size_t) -> std::optional<st::PayloadRef> {
-          if (!Payload.isValid()) {
-            return Payload;
-          }
-          Payloads.push_back(Payloads[Payload.Id]);
-          return st::PayloadRef{Payloads.size() - 1};
-        });
+        [this](const st::PayloadMaterializeContext &Context,
+               st::PayloadMaterializeKind, st::PayloadRef Payload,
+               std::size_t) -> std::optional<st::PayloadRef> {
+          return materializePayload(Context, Payload);
+        },
+        /*SupportsPredecessorRewrite=*/true,
+        /*SupportsGroupedPredecessorRewrite=*/true);
     st::StructuredTree Tree = Structurer->structure(SharedCfg);
     collectGotoTargets(Tree, Tree.root());
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Tree.root(), Stmts);
+    prependUsedCopiedDephicationDecls(Stmts);
     replaceCFG(std::move(Stmts));
   }
 
@@ -76,6 +128,136 @@ private:
     }
     assert(Ref.Id < Payloads.size());
     return Payloads[Ref.Id];
+  }
+
+  std::optional<st::PayloadRef> materializePayload(
+      const st::PayloadMaterializeContext &Context, st::PayloadRef Payload) {
+    if (!Payload.isValid()) {
+      return Payload;
+    }
+
+    clang::Stmt *Stmt = Payloads[Payload.Id];
+    std::map<clang::ValueDecl *, clang::ValueDecl *> Replacements =
+        dephicationDeclReplacements(Context);
+    if (!Replacements.empty()) {
+      clang::StmtResult Rewritten =
+          rewriteDeclRefs(Stmt, std::move(Replacements));
+      if (Rewritten.isInvalid()) {
+        return std::nullopt;
+      }
+      Stmt = Rewritten.get();
+    }
+
+    Payloads.push_back(Stmt);
+    return st::PayloadRef{Payloads.size() - 1};
+  }
+
+  std::map<clang::ValueDecl *, clang::ValueDecl *>
+  dephicationDeclReplacements(
+      const st::PayloadMaterializeContext &Context) {
+    std::map<clang::ValueDecl *, clang::ValueDecl *> Replacements;
+    for (const auto &Copy : Context.DephicationVVarCopies) {
+      clang::VarDecl *Source = dephicationVarDecl(Copy.first);
+      clang::VarDecl *Target =
+          copiedDephicationVarDecl(Copy.second, Context);
+      if (Source != nullptr && Target != nullptr && Source != Target) {
+        Replacements.emplace(Source, Target);
+      }
+    }
+    if (Context.CurrentDephicationIncoming.has_value()) {
+      const st::DephicationIncoming &Incoming =
+          *Context.CurrentDephicationIncoming;
+      if (Incoming.SourceTarget != Incoming.Target) {
+        clang::VarDecl *Source = dephicationVarDecl(Incoming.SourceTarget);
+        clang::VarDecl *Target =
+            copiedDephicationVarDecl(Incoming.Target, Context);
+        if (Source != nullptr && Target != nullptr && Source != Target) {
+          Replacements.emplace(Source, Target);
+        }
+      }
+    }
+    return Replacements;
+  }
+
+  clang::VarDecl *dephicationVarDecl(st::VVarId VVar) const {
+    auto It = DephicationVarDecls.find(VVar);
+    return It == DephicationVarDecls.end() ? nullptr : It->second;
+  }
+
+  clang::StmtResult rewriteDeclRefs(
+      clang::Stmt *Stmt,
+      std::map<clang::ValueDecl *, clang::ValueDecl *> Replacements) {
+    DeclRefRewriter Rewriter(Ctx, std::move(Replacements));
+    if (auto *Expr = llvm::dyn_cast_or_null<clang::Expr>(Stmt)) {
+      return Rewriter.TransformExpr(Expr).get();
+    }
+    if (llvm::isa_and_nonnull<clang::ReturnStmt>(Stmt)) {
+      return Rewriter.TransformStmt(Stmt);
+    }
+    return Stmt;
+  }
+
+  clang::VarDecl *copiedDephicationVarDecl(
+      st::VVarId VVar, const st::PayloadMaterializeContext &Context) {
+    auto Existing = DephicationVarDecls.find(VVar);
+    if (Existing != DephicationVarDecls.end()) {
+      return Existing->second;
+    }
+
+    const st::DephicationVVar *Record = nullptr;
+    for (const st::DephicationVVar &Candidate : Context.DephicationVVars) {
+      if (Candidate.Id == VVar) {
+        Record = &Candidate;
+        break;
+      }
+    }
+    for (const st::DephicationVVar &Candidate : SharedCfg.dephicationVVars()) {
+      if (Candidate.Id == VVar) {
+        Record = &Candidate;
+        break;
+      }
+    }
+    if (Record == nullptr || Record->SourceId == st::InvalidVVarId) {
+      return nullptr;
+    }
+
+    clang::VarDecl *Source = dephicationVarDecl(Record->SourceId);
+    if (Source == nullptr) {
+      return nullptr;
+    }
+
+    std::string Name = Record->Name + "_copy" + std::to_string(Record->Id);
+    clang::IdentifierInfo *II = &Ctx.Idents.get(llvm::StringRef(Name));
+    clang::VarDecl *Copy = clang::VarDecl::Create(
+        Ctx, Source->getDeclContext(), clang::SourceLocation(),
+        clang::SourceLocation(), II, Source->getType(), nullptr,
+        clang::SC_None);
+    clang::DeclStmt *Decl = new (Ctx) clang::DeclStmt(
+        clang::DeclGroupRef(Copy), clang::SourceLocation(),
+        clang::SourceLocation());
+    DephicationVarDecls.emplace(VVar, Copy);
+    CopiedDephicationDecls.emplace(Copy, Decl);
+    return Copy;
+  }
+
+  void prependUsedCopiedDephicationDecls(std::vector<clang::Stmt *> &Stmts) {
+    if (CopiedDephicationDecls.empty()) {
+      return;
+    }
+
+    std::set<clang::ValueDecl *> UsedDecls;
+    DeclRefCollector Collector(UsedDecls);
+    for (clang::Stmt *Stmt : Stmts) {
+      Collector.TraverseStmt(Stmt);
+    }
+
+    std::vector<clang::Stmt *> DeclStmts;
+    for (const auto &Entry : CopiedDephicationDecls) {
+      if (UsedDecls.count(Entry.first) != 0) {
+        DeclStmts.push_back(Entry.second);
+      }
+    }
+    Stmts.insert(Stmts.begin(), DeclStmts.begin(), DeclStmts.end());
   }
 
   const st::CFGBlock *getSharedBlock(st::BlockId Id) const {
@@ -194,6 +376,11 @@ private:
               It->second, Block->getSAILRDephicationSourceBlock(), Merge,
               Block->getBlockID(), Statements[Assignment.StatementIndex],
               Assignment.IncomingName);
+          if (clang::VarDecl *Decl =
+                  assignmentTargetVar(Payloads[Statements[Assignment.StatementIndex]
+                                            .Id])) {
+            DephicationVarDecls.emplace(It->second, Decl);
+          }
         }
       }
     }
