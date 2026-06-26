@@ -51,6 +51,13 @@ bool sameBlockShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
          samePayloads(Lhs.Statements, Rhs.Statements);
 }
 
+bool sameBlockControlShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
+  return Lhs.Terminator == Rhs.Terminator &&
+         samePayload(Lhs.Condition, Rhs.Condition) &&
+         Lhs.Successors == Rhs.Successors &&
+         sameSwitchCases(Lhs.Cases, Rhs.Cases);
+}
+
 bool sameBlockIdentityKind(const CFGBlock &Lhs, const CFGBlock &Rhs) {
   if (Lhs.Origin != Rhs.Origin || Lhs.CopyKind != Rhs.CopyKind ||
       Lhs.CreatedBy != Rhs.CreatedBy) {
@@ -364,6 +371,158 @@ bool disjointPredecessorSets(const StructuredCFG &Graph, BlockId Lhs,
     }
   }
   return true;
+}
+
+bool hasDephicationContext(const StructuredCFG &Graph, BlockId Id) {
+  DephicationEdgeContext EdgeContext = Graph.dephicationEdgeContext(Id);
+  DephicationEdgeContext BlockContext = Graph.dephicationBlockContext(Id);
+  return !EdgeContext.VVars.empty() || !EdgeContext.Incomings.empty() ||
+         !BlockContext.VVars.empty() || !BlockContext.Incomings.empty();
+}
+
+bool canSplitCommonStatementTailBlock(const StructuredCFG &Graph,
+                                      const CFGBlock &Block) {
+  // This first DuplicationReverter step only splits already-materialized input
+  // blocks. Copied/synthetic/dephication blocks need richer payload ownership
+  // rules before moving statements out of them is safe.
+  if (Block.Origin != CFGBlockOrigin::Original ||
+      Block.CopyKind != CFGBlockCopyKind::None ||
+      Block.CreatedBy != CFGBlockCreator::Input ||
+      !Block.BodyMaterialized || Block.BodyBlock != Block.Id ||
+      Block.Statements.empty()) {
+    return false;
+  }
+  return !hasDephicationContext(Graph, Block.Id);
+}
+
+std::size_t commonStatementSuffixLength(const std::vector<PayloadRef> &Lhs,
+                                        const std::vector<PayloadRef> &Rhs) {
+  std::size_t Common = 0;
+  while (Common < Lhs.size() && Common < Rhs.size()) {
+    PayloadRef LhsPayload = Lhs[Lhs.size() - Common - 1];
+    PayloadRef RhsPayload = Rhs[Rhs.size() - Common - 1];
+    if (!samePayload(LhsPayload, RhsPayload)) {
+      break;
+    }
+    ++Common;
+  }
+  return Common;
+}
+
+bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
+                                  BlockId RhsId, std::size_t &CommonSuffix) {
+  if (LhsId == RhsId || Graph.hasEdge(LhsId, RhsId) ||
+      Graph.hasEdge(RhsId, LhsId)) {
+    return false;
+  }
+
+  const CFGBlock *Lhs = Graph.getBlock(LhsId);
+  const CFGBlock *Rhs = Graph.getBlock(RhsId);
+  if (Lhs == nullptr || Rhs == nullptr ||
+      !sameBlockIdentityKind(*Lhs, *Rhs) ||
+      !sameBlockControlShape(*Lhs, *Rhs) ||
+      !canSplitCommonStatementTailBlock(Graph, *Lhs) ||
+      !canSplitCommonStatementTailBlock(Graph, *Rhs) ||
+      !disjointPredecessorSets(Graph, LhsId, RhsId)) {
+    return false;
+  }
+
+  if (predecessorsOf(Graph, LhsId).empty() ||
+      predecessorsOf(Graph, RhsId).empty()) {
+    return false;
+  }
+
+  CommonSuffix = commonStatementSuffixLength(Lhs->Statements, Rhs->Statements);
+  return CommonSuffix > 0 && CommonSuffix < Lhs->Statements.size() &&
+         CommonSuffix < Rhs->Statements.size();
+}
+
+bool extractCommonStatementTail(StructuredCFG &Graph, BlockId LhsId,
+                                BlockId RhsId, std::size_t CommonSuffix) {
+  const CFGBlock *Lhs = Graph.getBlock(LhsId);
+  if (Lhs == nullptr || CommonSuffix == 0 ||
+      CommonSuffix >= Lhs->Statements.size()) {
+    return false;
+  }
+
+  std::vector<PayloadRef> TailStatements(Lhs->Statements.end() - CommonSuffix,
+                                         Lhs->Statements.end());
+  TerminatorKind TailTerminator = Lhs->Terminator;
+  PayloadRef TailCondition = Lhs->Condition;
+  std::vector<BlockId> TailSuccessors = Lhs->Successors;
+  std::vector<SwitchCase> TailCases = Lhs->Cases;
+
+  BlockId TailId = Graph.createSyntheticBlock(
+      TailSuccessors, CFGBlockCreator::SAILRDeoptimization);
+  CFGBlock *Tail = Graph.getBlock(TailId);
+  if (Tail == nullptr) {
+    return false;
+  }
+
+  Tail->CopyKind = CFGBlockCopyKind::None;
+  Tail->Statements = std::move(TailStatements);
+  Tail->Terminator = TailTerminator;
+  Tail->Condition = TailCondition;
+  Tail->Successors = std::move(TailSuccessors);
+  Tail->Cases = std::move(TailCases);
+
+  auto RewriteHead = [&](BlockId Id) {
+    CFGBlock *Block = Graph.getBlock(Id);
+    if (Block == nullptr || CommonSuffix >= Block->Statements.size()) {
+      return false;
+    }
+
+    Block->Statements.resize(Block->Statements.size() - CommonSuffix);
+    Block->Terminator = TerminatorKind::Fallthrough;
+    Block->Condition = {};
+    Block->Successors = {TailId};
+    Block->Cases.clear();
+    Block->BodyBlock = Id;
+    Block->BodyMaterialized = true;
+    return true;
+  };
+
+  return RewriteHead(LhsId) && RewriteHead(RhsId);
+}
+
+bool revertGotoRelatedCommonStatementTail(StructuredCFG &Graph,
+                                          const StructuringEvaluation &Current) {
+  if (Current.Gotos.empty()) {
+    return false;
+  }
+
+  std::vector<BlockId> BlockIds;
+  BlockIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    BlockIds.push_back(Block.Id);
+  }
+  std::sort(BlockIds.begin(), BlockIds.end());
+
+  for (const StructuredGoto &Goto : Current.Gotos.gotos()) {
+    if (Goto.Source == InvalidBlockId || Goto.Target == InvalidBlockId ||
+        !Graph.hasEdge(Goto.Source, Goto.Target)) {
+      continue;
+    }
+
+    for (BlockId OtherId : BlockIds) {
+      std::size_t CommonSuffix = 0;
+      if (!commonStatementTailCandidate(Graph, Goto.Target, OtherId,
+                                        CommonSuffix)) {
+        continue;
+      }
+
+      StructuredCFG Candidate = Graph;
+      if (!extractCommonStatementTail(Candidate, Goto.Target, OtherId,
+                                      CommonSuffix)) {
+        continue;
+      }
+
+      Graph = std::move(Candidate);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // Group selected predecessors by connectivity so one copied return tail can
@@ -1405,7 +1564,9 @@ StructuringOptimizationOptions DuplicationReverter::defaultOptions() {
 
 bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
                                      const StructuringEvaluation &Current) {
-  (void)Current;
+  if (revertGotoRelatedCommonStatementTail(Graph, Current)) {
+    return true;
+  }
 
   std::vector<BlockId> BlockIds;
   BlockIds.reserve(Graph.blocks().size());
