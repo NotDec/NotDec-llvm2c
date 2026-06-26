@@ -43,6 +43,19 @@ bool sameSwitchCases(const std::vector<SwitchCase> &Lhs,
   return true;
 }
 
+bool sameSwitchCaseValues(const std::vector<SwitchCase> &Lhs,
+                          const std::vector<SwitchCase> &Rhs) {
+  if (Lhs.size() != Rhs.size()) {
+    return false;
+  }
+  for (std::size_t I = 0; I < Lhs.size(); ++I) {
+    if (!samePayload(Lhs[I].Value, Rhs[I].Value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool sameBlockShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
   return Lhs.Terminator == Rhs.Terminator &&
          samePayload(Lhs.Condition, Rhs.Condition) &&
@@ -58,6 +71,14 @@ bool sameBlockControlShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
          sameSwitchCases(Lhs.Cases, Rhs.Cases);
 }
 
+bool sameRegionTailShape(const CFGBlock &Lhs, const CFGBlock &Rhs) {
+  return Lhs.Terminator == Rhs.Terminator &&
+         samePayload(Lhs.Condition, Rhs.Condition) &&
+         Lhs.Successors.size() == Rhs.Successors.size() &&
+         sameSwitchCaseValues(Lhs.Cases, Rhs.Cases) &&
+         samePayloads(Lhs.Statements, Rhs.Statements);
+}
+
 bool sameBlockIdentityKind(const CFGBlock &Lhs, const CFGBlock &Rhs) {
   if (Lhs.Origin != Rhs.Origin || Lhs.CopyKind != Rhs.CopyKind ||
       Lhs.CreatedBy != Rhs.CreatedBy) {
@@ -68,6 +89,10 @@ bool sameBlockIdentityKind(const CFGBlock &Lhs, const CFGBlock &Rhs) {
   }
   return Lhs.SourceBlock == Rhs.SourceBlock;
 }
+
+struct LinearRegion;
+
+LinearRegion findLinearRegionFromHead(const StructuredCFG &Graph, BlockId Head);
 
 std::vector<BlockId> predecessorsOf(const StructuredCFG &Graph,
                                     BlockId Target) {
@@ -91,6 +116,19 @@ struct LinearRegion {
   BlockId Head = InvalidBlockId;
   std::vector<BlockId> Blocks;
 };
+
+constexpr std::size_t MaxLinearRegionMergeBlocks = 12;
+
+const LinearRegion *cachedLinearRegion(const StructuredCFG &Graph, BlockId Head,
+                                       std::map<BlockId, LinearRegion> &Cache) {
+  auto It = Cache.find(Head);
+  if (It != Cache.end()) {
+    return &It->second;
+  }
+
+  auto Inserted = Cache.emplace(Head, findLinearRegionFromHead(Graph, Head));
+  return &Inserted.first->second;
+}
 
 std::vector<BlockId> externalPredecessorsOf(const StructuredCFG &Graph,
                                             const ReturnRegion &Region) {
@@ -440,6 +478,210 @@ bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
   CommonSuffix = commonStatementSuffixLength(Lhs->Statements, Rhs->Statements);
   return CommonSuffix > 0 && CommonSuffix < Lhs->Statements.size() &&
          CommonSuffix < Rhs->Statements.size();
+}
+
+bool canShareLinearRegionTailBlock(const StructuredCFG &Graph,
+                                   const CFGBlock &Block) {
+  // The first region-tail merge keeps the same conservative ownership rules as
+  // the statement-tail split: only already-materialized original blocks
+  // without dephication state are allowed to become shared tail blocks.
+  if (Block.Origin != CFGBlockOrigin::Original ||
+      Block.CopyKind != CFGBlockCopyKind::None ||
+      !Block.BodyMaterialized || Block.BodyBlock != Block.Id ||
+      Block.Statements.empty()) {
+    return false;
+  }
+  return !hasDephicationContext(Graph, Block.Id);
+}
+
+bool commonLinearRegionTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
+                                     BlockId RhsId, std::size_t &CommonSuffix,
+                                     std::map<BlockId, LinearRegion> &Cache) {
+  if (LhsId == RhsId || Graph.hasEdge(LhsId, RhsId) ||
+      Graph.hasEdge(RhsId, LhsId)) {
+    return false;
+  }
+
+  const CFGBlock *LhsHead = Graph.getBlock(LhsId);
+  const CFGBlock *RhsHead = Graph.getBlock(RhsId);
+  if (LhsHead == nullptr || RhsHead == nullptr ||
+      !canShareLinearRegionTailBlock(Graph, *LhsHead) ||
+      !canShareLinearRegionTailBlock(Graph, *RhsHead) ||
+      !disjointPredecessorSets(Graph, LhsId, RhsId) ||
+      reachesBlock(Graph, LhsId, RhsId) || reachesBlock(Graph, RhsId, LhsId)) {
+    return false;
+  }
+
+  const LinearRegion *LhsRegion = cachedLinearRegion(Graph, LhsId, Cache);
+  const LinearRegion *RhsRegion = cachedLinearRegion(Graph, RhsId, Cache);
+  if (LhsRegion == nullptr || RhsRegion == nullptr ||
+      LhsRegion->Head == InvalidBlockId || RhsRegion->Head == InvalidBlockId ||
+      LhsRegion->Blocks.size() < 2 || RhsRegion->Blocks.size() < 2 ||
+      LhsRegion->Blocks.size() > MaxLinearRegionMergeBlocks ||
+      RhsRegion->Blocks.size() > MaxLinearRegionMergeBlocks) {
+    return false;
+  }
+
+  std::size_t Common = 0;
+  while (Common < LhsRegion->Blocks.size() &&
+         Common < RhsRegion->Blocks.size()) {
+    BlockId LhsBlockId =
+        LhsRegion->Blocks[LhsRegion->Blocks.size() - Common - 1];
+    BlockId RhsBlockId =
+        RhsRegion->Blocks[RhsRegion->Blocks.size() - Common - 1];
+    const CFGBlock *LhsBlock = Graph.getBlock(LhsBlockId);
+    const CFGBlock *RhsBlock = Graph.getBlock(RhsBlockId);
+    if (LhsBlock == nullptr || RhsBlock == nullptr ||
+        !canShareLinearRegionTailBlock(Graph, *LhsBlock) ||
+        !canShareLinearRegionTailBlock(Graph, *RhsBlock)) {
+      break;
+    }
+
+    if (Common == 0) {
+      if (!sameBlockShape(*LhsBlock, *RhsBlock)) {
+        break;
+      }
+    } else if (!sameRegionTailShape(*LhsBlock, *RhsBlock)) {
+      break;
+    }
+
+    ++Common;
+  }
+
+  CommonSuffix = Common;
+  return Common >= 2 &&
+         ((Common == LhsRegion->Blocks.size() &&
+           Common == RhsRegion->Blocks.size()) ||
+          (Common < LhsRegion->Blocks.size() &&
+           Common < RhsRegion->Blocks.size()));
+}
+
+bool extractCommonLinearRegionTail(StructuredCFG &Graph,
+                                   const LinearRegion &LhsRegion,
+                                   const LinearRegion &RhsRegion,
+                                   std::size_t CommonSuffix) {
+  if (CommonSuffix < 2) {
+    return false;
+  }
+
+  if (LhsRegion.Head == InvalidBlockId || RhsRegion.Head == InvalidBlockId ||
+      CommonSuffix >= LhsRegion.Blocks.size() ||
+      CommonSuffix >= RhsRegion.Blocks.size()) {
+    if (CommonSuffix == LhsRegion.Blocks.size() &&
+        CommonSuffix == RhsRegion.Blocks.size()) {
+      StructuredCFG Candidate = Graph;
+      std::vector<BlockId> Preds = predecessorsOf(Graph, RhsRegion.Head);
+      if (!Candidate.redirectPredecessors(RhsRegion.Head, LhsRegion.Head,
+                                          Preds)) {
+        return false;
+      }
+      if (!Candidate.removeBlocks(RhsRegion.Blocks)) {
+        return false;
+      }
+      Graph = std::move(Candidate);
+      return true;
+    }
+    return false;
+  }
+
+  std::size_t LhsTailStart = LhsRegion.Blocks.size() - CommonSuffix;
+  std::size_t RhsTailStart = RhsRegion.Blocks.size() - CommonSuffix;
+  if (LhsTailStart == 0 || RhsTailStart == 0) {
+    return false;
+  }
+
+  for (std::size_t I = 0; I < CommonSuffix; ++I) {
+    BlockId LhsBlockId = LhsRegion.Blocks[LhsTailStart + I];
+    BlockId RhsBlockId = RhsRegion.Blocks[RhsTailStart + I];
+    const CFGBlock *LhsBlock = Graph.getBlock(LhsBlockId);
+    const CFGBlock *RhsBlock = Graph.getBlock(RhsBlockId);
+    if (LhsBlock == nullptr || RhsBlock == nullptr ||
+        !canShareLinearRegionTailBlock(Graph, *LhsBlock) ||
+        !canShareLinearRegionTailBlock(Graph, *RhsBlock) ||
+        !sameRegionTailShape(*LhsBlock, *RhsBlock)) {
+      return false;
+    }
+  }
+
+  BlockId RhsPrefix = RhsRegion.Blocks[RhsTailStart - 1];
+  BlockId LhsTailHead = LhsRegion.Blocks[LhsTailStart];
+  BlockId RhsTailHead = RhsRegion.Blocks[RhsTailStart];
+
+  StructuredCFG Candidate = Graph;
+  if (!Candidate.replaceEdge(RhsPrefix, RhsTailHead, LhsTailHead)) {
+    return false;
+  }
+
+  std::vector<BlockId> RhsTailBlocks(RhsRegion.Blocks.begin() + RhsTailStart,
+                                     RhsRegion.Blocks.end());
+  if (!Candidate.removeBlocks(RhsTailBlocks)) {
+    return false;
+  }
+
+  Graph = std::move(Candidate);
+  return true;
+}
+
+bool revertGotoRelatedCommonLinearRegionTail(
+    StructuredCFG &Graph, const StructuringEvaluation &Current) {
+  if (Current.Gotos.empty()) {
+    return false;
+  }
+
+  std::map<BlockId, LinearRegion> RegionCache;
+  std::vector<BlockId> BlockIds;
+  BlockIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    BlockIds.push_back(Block.Id);
+  }
+  std::sort(BlockIds.begin(), BlockIds.end());
+
+  for (const StructuredGoto &Goto : Current.Gotos.gotos()) {
+    if (Goto.Source == InvalidBlockId || Goto.Target == InvalidBlockId ||
+        !Graph.hasEdge(Goto.Source, Goto.Target)) {
+      continue;
+    }
+
+    const LinearRegion *GotoRegion =
+        cachedLinearRegion(Graph, Goto.Target, RegionCache);
+    if (GotoRegion == nullptr || GotoRegion->Head == InvalidBlockId ||
+        GotoRegion->Blocks.size() < 2 ||
+        GotoRegion->Blocks.size() > MaxLinearRegionMergeBlocks) {
+      continue;
+    }
+
+    BlockId BestOther = InvalidBlockId;
+    std::size_t BestSuffix = 0;
+    for (BlockId OtherId : BlockIds) {
+      std::size_t CommonSuffix = 0;
+      if (!commonLinearRegionTailCandidate(Graph, Goto.Target, OtherId,
+                                          CommonSuffix, RegionCache)) {
+        continue;
+      }
+      if (CommonSuffix > BestSuffix ||
+          (CommonSuffix == BestSuffix && OtherId < BestOther)) {
+        BestOther = OtherId;
+        BestSuffix = CommonSuffix;
+      }
+    }
+
+    if (BestOther == InvalidBlockId) {
+      continue;
+    }
+
+    const LinearRegion *BestRegion =
+        cachedLinearRegion(Graph, BestOther, RegionCache);
+    if (BestRegion == nullptr) {
+      continue;
+    }
+
+    if (extractCommonLinearRegionTail(Graph, *GotoRegion, *BestRegion,
+                                      BestSuffix)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool extractCommonStatementTail(StructuredCFG &Graph, BlockId LhsId,
@@ -1580,6 +1822,9 @@ StructuringOptimizationOptions DuplicationReverter::defaultOptions() {
 
 bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
                                      const StructuringEvaluation &Current) {
+  if (revertGotoRelatedCommonLinearRegionTail(Graph, Current)) {
+    return true;
+  }
   if (revertGotoRelatedCommonStatementTail(Graph, Current)) {
     return true;
   }

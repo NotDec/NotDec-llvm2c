@@ -4018,6 +4018,118 @@ void testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear() {
   assert(Cfg.getBlock(3)->Successors == std::vector<BlockId>({5, 1}));
 }
 
+void testDuplicationReverterMergesGotoRelatedLinearRegionTail() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Left0 = block(1, {4});
+  Left0.Statements.push_back({101});
+  Cfg.addBlock(std::move(Left0));
+
+  CFGBlock Left1 = block(4, {5});
+  Left1.Statements.push_back({201});
+  Left1.Statements.push_back({301});
+  Cfg.addBlock(std::move(Left1));
+
+  CFGBlock Left2 = block(5, {8});
+  Left2.Statements.push_back({401});
+  Cfg.addBlock(std::move(Left2));
+
+  Cfg.addBlock(block(2, {3}));
+
+  CFGBlock Right0 = block(3, {6});
+  Right0.CreatedBy = CFGBlockCreator::StructuredCFG;
+  Right0.Statements.push_back({102});
+  Cfg.addBlock(std::move(Right0));
+
+  CFGBlock Right1 = block(6, {7});
+  Right1.CreatedBy = CFGBlockCreator::StructuredCFG;
+  Right1.Statements.push_back({201});
+  Right1.Statements.push_back({301});
+  Cfg.addBlock(std::move(Right1));
+
+  CFGBlock Right2 = block(7, {8});
+  Right2.CreatedBy = CFGBlockCreator::StructuredCFG;
+  Right2.Statements.push_back({401});
+  Cfg.addBlock(std::move(Right2));
+
+  Cfg.addBlock(block(8, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *Left0After = Cfg.getBlock(1);
+  const CFGBlock *Left1After = Cfg.getBlock(4);
+  const CFGBlock *Right0After = Cfg.getBlock(3);
+  assert(Left0After != nullptr);
+  assert(Left1After != nullptr);
+  assert(Right0After != nullptr);
+  assert(hasSinglePayload(Left0After->Statements, 101));
+  assert(hasSinglePayload(Right0After->Statements, 102));
+  assert(Left1After->Statements.size() == 2);
+  assert(Left1After->Statements[0].Id == 201);
+  assert(Left1After->Statements[1].Id == 301);
+  assert(Left1After->Successors == std::vector<BlockId>{5});
+  assert(Cfg.getBlock(3)->Successors == std::vector<BlockId>{4});
+  assert(Cfg.getBlock(6) == nullptr);
+  assert(Cfg.getBlock(7) == nullptr);
+  assert(Cfg.getBlock(5) != nullptr);
+  assert(Cfg.getBlock(5)->Successors == std::vector<BlockId>{8});
+}
+
+void testDuplicationReverterSkipsGotoRelatedLinearTailWithoutHint() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Left0 = block(1, {4});
+  Left0.Statements.push_back({101});
+  Cfg.addBlock(std::move(Left0));
+
+  CFGBlock Left1 = block(4, {5});
+  Left1.Statements.push_back({201});
+  Left1.Statements.push_back({301});
+  Cfg.addBlock(std::move(Left1));
+
+  CFGBlock Left2 = block(5, {8});
+  Left2.Statements.push_back({401});
+  Cfg.addBlock(std::move(Left2));
+
+  Cfg.addBlock(block(2, {3}));
+
+  CFGBlock Right0 = block(3, {6});
+  Right0.CreatedBy = CFGBlockCreator::StructuredCFG;
+  Right0.Statements.push_back({102});
+  Cfg.addBlock(std::move(Right0));
+
+  CFGBlock Right1 = block(6, {7});
+  Right1.CreatedBy = CFGBlockCreator::StructuredCFG;
+  Right1.Statements.push_back({201});
+  Right1.Statements.push_back({301});
+  Cfg.addBlock(std::move(Right1));
+
+  CFGBlock Right2 = block(7, {8});
+  Right2.CreatedBy = CFGBlockCreator::StructuredCFG;
+  Right2.Statements.push_back({401});
+  Cfg.addBlock(std::move(Right2));
+
+  Cfg.addBlock(block(8, {}));
+
+  StructuringEvaluation Current;
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(6) != nullptr);
+  assert(Cfg.getBlock(4)->Successors == std::vector<BlockId>{5});
+  assert(Cfg.getBlock(6)->Successors == std::vector<BlockId>{7});
+}
+
 void testReturnDuplicatorLowDuplicatesGotoReturnTarget() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -9306,6 +9418,8 @@ int main() {
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
   testDuplicationReverterKeepsCommonStatementTailWithoutGotoHint();
   testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear();
+  testDuplicationReverterMergesGotoRelatedLinearRegionTail();
+  testDuplicationReverterSkipsGotoRelatedLinearTailWithoutHint();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
