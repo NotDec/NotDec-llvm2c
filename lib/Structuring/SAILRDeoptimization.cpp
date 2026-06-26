@@ -319,6 +319,99 @@ bool collectClosedLinearReturnTail(const StructuredCFG &Graph, BlockId Head,
   }
 }
 
+struct DiamondReturnSide {
+  BlockId Head = InvalidBlockId;
+  std::vector<BlockId> Blocks;
+};
+
+bool collectDiamondReturnSide(const StructuredCFG &Graph, BlockId Start,
+                              std::set<BlockId> &Seen,
+                              DiamondReturnSide &Side) {
+  BlockId Current = Start;
+  while (true) {
+    const CFGBlock *Block = Graph.getBlock(Current);
+    if (Block == nullptr) {
+      return false;
+    }
+
+    if (Block->Terminator == TerminatorKind::Branch) {
+      if (Block->Successors.size() != 2 || Side.Blocks.empty()) {
+        return false;
+      }
+      Side.Head = Current;
+      return true;
+    }
+
+    if (Block->Terminator != TerminatorKind::Fallthrough ||
+        Block->Successors.size() != 1) {
+      return false;
+    }
+
+    if (!Seen.insert(Current).second) {
+      return false;
+    }
+
+    Side.Blocks.push_back(Current);
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Current);
+    if (Preds.size() != 1) {
+      return false;
+    }
+    Current = Preds.front();
+  }
+}
+
+bool collectDiamondReturnRegion(const StructuredCFG &Graph, BlockId Terminal,
+                               ReturnRegion &Region) {
+  const CFGBlock *TerminalBlock = Graph.getBlock(Terminal);
+  if (TerminalBlock == nullptr || TerminalBlock->Terminator != TerminatorKind::Return ||
+      !TerminalBlock->Successors.empty()) {
+    return false;
+  }
+
+  std::vector<BlockId> TerminalPreds = predecessorsOf(Graph, Terminal);
+  if (TerminalPreds.size() != 2) {
+    return false;
+  }
+
+  std::set<BlockId> Seen = {Terminal};
+  std::vector<DiamondReturnSide> Sides;
+  Sides.reserve(2);
+  for (BlockId Pred : TerminalPreds) {
+    DiamondReturnSide Side;
+    if (!collectDiamondReturnSide(Graph, Pred, Seen, Side)) {
+      return false;
+    }
+    Sides.push_back(std::move(Side));
+  }
+
+  if (Sides[0].Head == InvalidBlockId || Sides[0].Head != Sides[1].Head) {
+    return false;
+  }
+
+  const CFGBlock *HeadBlock = Graph.getBlock(Sides[0].Head);
+  if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Branch ||
+      HeadBlock->Successors.size() != 2) {
+    return false;
+  }
+  if (Sides[0].Blocks.empty() || Sides[1].Blocks.empty()) {
+    return false;
+  }
+  if (!containsBlock(HeadBlock->Successors, Sides[0].Blocks.back()) ||
+      !containsBlock(HeadBlock->Successors, Sides[1].Blocks.back())) {
+    return false;
+  }
+
+  Region.Head = Sides[0].Head;
+  Region.Blocks.push_back(Region.Head);
+  for (const DiamondReturnSide &Side : Sides) {
+    for (auto It = Side.Blocks.rbegin(); It != Side.Blocks.rend(); ++It) {
+      Region.Blocks.push_back(*It);
+    }
+  }
+  Region.Blocks.push_back(Terminal);
+  return true;
+}
+
 bool prependBranchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
                                BlockId Pred, std::set<BlockId> &Seen) {
   const CFGBlock *PredBlock = Graph.getBlock(Pred);
@@ -399,6 +492,12 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
   if (EndBlock == nullptr || EndBlock->Terminator != TerminatorKind::Return ||
       !EndBlock->Successors.empty()) {
     return Region;
+  }
+
+  if (AllowComplexReturnRegion) {
+    if (collectDiamondReturnRegion(Graph, ReturnBlock, Region)) {
+      return Region;
+    }
   }
 
   Region.Head = ReturnBlock;
@@ -1173,6 +1272,21 @@ bool materializeDuplicatedRegion(StructuredCFG &Graph,
         NewPred = CopyRegion.copyOf(OriginalPred);
         OriginalPreds.push_back(OriginalPred);
         NewPreds.push_back(NewPred);
+      } else if (InternalPreds.size() > 1 &&
+                 Graph.hasGroupedPredecessorRewritePayloadMaterializeHook()) {
+        bool AllCopied = true;
+        for (BlockId Pred : InternalPreds) {
+          BlockId CopyPred = CopyRegion.copyOf(Pred);
+          if (CopyPred == InvalidBlockId) {
+            AllCopied = false;
+            break;
+          }
+          OriginalPreds.push_back(Pred);
+          NewPreds.push_back(CopyPred);
+        }
+        if (!AllCopied) {
+          return false;
+        }
       }
     }
 
