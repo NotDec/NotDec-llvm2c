@@ -93,6 +93,18 @@ static std::string escapeName(std::string Name) {
   return Name;
 }
 
+static std::string sharedValueName(llvm::Value &Val) {
+  if (Val.hasName()) {
+    return Val.getName().str();
+  }
+  if (auto *C = llvm::dyn_cast<llvm::ConstantInt>(&Val)) {
+    llvm::SmallString<32> Text;
+    C->getValue().toString(Text, 10, /*isSigned=*/false);
+    return Text.str().str();
+  }
+  return "incoming";
+}
+
 bool canIgnore(llvm::Instruction::CastOps OpCode) {
   switch (OpCode) {
   case llvm::Instruction::PtrToInt:
@@ -1191,7 +1203,11 @@ void SAFuncContext::materializePhiRewrites() {
       auto *IncomingStmt = createBinaryOperator(
           getASTContext(), makeDeclRefExpr(Rewrite->Var), IncomingExpr,
           clang::BO_Assign, Rewrite->Var->getType(), clang::VK_LValue);
+      unsigned StatementIndex = EdgeBlock->size();
       EdgeBlock->appendStmt(IncomingStmt);
+      EdgeBlock->addSAILRDephicationAssignment(
+          StatementIndex, Rewrite->Var->getNameAsString(),
+          sharedValueName(*IncomingValue));
     }
     EdgeBlock->setSAILRDephicationEdge(Group.IncomingBlock->getBlockID(),
                                        Group.MergeBlock->getBlockID());

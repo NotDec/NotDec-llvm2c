@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -212,6 +213,12 @@ public:
   bool IsSAILRDephicationEdge = false;
   unsigned SAILRDephicationSourceBlock = 0;
   unsigned SAILRDephicationTargetBlock = 0;
+  struct SAILRDephicationAssignment {
+    unsigned StatementIndex = 0;
+    std::string TargetName;
+    std::string IncomingName;
+  };
+  std::vector<SAILRDephicationAssignment> SAILRDephicationAssignments;
 
 public:
   class AdjacentBlock {
@@ -446,10 +453,22 @@ public:
   unsigned getSAILRDephicationTargetBlock() const {
     return SAILRDephicationTargetBlock;
   }
+  const std::vector<SAILRDephicationAssignment> &
+  getSAILRDephicationAssignments() const {
+    return SAILRDephicationAssignments;
+  }
   void setSAILRDephicationEdge(unsigned SourceBlock, unsigned TargetBlock) {
     IsSAILRDephicationEdge = true;
     SAILRDephicationSourceBlock = SourceBlock;
     SAILRDephicationTargetBlock = TargetBlock;
+  }
+  void addSAILRDephicationAssignment(unsigned StatementIndex,
+                                     std::string TargetName,
+                                     std::string IncomingName) {
+    SAILRDephicationAssignments.push_back({.StatementIndex = StatementIndex,
+                                           .TargetName = std::move(TargetName),
+                                           .IncomingName =
+                                               std::move(IncomingName)});
   }
 
   CFG *getParent() const { return Parent; }

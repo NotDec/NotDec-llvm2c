@@ -119,11 +119,13 @@ private:
 
   st::StructuredCFG buildCFG() {
     st::StructuredCFG Ret;
+    std::map<std::pair<st::BlockId, std::string>, st::VVarId> DephicationVVars;
 
     for (CFGBlock *Block : Cfg) {
       st::CFGBlock NewBlock;
       NewBlock.Id = Block->getBlockID();
       bool HasReturnStmt = false;
+      std::vector<st::PayloadRef> Statements;
       if (Block->isSAILRDephicationEdge()) {
         NewBlock.Origin = st::CFGBlockOrigin::Synthetic;
         NewBlock.CopyKind = st::CFGBlockCopyKind::SyntheticForwarder;
@@ -138,7 +140,9 @@ private:
             continue;
           }
           HasReturnStmt |= llvm::isa<clang::ReturnStmt>(Stmt);
-          NewBlock.Statements.push_back(addPayload(Stmt));
+          st::PayloadRef Payload = addPayload(Stmt);
+          NewBlock.Statements.push_back(Payload);
+          Statements.push_back(Payload);
         }
       }
 
@@ -172,6 +176,26 @@ private:
       }
 
       Ret.addBlock(std::move(NewBlock));
+      if (Block->isSAILRDephicationEdge()) {
+        for (const auto &Assignment : Block->getSAILRDephicationAssignments()) {
+          if (Assignment.StatementIndex >= Statements.size()) {
+            continue;
+          }
+          st::BlockId Merge = Block->getSAILRDephicationTargetBlock();
+          auto Key = std::make_pair(Merge, Assignment.TargetName);
+          auto It = DephicationVVars.find(Key);
+          if (It == DephicationVVars.end()) {
+            It = DephicationVVars
+                     .emplace(Key, Ret.addDephicationVVar(Assignment.TargetName,
+                                                          Merge))
+                     .first;
+          }
+          Ret.addDephicationIncoming(
+              It->second, Block->getSAILRDephicationSourceBlock(), Merge,
+              Block->getBlockID(), Statements[Assignment.StatementIndex],
+              Assignment.IncomingName);
+        }
+      }
     }
 
     return Ret;
