@@ -2192,8 +2192,13 @@ void testStructuredCFGDuplicateDephicationEdgeCopiesMetadata() {
         assert(Context.DephicationIncomings.front().EdgeBlock == CopyEdge);
         if (Kind == PayloadMaterializeKind::DephicationAssignment) {
           SawDephicationAssignment = true;
+          assert(Context.CurrentDephicationIncoming.has_value());
+          assert(Context.CurrentDephicationIncoming->Target == CopyVVar);
+          assert(Context.CurrentDephicationIncoming->Assignment.Id ==
+                 Payload.Id);
           return PayloadRef{Payload.Id + 1000};
         }
+        assert(!Context.CurrentDephicationIncoming.has_value());
         return Payload;
       });
   assert(Cfg.materializeBlockBody(CopyEdge));

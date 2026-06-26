@@ -133,6 +133,7 @@ struct PayloadMaterializeContext {
   std::map<VVarId, VVarId> DephicationVVarCopies;
   std::vector<DephicationVVar> DephicationVVars;
   std::vector<DephicationIncoming> DephicationIncomings;
+  std::optional<DephicationIncoming> CurrentDephicationIncoming;
 };
 
 using PayloadMaterializeHook =

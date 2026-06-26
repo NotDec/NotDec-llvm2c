@@ -40,13 +40,19 @@ void appendGeneratedPayload(std::vector<PayloadRef> &Generated,
   }
 }
 
-bool isDephicationAssignment(const PayloadMaterializeContext &Context,
-                             PayloadRef Payload) {
-  return std::any_of(Context.DephicationIncomings.begin(),
-                     Context.DephicationIncomings.end(),
-                     [Payload](const DephicationIncoming &Incoming) {
-                       return Incoming.Assignment.Id == Payload.Id;
-                     });
+std::optional<DephicationIncoming>
+dephicationAssignmentIncoming(const PayloadMaterializeContext &Context,
+                              PayloadRef Payload) {
+  auto It =
+      std::find_if(Context.DephicationIncomings.begin(),
+                   Context.DephicationIncomings.end(),
+                   [Payload](const DephicationIncoming &Incoming) {
+                     return Incoming.Assignment.Id == Payload.Id;
+                   });
+  if (It == Context.DephicationIncomings.end()) {
+    return std::nullopt;
+  }
+  return *It;
 }
 
 BlockId copyOf(const DuplicatedRegion &Region, BlockId Original) {
@@ -407,12 +413,16 @@ bool StructuredCFG::materializeBlockBodyImpl(
   for (std::size_t I = 0; I < Body->Statements.size(); ++I) {
     PayloadRef Payload = Body->Statements[I];
     if (MaterializeHook) {
+      std::optional<DephicationIncoming> AssignmentIncoming =
+          dephicationAssignmentIncoming(Context, Payload);
+      Context.CurrentDephicationIncoming = AssignmentIncoming;
       PayloadMaterializeKind Kind =
-          isDephicationAssignment(Context, Payload)
+          AssignmentIncoming.has_value()
               ? PayloadMaterializeKind::DephicationAssignment
               : PayloadMaterializeKind::Statement;
       std::optional<PayloadRef> Rewritten = MaterializeHook(
           Context, Kind, Payload, I);
+      Context.CurrentDephicationIncoming = std::nullopt;
       if (!Rewritten.has_value()) {
         return AbortMaterialize();
       }
