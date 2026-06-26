@@ -11,6 +11,7 @@ namespace llvm {
 class BasicBlock;
 class ConstantInt;
 class Function;
+class PHINode;
 class Value;
 } // namespace llvm
 
@@ -31,6 +32,12 @@ public:
     virtual PayloadRef getCondition(const llvm::Value &V,
                                     llvm::StringRef FallbackName) = 0;
     virtual PayloadRef getSwitchCase(const llvm::ConstantInt &V) = 0;
+    // PHI assignments are edge payloads in the shared CFG. The provider only
+    // owns how a backend spells the assignment; edge placement stays here.
+    virtual PayloadRef getPhiAssignment(const llvm::PHINode &Phi,
+                                        const llvm::Value &IncomingValue,
+                                        llvm::StringRef PhiName,
+                                        llvm::StringRef IncomingName) = 0;
   };
 
   static StructuredCFG build(const llvm::Function &F,

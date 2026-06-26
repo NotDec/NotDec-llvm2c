@@ -274,6 +274,16 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
       return addPayload(Payloads, Text.str().str());
     }
 
+    PayloadRef getPhiAssignment(const llvm::PHINode &Phi,
+                                const llvm::Value &IncomingValue,
+                                llvm::StringRef PhiName,
+                                llvm::StringRef IncomingName) override {
+      (void)Phi;
+      (void)IncomingValue;
+      return addPayload(Payloads,
+                        (PhiName + " = " + IncomingName + ";").str());
+    }
+
   private:
     std::vector<std::string> &Payloads;
   };

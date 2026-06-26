@@ -53,6 +53,7 @@ enum class CFGBlockCreator {
   Input,
   StructuredCFG,
   SAILRDeoptimization,
+  SAILRDephication,
 };
 
 struct SwitchCase {

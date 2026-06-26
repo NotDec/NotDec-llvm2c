@@ -1,6 +1,7 @@
 #include "notdec-backends/Structuring/MutableRegionGraph.h"
 #include "notdec-backends/Structuring/GotoManager.h"
 #include "notdec-backends/Structuring/GotoStructurer.h"
+#include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
 #include "notdec-backends/Structuring/PhoenixStructurer.h"
 #include "notdec-backends/Structuring/RecursiveStructurer.h"
 #include "notdec-backends/Structuring/RegionIdentifier.h"
@@ -19,7 +20,17 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
+
+#include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Instructions.h>
 
 using namespace notdec::backend::structuring;
 
@@ -439,6 +450,100 @@ CFGBlock switchBlock(BlockId Id, std::vector<BlockId> Successors) {
 
 bool hasSinglePayload(const std::vector<PayloadRef> &Refs, PayloadId Id) {
   return Refs.size() == 1 && Refs.front().Id == Id;
+}
+
+bool containsLineSubstring(const std::vector<std::string> &Lines,
+                           llvm::StringRef Needle) {
+  return std::find_if(Lines.begin(), Lines.end(), [&](const std::string &Line) {
+           return Line.find(Needle.str()) != std::string::npos;
+         }) != Lines.end();
+}
+
+PayloadRef addStringPayload(std::vector<std::string> &Payloads,
+                            std::string Text) {
+  Payloads.push_back(std::move(Text));
+  return PayloadRef{Payloads.size() - 1};
+}
+
+std::string testValueName(const llvm::Value &V, llvm::StringRef Fallback) {
+  if (V.hasName()) {
+    return V.getName().str();
+  }
+  return Fallback.str();
+}
+
+class StringPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
+public:
+  explicit StringPayloadProvider(std::vector<std::string> &Payloads)
+      : Payloads(Payloads) {}
+
+  void collectStatements(const llvm::BasicBlock &BB,
+                         std::vector<PayloadRef> &Out) override {
+    (void)BB;
+    (void)Out;
+  }
+
+  PayloadRef getCondition(const llvm::Value &V,
+                          llvm::StringRef FallbackName) override {
+    return addStringPayload(Payloads, testValueName(V, FallbackName));
+  }
+
+  PayloadRef getSwitchCase(const llvm::ConstantInt &V) override {
+    return addStringPayload(Payloads, std::to_string(V.getZExtValue()));
+  }
+
+  PayloadRef getPhiAssignment(const llvm::PHINode &Phi,
+                              const llvm::Value &IncomingValue,
+                              llvm::StringRef PhiName,
+                              llvm::StringRef IncomingName) override {
+    (void)Phi;
+    (void)IncomingValue;
+    return addStringPayload(Payloads,
+                            (PhiName + " = " + IncomingName + ";").str());
+  }
+
+private:
+  std::vector<std::string> &Payloads;
+};
+
+llvm::Function *makeSharedPhiFunction(llvm::LLVMContext &Context,
+                                      llvm::Module &Module) {
+  llvm::Type *I1Ty = llvm::Type::getInt1Ty(Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I1Ty, I32Ty, I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "phi_merge", Module);
+  auto ArgIt = F->arg_begin();
+  llvm::Value *Cond = &*ArgIt++;
+  Cond->setName("cond");
+  llvm::Value *A = &*ArgIt++;
+  A->setName("a");
+  llvm::Value *B = &*ArgIt++;
+  B->setName("b");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Then = llvm::BasicBlock::Create(Context, "then", F);
+  llvm::BasicBlock *Else = llvm::BasicBlock::Create(Context, "else", F);
+  llvm::BasicBlock *Merge = llvm::BasicBlock::Create(Context, "merge", F);
+
+  llvm::IRBuilder<> Builder(Context);
+  Builder.SetInsertPoint(Entry);
+  Builder.CreateCondBr(Cond, Then, Else);
+
+  Builder.SetInsertPoint(Then);
+  Builder.CreateBr(Merge);
+
+  Builder.SetInsertPoint(Else);
+  Builder.CreateBr(Merge);
+
+  Builder.SetInsertPoint(Merge);
+  auto *Phi = Builder.CreatePHI(I32Ty, 2, "x");
+  Phi->addIncoming(A, Then);
+  Phi->addIncoming(B, Else);
+  Builder.CreateRet(Phi);
+
+  return F;
 }
 
 void testAcyclicDroppedEdges() {
@@ -1311,6 +1416,52 @@ void testSolidityBodyBuilderConsumesStructuredSyntheticGoto() {
          Out.end());
   assert(std::find(Out.begin(), Out.end(), "// goto block_10") != Out.end());
   assert(std::find(Out.begin(), Out.end(), "unknown") == Out.end());
+}
+
+void testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("shared-phi-test", Context);
+  llvm::Function *F = makeSharedPhiFunction(Context, Module);
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  assert(Cfg.hasEdge(1, 4));
+  assert(Cfg.hasEdge(2, 5));
+  assert(!Cfg.hasEdge(1, 3));
+  assert(!Cfg.hasEdge(2, 3));
+
+  const CFGBlock *ThenEdge = Cfg.getBlock(4);
+  const CFGBlock *ElseEdge = Cfg.getBlock(5);
+  assert(ThenEdge != nullptr);
+  assert(ElseEdge != nullptr);
+  assert(ThenEdge->Origin == CFGBlockOrigin::Synthetic);
+  assert(ElseEdge->Origin == CFGBlockOrigin::Synthetic);
+  assert(ThenEdge->CreatedBy == CFGBlockCreator::SAILRDephication);
+  assert(ElseEdge->CreatedBy == CFGBlockCreator::SAILRDephication);
+  assert(ThenEdge->SyntheticSource == 1);
+  assert(ThenEdge->SyntheticTarget == 3);
+  assert(ElseEdge->SyntheticSource == 2);
+  assert(ElseEdge->SyntheticTarget == 3);
+  assert(ThenEdge->Successors == std::vector<BlockId>({3}));
+  assert(ElseEdge->Successors == std::vector<BlockId>({3}));
+  assert(ThenEdge->Statements.size() == 1);
+  assert(ElseEdge->Statements.size() == 1);
+  assert(Payloads[ThenEdge->Statements.front().Id] == "x = a;");
+  assert(Payloads[ElseEdge->Statements.front().Id] == "x = b;");
+}
+
+void testSolidityBodyBuilderReadsSharedPhiAssignments() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("solidity-shared-phi-test", Context);
+  llvm::Function *F = makeSharedPhiFunction(Context, Module);
+
+  std::vector<std::string> Out =
+      notdec::backend::solidity::BodyBuilder::readBody(*F);
+
+  assert(containsLineSubstring(Out, "x = a;"));
+  assert(containsLineSubstring(Out, "x = b;"));
 }
 
 void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
@@ -8244,6 +8395,8 @@ int main() {
   testSolidityBodyBuilderRendersVirtualBlockBodySource();
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
+  testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
+  testSolidityBodyBuilderReadsSharedPhiAssignments();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();
   testStructuredCFGRemoveBlockIsAtomicOnMaterializeFailure();

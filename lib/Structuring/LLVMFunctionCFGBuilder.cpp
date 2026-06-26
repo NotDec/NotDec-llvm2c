@@ -1,13 +1,34 @@
 #include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
 
 #include <map>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include <llvm/ADT/SmallString.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Value.h>
 
 namespace notdec::backend::structuring {
+namespace {
+
+std::string valueName(const llvm::Value &V, llvm::StringRef Prefix) {
+  if (V.hasName()) {
+    return V.getName().str();
+  }
+
+  if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(&V)) {
+    llvm::SmallString<32> Text;
+    C->getValue().toString(Text, 10, /*isSigned=*/false);
+    return Text.str().str();
+  }
+
+  return Prefix.str();
+}
+
+} // namespace
 
 StructuredCFG
 LLVMFunctionCFGBuilder::build(const llvm::Function &F,
@@ -57,6 +78,57 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
     }
 
     Cfg.addBlock(std::move(Block));
+  }
+
+  std::map<std::pair<BlockId, BlockId>, std::vector<PayloadRef>>
+      PhiAssignments;
+  for (const llvm::BasicBlock &BB : F) {
+    auto MergeIt = BlockIds.find(&BB);
+    if (MergeIt == BlockIds.end()) {
+      continue;
+    }
+    BlockId Merge = MergeIt->second;
+
+    for (const llvm::Instruction &I : BB) {
+      const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&I);
+      if (Phi == nullptr) {
+        break;
+      }
+
+      std::string PhiName = valueName(*Phi, "phi");
+      for (unsigned Idx = 0; Idx < Phi->getNumIncomingValues(); ++Idx) {
+        const llvm::BasicBlock *IncomingBlock = Phi->getIncomingBlock(Idx);
+        auto PredIt = BlockIds.find(IncomingBlock);
+        if (PredIt == BlockIds.end()) {
+          continue;
+        }
+        BlockId Pred = PredIt->second;
+        const llvm::Value *IncomingValue = Phi->getIncomingValue(Idx);
+        std::string IncomingName = valueName(*IncomingValue, "incoming");
+        PhiAssignments[{Pred, Merge}].push_back(Provider.getPhiAssignment(
+            *Phi, *IncomingValue, PhiName, IncomingName));
+      }
+    }
+  }
+
+  for (const auto &Entry : PhiAssignments) {
+    BlockId Pred = Entry.first.first;
+    BlockId Merge = Entry.first.second;
+    if (!Cfg.hasEdge(Pred, Merge)) {
+      continue;
+    }
+
+    CFGBlock EdgeBlock;
+    EdgeBlock.Origin = CFGBlockOrigin::Synthetic;
+    EdgeBlock.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+    EdgeBlock.CreatedBy = CFGBlockCreator::SAILRDephication;
+    EdgeBlock.SyntheticSource = Pred;
+    EdgeBlock.SyntheticTarget = Merge;
+    EdgeBlock.Statements = Entry.second;
+    EdgeBlock.Terminator = TerminatorKind::Fallthrough;
+    EdgeBlock.Successors = {Merge};
+    BlockId Edge = Cfg.addBlock(std::move(EdgeBlock));
+    Cfg.replaceEdge(Pred, Merge, Edge);
   }
 
   return Cfg;
