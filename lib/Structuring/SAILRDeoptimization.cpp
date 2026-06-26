@@ -1691,8 +1691,9 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
   }
 
   std::map<BlockId, ReturnRegion> Regions;
-  bool AllowBranchReturnRegion =
-      Graph.hasPredecessorRewritePayloadMaterializeHook();
+  // Angr does not gate return-region discovery on payload rewrite hooks. The
+  // hook only matters when we need predecessor-sensitive payload rewriting.
+  bool AllowBranchReturnRegion = true;
 
   for (const CFGBlock &Block : Graph.blocks()) {
     ReturnRegion Region =
