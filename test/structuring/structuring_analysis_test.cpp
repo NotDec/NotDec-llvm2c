@@ -3568,6 +3568,40 @@ void testDuplicationReverterMatchesTrueAGraphDeduplication() {
   assert(hasSinglePayload(Merged->Statements, 71));
 }
 
+void testDuplicationReverterMergesExactDuplicateBlocksWithCopiedSuccessorReference() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {4}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(4, {}));
+
+  BlockId CopiedTarget = Cfg.duplicateBlock(4, {});
+  assert(CopiedTarget != InvalidBlockId);
+
+  Cfg.addBlock(block(3, {CopiedTarget}));
+
+  CFGBlock *Block1 = Cfg.getBlock(1);
+  CFGBlock *Block3 = Cfg.getBlock(3);
+  assert(Block1 != nullptr && Block3 != nullptr);
+  Block1->Statements.push_back({72});
+  Block3->Statements.push_back({72});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(3) == nullptr);
+
+  const CFGBlock *Merged = Cfg.getBlock(1);
+  const CFGBlock *Copied = Cfg.getBlock(CopiedTarget);
+  assert(Merged != nullptr && Copied != nullptr);
+  assert(Merged->Successors == std::vector<BlockId>{4});
+  assert(Copied->Origin == CFGBlockOrigin::Copied);
+  assert(Copied->SourceBlock == 4);
+  assert(hasSinglePayload(Merged->Statements, 72));
+}
+
 void testDuplicationReverterKeepsProgrammerWrittenDuplication() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -3933,6 +3967,50 @@ void testDuplicationReverterExtractsGotoRelatedCommonStatementTail() {
   Cfg.addBlock(std::move(Right));
 
   Cfg.addBlock(block(5, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *LeftAfter = Cfg.getBlock(1);
+  const CFGBlock *RightAfter = Cfg.getBlock(3);
+  assert(LeftAfter != nullptr && RightAfter != nullptr);
+  assert(hasSinglePayload(LeftAfter->Statements, 101));
+  assert(hasSinglePayload(RightAfter->Statements, 102));
+  assert(LeftAfter->Successors.size() == 1);
+  assert(LeftAfter->Successors == RightAfter->Successors);
+
+  const CFGBlock *Tail = Cfg.getBlock(LeftAfter->Successors.front());
+  assert(Tail != nullptr);
+  assert(Tail->Origin == CFGBlockOrigin::Synthetic);
+  assert(Tail->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(hasSinglePayload(Tail->Statements, 201));
+  assert(Tail->Successors == std::vector<BlockId>{5});
+}
+
+void testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Left = block(1, {5});
+  Left.Statements.push_back({101});
+  Left.Statements.push_back({201});
+  Cfg.addBlock(std::move(Left));
+
+  Cfg.addBlock(block(2, {3}));
+
+  Cfg.addBlock(block(5, {}));
+  BlockId TailCopy = Cfg.duplicateBlock(5, {});
+  assert(TailCopy != InvalidBlockId);
+
+  CFGBlock Right = block(3, {TailCopy});
+  Right.Statements.push_back({102});
+  Right.Statements.push_back({201});
+  Cfg.addBlock(std::move(Right));
 
   StructuringEvaluation Current;
   Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
@@ -9494,6 +9572,7 @@ int main() {
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
   testDuplicationReverterMatchesTrueAGraphDeduplication();
+  testDuplicationReverterMergesExactDuplicateBlocksWithCopiedSuccessorReference();
   testDuplicationReverterKeepsProgrammerWrittenDuplication();
   testDuplicationReverterMergesDuplicatedTailProxyShape();
   testDuplicationReverterKeepsPayloadDivergentDuplicateBranches();
@@ -9507,6 +9586,7 @@ int main() {
   testDuplicationReverterKeepsValidEndGotos();
   testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
+  testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference();
   testDuplicationReverterKeepsCommonStatementTailWithoutGotoHint();
   testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear();
   testDuplicationReverterMergesGotoRelatedLinearRegionTail();
