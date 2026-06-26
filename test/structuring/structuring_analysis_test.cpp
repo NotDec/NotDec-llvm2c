@@ -2432,6 +2432,63 @@ void testStructuredCFGRedirectDephicationEdgeRematerializesAssignment() {
   assert(Incoming.Assignment.Id == 1040);
 }
 
+void testStructuredCFGRedirectDephicationEdgeFailureRollsBack() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+
+  CFGBlock Merge = block(3, {});
+  Merge.Statements.push_back({41});
+  Cfg.addBlock(std::move(Merge));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({3});
+  assert(CopyRegion.has_value());
+  BlockId CopyMerge = CopyRegion->copyOf(3);
+  assert(CopyMerge != InvalidBlockId);
+
+  bool SawRedirectedAssignment = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        (void)Payload;
+        if (Kind != PayloadMaterializeKind::DephicationAssignment) {
+          return Payload;
+        }
+        assert(Context.CurrentDephicationIncoming.has_value());
+        assert(Context.CurrentDephicationIncoming->SourceTarget == VVar);
+        SawRedirectedAssignment = true;
+        return std::nullopt;
+      });
+
+  assert(!Cfg.redirectDephicationIncomingTarget(4, 3, CopyMerge));
+  assert(SawRedirectedAssignment);
+
+  const CFGBlock *EdgeBlock = Cfg.getBlock(4);
+  assert(EdgeBlock != nullptr);
+  assert(EdgeBlock->BodyMaterialized);
+  assert(EdgeBlock->BodyBlock == 4);
+  assert(EdgeBlock->Statements.size() == 1);
+  assert(EdgeBlock->Statements.front().Id == 40);
+  assert(EdgeBlock->SyntheticTarget == 3);
+
+  const DephicationIncoming &Incoming = Cfg.dephicationIncomings().front();
+  assert(Incoming.MergeBlock == 3);
+  assert(Incoming.Target == VVar);
+  assert(Incoming.Assignment.Id == 40);
+}
+
 void testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(1, {4}));
@@ -8836,6 +8893,7 @@ int main() {
   testStructuredCFGQueriesCopiedDephicationEdgeWithoutCopiedMerge();
   testStructuredCFGMaterializeCopiedMergeReportsDephicationVVarCopy();
   testStructuredCFGRedirectDephicationEdgeRematerializesAssignment();
+  testStructuredCFGRedirectDephicationEdgeFailureRollsBack();
   testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar();
   testStructuredCFGRemoveBlockMaintainsDephicationMetadata();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
