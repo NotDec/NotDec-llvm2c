@@ -4780,6 +4780,97 @@ void testReturnDuplicatorLowSkipsBranchParentGotoSource() {
   assert(hasSinglePayload(OriginalRet->Statements, 16));
 }
 
+void testReturnDuplicatorLowCopiesReturnRegionWithDephicationVVars() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Head = block(2, {3});
+  Head.Statements.push_back({40});
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Ret = block(3, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({41});
+  Cfg.addBlock(std::move(Ret));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 2, 3, 2, {40}, "x");
+
+  VVarId CopiedVVar = InvalidVVarId;
+  bool SawDephicationAssignment = false;
+  bool SawCopiedReturnStatement = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        assert(Context.DephicationVVarCopies.size() == 1);
+        auto CopyIt = Context.DephicationVVarCopies.begin();
+        assert(CopyIt->first == VVar);
+        if (CopiedVVar == InvalidVVarId) {
+          CopiedVVar = CopyIt->second;
+        } else {
+          assert(CopyIt->second == CopiedVVar);
+        }
+        assert(Context.DephicationVVars.size() == 1);
+        assert(Context.DephicationVVars.front().Id == CopiedVVar);
+
+        if (Kind == PayloadMaterializeKind::DephicationAssignment) {
+          SawDephicationAssignment = true;
+          assert(Context.CurrentDephicationIncoming.has_value());
+          assert(Context.CurrentDephicationIncoming->Target == CopiedVVar);
+          assert(Context.CurrentDephicationIncoming->Assignment.Id ==
+                 Payload.Id);
+          return PayloadRef{Payload.Id + 1000};
+        }
+
+        if (Kind == PayloadMaterializeKind::Statement) {
+          assert(!Context.CurrentDephicationIncoming.has_value());
+          if (Payload.Id == 41) {
+            SawCopiedReturnStatement = true;
+          }
+          return PayloadRef{Payload.Id + 1000};
+        }
+
+        assert(!Context.CurrentDephicationIncoming.has_value());
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(SawDephicationAssignment);
+  assert(SawCopiedReturnStatement);
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(Cfg.getBlock(3) != nullptr);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors == std::vector<BlockId>{2});
+  assert(Block0->Successors.front() != 2);
+
+  const CFGBlock *CopyHead = Cfg.getBlock(Block0->Successors.front());
+  const CFGBlock *CopyRet = nullptr;
+  if (CopyHead != nullptr && !CopyHead->Successors.empty()) {
+    CopyRet = Cfg.getBlock(CopyHead->Successors.front());
+  }
+  assert(CopyHead != nullptr && CopyRet != nullptr);
+  assert(CopyHead->Terminator == TerminatorKind::Fallthrough);
+  assert(CopyRet->Terminator == TerminatorKind::Return);
+  assert(CopyHead->BodyBlock == CopyHead->Id);
+  assert(CopyRet->BodyBlock == CopyRet->Id);
+  assert(hasSinglePayload(CopyHead->Statements, 1040));
+  assert(hasSinglePayload(CopyRet->Statements, 1041));
+}
+
 void testReturnDuplicatorLowCopiesTerminalForkRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -9440,6 +9531,7 @@ int main() {
   testReturnDuplicatorLowCommitsCopyAtomically();
   testReturnDuplicatorLowUsesParentGotoSource();
   testReturnDuplicatorLowSkipsBranchParentGotoSource();
+  testReturnDuplicatorLowCopiesReturnRegionWithDephicationVVars();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testReturnDuplicatorLowCopiesReturnTailForkRegion();
   testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();

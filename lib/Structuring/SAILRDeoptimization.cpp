@@ -99,6 +99,10 @@ std::vector<BlockId> predecessorsOf(const StructuredCFG &Graph,
   return Graph.predecessorsOf(Target);
 }
 
+bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
+                                const GotoManager &Gotos, BlockId Source,
+                                BlockId Target);
+
 bool reachesBlock(const StructuredCFG &Graph, BlockId Start, BlockId Target);
 
 bool sameBlockSet(std::vector<BlockId> A, std::vector<BlockId> B) {
@@ -638,7 +642,8 @@ bool revertGotoRelatedCommonLinearRegionTail(
 
   for (const StructuredGoto &Goto : Current.Gotos.gotos()) {
     if (Goto.Source == InvalidBlockId || Goto.Target == InvalidBlockId ||
-        !Graph.hasEdge(Goto.Source, Goto.Target)) {
+        !gotoEdgeFromSourceOrParent(Graph, Current.Gotos, Goto.Source,
+                                    Goto.Target)) {
       continue;
     }
 
@@ -747,7 +752,8 @@ bool revertGotoRelatedCommonStatementTail(StructuredCFG &Graph,
 
   for (const StructuredGoto &Goto : Current.Gotos.gotos()) {
     if (Goto.Source == InvalidBlockId || Goto.Target == InvalidBlockId ||
-        !Graph.hasEdge(Goto.Source, Goto.Target)) {
+        !gotoEdgeFromSourceOrParent(Graph, Current.Gotos, Goto.Source,
+                                    Goto.Target)) {
       continue;
     }
 
