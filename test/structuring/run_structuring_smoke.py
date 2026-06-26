@@ -658,6 +658,8 @@ def run_sailr_dephication_copied_switch_contrast_case(
         failures.append("angr: missing copied switch payloads")
     if "return p_copy1 + 1;" not in angr_output:
         failures.append("angr: missing copied return payload")
+    if "int p;" not in angr_output:
+        failures.append("angr: missing shared branch declaration")
     if "p_reg2mem" in angr_output:
         failures.append("angr: reg2mem fallback leaked into output")
 
