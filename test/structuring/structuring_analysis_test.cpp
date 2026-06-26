@@ -417,6 +417,65 @@ protected:
   }
 };
 
+// First trial adds copied dephication state and a bad block, then the second
+// trial checks that analyze() rolled everything back before retrying.
+class RecoverCopiedDephicationPass : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  const char *name() const override {
+    return "RecoverCopiedDephicationPass";
+  }
+
+  unsigned Attempts = 0;
+  BlockId CopiedEdge = InvalidBlockId;
+  BlockId CopiedMerge = InvalidBlockId;
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    ++Attempts;
+
+    if (Attempts == 1) {
+      std::optional<DuplicatedRegion> CopyRegion =
+          Graph.duplicateRegion({1, 4, 3});
+      assert(CopyRegion.has_value());
+      CopiedEdge = CopyRegion->copyOf(4);
+      CopiedMerge = CopyRegion->copyOf(3);
+      assert(CopiedEdge != InvalidBlockId);
+      assert(CopiedMerge != InvalidBlockId);
+      assert(Graph.dephicationVVars().size() == 2);
+      assert(Graph.dephicationIncomings().size() == 2);
+
+      CFGBlock *Block0 = Graph.getBlock(0);
+      assert(Block0 != nullptr);
+      Block0->Successors = {99};
+      Block0->Terminator = TerminatorKind::Fallthrough;
+
+      CFGBlock BadBlock;
+      BadBlock.Id = 99;
+      BadBlock.Terminator = TerminatorKind::Return;
+      Graph.addBlock(std::move(BadBlock));
+      return true;
+    }
+
+    CFGBlock *Block0 = Graph.getBlock(0);
+    if (Block0 == nullptr || Block0->Successors != std::vector<BlockId>({1})) {
+      return false;
+    }
+    assert(Graph.getBlock(99) == nullptr);
+    assert(Graph.getBlock(CopiedEdge) == nullptr);
+    assert(Graph.getBlock(CopiedMerge) == nullptr);
+    assert(Graph.dephicationVVars().size() == 1);
+    assert(Graph.dephicationIncomings().size() == 1);
+
+    Block0->Successors.clear();
+    Block0->Terminator = TerminatorKind::Return;
+    return true;
+  }
+};
+
 class GotoRegionTester : public GotoStructurer {
 public:
   using GotoStructurer::structureRegion;
@@ -6537,6 +6596,49 @@ void testStructuringOptimizationPassRejectsOnlyRolledBackChanges() {
   assert(!Result.Succeeded);
 }
 
+void testStructuringOptimizationPassRollsBackCopiedDephicationMetadata() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+
+  CFGBlock Merge = block(3, {});
+  Merge.Statements.push_back({41});
+  Cfg.addBlock(std::move(Merge));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  StructuringOptimizationOptions Options;
+  Options.MaxOptIters = 2;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  FailOnBlockRegionStructurer Structurer;
+  RecoverCopiedDephicationPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Pass.Attempts == 2);
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(Block0->Successors.empty());
+  assert(Result.Output.getBlock(99) == nullptr);
+  assert(Result.Output.dephicationVVars().size() == 1);
+  assert(Result.Output.dephicationIncomings().size() == 1);
+}
+
 void testStructuringOptimizationPipelineKeepsAcceptedPasses() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -9178,6 +9280,7 @@ int main() {
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testStructuringOptimizationPassRejectsOnlyRolledBackChanges();
+  testStructuringOptimizationPassRollsBackCopiedDephicationMetadata();
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
   testStructuringOptimizationPipelineSkipsRejectedPassAndContinues();
   testSAILRDeoptimizationPipelineMatchesAngrOrder();
