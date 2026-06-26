@@ -186,6 +186,28 @@ CFGBlock *StructuredCFG::getBlock(BlockId Id) {
   return nullptr;
 }
 
+VVarId StructuredCFG::addDephicationVVar(std::string Name,
+                                         BlockId MergeBlock) {
+  VVarId Id = static_cast<VVarId>(DephicationVVars.size());
+  DephicationVVars.push_back(
+      {.Id = Id, .Name = std::move(Name), .MergeBlock = MergeBlock});
+  return Id;
+}
+
+void StructuredCFG::addDephicationIncoming(VVarId Target,
+                                           BlockId IncomingBlock,
+                                           BlockId MergeBlock,
+                                           BlockId EdgeBlock,
+                                           PayloadRef Assignment,
+                                           std::string IncomingName) {
+  DephicationIncomings.push_back({.Target = Target,
+                                  .IncomingBlock = IncomingBlock,
+                                  .MergeBlock = MergeBlock,
+                                  .EdgeBlock = EdgeBlock,
+                                  .Assignment = Assignment,
+                                  .IncomingName = std::move(IncomingName)});
+}
+
 void StructuredCFG::setPayloadMaterializeHook(
     PayloadMaterializeHook Hook, bool SupportsPredecessorRewrite,
     bool SupportsGroupedPredecessorRewrite) {

@@ -1450,6 +1450,27 @@ void testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads() {
   assert(ElseEdge->Statements.size() == 1);
   assert(Payloads[ThenEdge->Statements.front().Id] == "x = a;");
   assert(Payloads[ElseEdge->Statements.front().Id] == "x = b;");
+
+  const std::vector<DephicationVVar> &VVars = Cfg.dephicationVVars();
+  const std::vector<DephicationIncoming> &Incomings =
+      Cfg.dephicationIncomings();
+  assert(VVars.size() == 1);
+  assert(VVars.front().Id == 0);
+  assert(VVars.front().Name == "x");
+  assert(VVars.front().MergeBlock == 3);
+  assert(Incomings.size() == 2);
+  assert(Incomings[0].Target == 0);
+  assert(Incomings[0].IncomingBlock == 1);
+  assert(Incomings[0].MergeBlock == 3);
+  assert(Incomings[0].EdgeBlock == 4);
+  assert(Incomings[0].Assignment.Id == ThenEdge->Statements.front().Id);
+  assert(Incomings[0].IncomingName == "a");
+  assert(Incomings[1].Target == 0);
+  assert(Incomings[1].IncomingBlock == 2);
+  assert(Incomings[1].MergeBlock == 3);
+  assert(Incomings[1].EdgeBlock == 5);
+  assert(Incomings[1].Assignment.Id == ElseEdge->Statements.front().Id);
+  assert(Incomings[1].IncomingName == "b");
 }
 
 void testSolidityBodyBuilderReadsSharedPhiAssignments() {

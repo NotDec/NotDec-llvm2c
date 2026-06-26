@@ -14,6 +14,12 @@
 namespace notdec::backend::structuring {
 namespace {
 
+struct PendingPhiAssignment {
+  VVarId Target = InvalidVVarId;
+  PayloadRef Payload;
+  std::string IncomingName;
+};
+
 std::string valueName(const llvm::Value &V, llvm::StringRef Prefix) {
   if (V.hasName()) {
     return V.getName().str();
@@ -80,7 +86,7 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
     Cfg.addBlock(std::move(Block));
   }
 
-  std::map<std::pair<BlockId, BlockId>, std::vector<PayloadRef>>
+  std::map<std::pair<BlockId, BlockId>, std::vector<PendingPhiAssignment>>
       PhiAssignments;
   for (const llvm::BasicBlock &BB : F) {
     auto MergeIt = BlockIds.find(&BB);
@@ -96,6 +102,7 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
       }
 
       std::string PhiName = valueName(*Phi, "phi");
+      VVarId VVar = Cfg.addDephicationVVar(PhiName, Merge);
       for (unsigned Idx = 0; Idx < Phi->getNumIncomingValues(); ++Idx) {
         const llvm::BasicBlock *IncomingBlock = Phi->getIncomingBlock(Idx);
         auto PredIt = BlockIds.find(IncomingBlock);
@@ -105,8 +112,10 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
         BlockId Pred = PredIt->second;
         const llvm::Value *IncomingValue = Phi->getIncomingValue(Idx);
         std::string IncomingName = valueName(*IncomingValue, "incoming");
-        PhiAssignments[{Pred, Merge}].push_back(Provider.getPhiAssignment(
-            *Phi, *IncomingValue, PhiName, IncomingName));
+        PayloadRef Payload = Provider.getPhiAssignment(
+            *Phi, *IncomingValue, PhiName, IncomingName);
+        PhiAssignments[{Pred, Merge}].push_back(
+            {.Target = VVar, .Payload = Payload, .IncomingName = IncomingName});
       }
     }
   }
@@ -124,11 +133,18 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
     EdgeBlock.CreatedBy = CFGBlockCreator::SAILRDephication;
     EdgeBlock.SyntheticSource = Pred;
     EdgeBlock.SyntheticTarget = Merge;
-    EdgeBlock.Statements = Entry.second;
+    EdgeBlock.Statements.reserve(Entry.second.size());
+    for (const PendingPhiAssignment &Assignment : Entry.second) {
+      EdgeBlock.Statements.push_back(Assignment.Payload);
+    }
     EdgeBlock.Terminator = TerminatorKind::Fallthrough;
     EdgeBlock.Successors = {Merge};
     BlockId Edge = Cfg.addBlock(std::move(EdgeBlock));
     Cfg.replaceEdge(Pred, Merge, Edge);
+    for (const PendingPhiAssignment &Assignment : Entry.second) {
+      Cfg.addDephicationIncoming(Assignment.Target, Pred, Merge, Edge,
+                                 Assignment.Payload, Assignment.IncomingName);
+    }
   }
 
   return Cfg;

@@ -6,6 +6,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -14,10 +15,12 @@ namespace notdec::backend::structuring {
 using BlockId = std::uint32_t;
 using NodeId = std::uint32_t;
 using PayloadId = std::size_t;
+using VVarId = std::uint32_t;
 
 constexpr BlockId InvalidBlockId = std::numeric_limits<BlockId>::max();
 constexpr NodeId InvalidNodeId = std::numeric_limits<NodeId>::max();
 constexpr PayloadId InvalidPayloadId = std::numeric_limits<PayloadId>::max();
+constexpr VVarId InvalidVVarId = std::numeric_limits<VVarId>::max();
 
 // Language backends keep their own statement/expression storage and pass stable
 // ids here. The structuring layer only moves these ids around, so it does not
@@ -110,6 +113,25 @@ struct StructuredSwitchCase {
   NodeId Body = InvalidNodeId;
 };
 
+// Angr-style dephication needs a shared variable identity before any renderer
+// sees the body. This table records the Phi destination as a vvar and keeps
+// incoming assignments tied to CFG edge blocks, so later copy/materialize passes
+// can rewrite payloads without asking C or Solidity to infer Phi semantics.
+struct DephicationVVar {
+  VVarId Id = InvalidVVarId;
+  std::string Name;
+  BlockId MergeBlock = InvalidBlockId;
+};
+
+struct DephicationIncoming {
+  VVarId Target = InvalidVVarId;
+  BlockId IncomingBlock = InvalidBlockId;
+  BlockId MergeBlock = InvalidBlockId;
+  BlockId EdgeBlock = InvalidBlockId;
+  PayloadRef Assignment;
+  std::string IncomingName;
+};
+
 struct CFGBlock {
   BlockId Id = InvalidBlockId;
 
@@ -179,9 +201,20 @@ public:
 
   const std::vector<CFGBlock> &blocks() const { return Blocks; }
   std::vector<CFGBlock> &blocks() { return Blocks; }
+  const std::vector<DephicationVVar> &dephicationVVars() const {
+    return DephicationVVars;
+  }
+  const std::vector<DephicationIncoming> &dephicationIncomings() const {
+    return DephicationIncomings;
+  }
 
   const CFGBlock *getBlock(BlockId Id) const;
   CFGBlock *getBlock(BlockId Id);
+  VVarId addDephicationVVar(std::string Name, BlockId MergeBlock);
+  void addDephicationIncoming(VVarId Target, BlockId IncomingBlock,
+                              BlockId MergeBlock, BlockId EdgeBlock,
+                              PayloadRef Assignment,
+                              std::string IncomingName);
   void setPayloadMaterializeHook(PayloadMaterializeHook Hook,
                                  bool SupportsPredecessorRewrite = false,
                                  bool SupportsGroupedPredecessorRewrite = false);
@@ -215,6 +248,8 @@ private:
   bool removeBlockInPlace(BlockId Id);
 
   std::vector<CFGBlock> Blocks;
+  std::vector<DephicationVVar> DephicationVVars;
+  std::vector<DephicationIncoming> DephicationIncomings;
   PayloadMaterializeHook MaterializeHook;
   PayloadMaterializeResultHook MaterializeResultHook;
   bool MaterializeHookSupportsPredecessorRewrite = false;
