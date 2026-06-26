@@ -83,6 +83,7 @@ struct DephicationVVar {
   VVarId Id = InvalidVVarId;
   std::string Name;
   BlockId MergeBlock = InvalidBlockId;
+  BlockId SourceMergeBlock = InvalidBlockId;
 };
 
 struct DephicationIncoming {

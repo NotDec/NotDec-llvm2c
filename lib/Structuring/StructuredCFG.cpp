@@ -193,7 +193,10 @@ VVarId StructuredCFG::addDephicationVVar(std::string Name,
                                          BlockId MergeBlock) {
   VVarId Id = static_cast<VVarId>(DephicationVVars.size());
   DephicationVVars.push_back(
-      {.Id = Id, .Name = std::move(Name), .MergeBlock = MergeBlock});
+      {.Id = Id,
+       .Name = std::move(Name),
+       .MergeBlock = MergeBlock,
+       .SourceMergeBlock = MergeBlock});
   return Id;
 }
 
