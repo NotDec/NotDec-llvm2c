@@ -54,6 +54,49 @@ static cl::opt<bool>
                 cl::desc("Disable SSA demotion passes. Eliminate all phi nodes "
                          "before enabling this."),
                 cl::init(false), cl::cat(NotdecLLVM2CCat));
+struct SAILRDephicationModeChoice {
+  ::notdec::llvm2c::SAILRDephicationMode Mode =
+      ::notdec::llvm2c::SAILRDephicationMode::LegacyDemoteSSA;
+
+  friend bool operator==(const SAILRDephicationModeChoice &Lhs,
+                         const SAILRDephicationModeChoice &Rhs) {
+    return Lhs.Mode == Rhs.Mode;
+  }
+};
+
+namespace llvm::cl {
+template <> struct OptionValue<SAILRDephicationModeChoice> final
+    : OptionValueCopy<SAILRDephicationModeChoice> {
+  using WrapperType = SAILRDephicationModeChoice;
+
+  OptionValue() = default;
+  OptionValue(const SAILRDephicationModeChoice &V) { this->setValue(V); }
+
+  OptionValue<SAILRDephicationModeChoice> &
+  operator=(const SAILRDephicationModeChoice &V) {
+    this->setValue(V);
+    return *this;
+  }
+};
+} // namespace llvm::cl
+
+static cl::opt<SAILRDephicationModeChoice> sailrDephicationMode(
+    "sailr-dephication-mode",
+    cl::desc("Choose the SAILR Phi handling mode."),
+    cl::init(SAILRDephicationModeChoice{}), cl::cat(NotdecLLVM2CCat));
+static bool InitSAILRDephicationModeChoices = []() {
+  auto &Parser = sailrDephicationMode.getParser();
+  Parser.addLiteralOption(
+      "legacy", SAILRDephicationModeChoice{
+                    ::notdec::llvm2c::SAILRDephicationMode::LegacyDemoteSSA},
+      "keep the current Phi demotion flow");
+  Parser.addLiteralOption(
+      "angr", SAILRDephicationModeChoice{
+                   ::notdec::llvm2c::SAILRDephicationMode::
+                       AngrSharedDephication},
+      "use shared dephication mode");
+  return true;
+}();
 static cl::opt<bool>
     filterUnusedDefinitions(
         "filter-unused-definitions",
@@ -115,6 +158,7 @@ static cl::opt<bool> sailrUseSyntheticForwarder(
       .noDemoteSSA = noDemoteSSA,
       .enableColor = enableColor,
       .filterUnusedDefinitions = filterUnusedDefinitions,
+      .sailrDephicationMode = sailrDephicationMode.getValue().Mode,
       .sailrDefaultRewriteMode = DefaultRewriteMode,
       .structurer = std::string(Algo.getValue().Name),
       .workDir = "",

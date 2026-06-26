@@ -19,6 +19,11 @@ enum class SAILRDefaultRewriteMode {
   SyntheticForwarder,
 };
 
+enum class SAILRDephicationMode {
+  LegacyDemoteSSA,
+  AngrSharedDephication,
+};
+
 inline SAILRDefaultRewriteMode
 normalizeSAILRDefaultRewriteMode(bool UseSyntheticForwarder,
                                  SAILRDefaultRewriteMode SelectedMode) {
@@ -30,6 +35,8 @@ struct Options {
   bool noDemoteSSA = false;
   bool enableColor = false;
   bool filterUnusedDefinitions = false;
+  SAILRDephicationMode sailrDephicationMode =
+      SAILRDephicationMode::LegacyDemoteSSA;
   SAILRDefaultRewriteMode sailrDefaultRewriteMode =
       SAILRDefaultRewriteMode::SyntheticGoto;
   std::string structurer;

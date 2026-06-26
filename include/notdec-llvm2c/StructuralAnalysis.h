@@ -394,6 +394,18 @@ class SAFuncContext {
   std::vector<clang::Stmt *> VarDecls;
   std::map<clang::Expr *, LoadExprCreater> LoadInfoMap;
 
+  // Angr-style dephication keeps Phi value choice on the incoming edge. We
+  // first record the LLVM edge here, then materialize a small CFG edge block
+  // after all source-level CFG blocks and edges have been created.
+  struct PendingPhiRewrite {
+    llvm::PHINode *Phi = nullptr;
+    clang::VarDecl *Var = nullptr;
+    CFGBlock *Block = nullptr;
+    llvm::BasicBlock *IncomingBlock = nullptr;
+    unsigned IncomingIndex = 0;
+  };
+  std::vector<PendingPhiRewrite> PendingPhiRewrites;
+
 public:
   SAFuncContext(SAContext &ctx, llvm::Function &func,
                 llvm::FunctionAnalysisManager &FAM);
@@ -423,6 +435,11 @@ public:
     }
     ExprMap[V] = &Expr;
   }
+  void registerPhiRewrite(llvm::PHINode &Phi, CFGBlock &Block,
+                          clang::VarDecl &Var,
+                          llvm::BasicBlock &IncomingBlock,
+                          unsigned IncomingIndex);
+  void materializePhiRewrites();
   clang::IdentifierInfo *getIdentifierInfo(llvm::StringRef Name) {
     return getNewIdentifierInfo(*Names, getASTContext().Idents, Name);
   }
@@ -677,9 +694,27 @@ public:
   void visitGetElementPtrInst(llvm::GetElementPtrInst &I);
   void visitUnaryOperator(llvm::UnaryOperator &I);
   void visitCastInst(llvm::CastInst &I);
-  void visitPhiNode(llvm::PHINode &I) {
+  void visitPHINode(llvm::PHINode &I) {
+    if (FCtx.getOpts().sailrDephicationMode ==
+        SAILRDephicationMode::AngrSharedDephication) {
+      auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(I));
+      auto Ty = FCtx.getTypeBuilder().getType(&I);
+      clang::VarDecl *VD = clang::VarDecl::Create(
+          Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
+          clang::SourceLocation(), II, Ty, nullptr, clang::SC_None);
+      auto *Decl = new (Ctx) clang::DeclStmt(
+          clang::DeclGroupRef(VD), clang::SourceLocation(),
+          clang::SourceLocation());
+      FCtx.getCFG().getEntry().prependStmt(Decl);
+      auto *Ref = makeDeclRefExpr(VD);
+      FCtx.addMapping(&I, *Ref);
+      for (unsigned Idx = 0; Idx < I.getNumIncomingValues(); ++Idx) {
+        FCtx.registerPhiRewrite(I, *Blk, *VD, *I.getIncomingBlock(Idx), Idx);
+      }
+      return;
+    }
     llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
-                 << "CFGBuilder.visitPhiNode: PHI node should be eliminated by "
+                 << "CFGBuilder.visitPHINode: PHI node should be eliminated by "
                     "reg2mem first!\n";
     std::abort();
   }

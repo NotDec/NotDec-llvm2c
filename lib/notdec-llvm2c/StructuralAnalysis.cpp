@@ -1133,6 +1133,45 @@ void SAFuncContext::addStmt(CFGBlock &Block, clang::Stmt &Stmt,
   }
 }
 
+void SAFuncContext::registerPhiRewrite(llvm::PHINode &Phi, CFGBlock &Block,
+                                       clang::VarDecl &Var,
+                                       llvm::BasicBlock &IncomingBlock,
+                                       unsigned IncomingIndex) {
+  PendingPhiRewrites.push_back(
+      {.Phi = &Phi,
+       .Var = &Var,
+       .Block = &Block,
+       .IncomingBlock = &IncomingBlock,
+       .IncomingIndex = IncomingIndex});
+}
+
+void SAFuncContext::materializePhiRewrites() {
+  if (PendingPhiRewrites.empty()) {
+    return;
+  }
+
+  for (const PendingPhiRewrite &Rewrite : PendingPhiRewrites) {
+    assert(Rewrite.Phi != nullptr);
+    assert(Rewrite.Var != nullptr);
+    assert(Rewrite.Block != nullptr);
+    assert(Rewrite.IncomingBlock != nullptr);
+    CFGBlock *IncomingBlock = getBlock(*Rewrite.IncomingBlock);
+    auto *IncomingValue = Rewrite.Phi->getIncomingValue(Rewrite.IncomingIndex);
+    auto *IncomingExpr =
+        ExprBuilder(*this).visitValue(IncomingValue, Rewrite.Phi,
+                                      Rewrite.IncomingIndex,
+                                      Rewrite.Var->getType());
+    auto *IncomingStmt = createBinaryOperator(
+        getASTContext(), makeDeclRefExpr(Rewrite.Var), IncomingExpr,
+        clang::BO_Assign, Rewrite.Var->getType(), clang::VK_LValue);
+    CFGBlock *EdgeBlock = *Cfg->createBlock();
+    EdgeBlock->appendStmt(IncomingStmt);
+    replaceAllSucc(IncomingBlock, Rewrite.Block, EdgeBlock);
+    addEdge(EdgeBlock, Rewrite.Block);
+  }
+  PendingPhiRewrites.clear();
+}
+
 void SAFuncContext::setTerminator(CFGBlock &block, CFGTerminator Term,
                                   llvm::Instruction &InsertLoc) {
   LoadCloneRewriter R(getASTContext(), LoadInfoMap, InsertLoc);
@@ -1614,7 +1653,9 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
     assert(false && "Broken Module!");
   }
 
-  if (!opts.noDemoteSSA) {
+  bool UseLegacyPhiDemotion =
+      opts.sailrDephicationMode == SAILRDephicationMode::LegacyDemoteSSA;
+  if (!opts.noDemoteSSA && UseLegacyPhiDemotion) {
     if (HT) {
       demoteSSAFixHT(M, MAM, *HT, WorkDir);
     } else {
@@ -2167,6 +2208,7 @@ void SAFuncContext::run() {
     }
   }
   Cfg->sanityCheck();
+  materializePhiRewrites();
 
   // // Create the stub exit block.
   // // TODO the exit block is currently not used. Edges to exit block are not

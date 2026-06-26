@@ -274,6 +274,28 @@ cont:
         "absent": ["goto ret", "goto cont"],
     },
     {
+        "name": "sailr_angr_dephication_phi",
+        "ir": r"""
+define i32 @f(i1 %c, i32 %a, i32 %b) {
+entry:
+  br i1 %c, label %then, label %else
+
+then:
+  br label %merge
+
+else:
+  br label %merge
+
+merge:
+  %x = phi i32 [ %a, %then ], [ %b, %else ]
+  ret i32 %x
+}
+""",
+        "args": ["--sailr-dephication-mode=angr"],
+        "contains": ["int x;", "x = a;", "x = b;", "return x;"],
+        "absent": ["phi", "reg2mem"],
+    },
+    {
         "name": "phi_demote_before_structuring",
         "ir": r"""
 define i32 @main(i32 %x) {
@@ -405,7 +427,7 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
             "-o",
             str(output_path),
             "--algo=structured-sailr",
-        ],
+        ] + case.get("args", []),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
