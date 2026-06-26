@@ -1632,21 +1632,10 @@ void testSolidityBodyBuilderReadsCopiedSharedPhiAssignments() {
   std::vector<std::string> Out =
       notdec::backend::solidity::BodyBuilder::readBody(*F);
 
-  bool HasCopiedAssignment = std::find_if(
-                                 Out.begin(), Out.end(),
-                                 [](const std::string &Line) {
-                                   return Line.find("p_copy") !=
-                                              std::string::npos &&
-                                          Line.find(" = ") != std::string::npos;
-                                 }) != Out.end();
-  bool HasCopiedReturn = std::find_if(Out.begin(), Out.end(),
-                                      [](const std::string &Line) {
-                                        return Line.find("return p_copy") !=
-                                               std::string::npos;
-                                      }) != Out.end();
-
-  assert(HasCopiedAssignment);
-  assert(HasCopiedReturn);
+  assert(containsLineSubstring(Out, "p_copy1 = a;"));
+  assert(containsLineSubstring(Out, "p = b;"));
+  assert(containsLineSubstring(Out, "return p_copy1"));
+  assert(containsLineSubstring(Out, "return p"));
 }
 
 void testSolidityBodyBuilderRewritesCopiedDephicationVVars() {
