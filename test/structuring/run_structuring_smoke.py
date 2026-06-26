@@ -566,6 +566,55 @@ def run_sailr_improved_phoenix_case(notdec_llvm2c: Path,
     return failures
 
 
+def run_sailr_dephication_mode_contrast_case(
+    notdec_llvm2c: Path, work_dir: Path) -> list[str]:
+    case = next(c for c in CASES if c["name"] == "sailr_angr_dephication_phi")
+    input_path = work_dir / "sailr_dephication_mode_contrast.ll"
+    input_path.write_text(case["ir"].strip() + "\n")
+
+    failures = []
+    outputs = {}
+    for mode in ("legacy", "angr"):
+        output_path = work_dir / f"sailr_dephication_mode_contrast.{mode}.c"
+        proc = subprocess.run(
+            [
+                str(notdec_llvm2c),
+                str(input_path),
+                "-o",
+                str(output_path),
+                "--algo=structured-sailr",
+                f"--sailr-dephication-mode={mode}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode != 0:
+            failures.append(f"{mode}: command failed\n{proc.stdout}")
+            continue
+        outputs[mode] = output_path.read_text()
+
+    legacy_output = outputs.get("legacy", "")
+    angr_output = outputs.get("angr", "")
+    if "int x;" in legacy_output:
+        failures.append("legacy: unexpected copied vvar declaration")
+    if "x = a;" in legacy_output or "x = b;" in legacy_output:
+        failures.append("legacy: unexpected shared dephication payloads")
+    if "return a;" not in legacy_output or "return b;" not in legacy_output:
+        failures.append("legacy: missing direct branch returns")
+
+    if "int x;" not in angr_output:
+        failures.append("angr: missing copied vvar declaration")
+    if "x = a;" not in angr_output or "x = b;" not in angr_output:
+        failures.append("angr: missing shared dephication payloads")
+    if "return x;" not in angr_output:
+        failures.append("angr: missing merged return")
+    if "reg2mem" in angr_output:
+        failures.append("angr: reg2mem fallback leaked into output")
+
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notdec-llvm2c", required=True, type=Path)
@@ -579,6 +628,8 @@ def main() -> int:
             all_failures.extend(run_case(notdec_llvm2c, work_dir, case))
         all_failures.extend(
             run_sailr_improved_phoenix_case(notdec_llvm2c, work_dir))
+        all_failures.extend(
+            run_sailr_dephication_mode_contrast_case(notdec_llvm2c, work_dir))
 
     if all_failures:
         print("\n".join(all_failures))
