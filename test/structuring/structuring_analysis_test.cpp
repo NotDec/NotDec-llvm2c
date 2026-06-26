@@ -2120,15 +2120,27 @@ void testStructuredCFGDuplicateDephicationEdgeCopiesMetadata() {
   assert(Incomings[0].IncomingBlock == 1);
   assert(Incomings[0].MergeBlock == 3);
   assert(Incomings[0].EdgeBlock == 4);
+  assert(Incomings[0].SourceIncomingBlock == 1);
+  assert(Incomings[0].SourceMergeBlock == 3);
+  assert(Incomings[0].SourceEdgeBlock == 4);
   assert(Incomings[0].Assignment.Id == 40);
   assert(Incomings[1].IncomingBlock == CopyIncoming);
   assert(Incomings[1].MergeBlock == 3);
   assert(Incomings[1].EdgeBlock == CopyEdge);
+  assert(Incomings[1].SourceIncomingBlock == 1);
+  assert(Incomings[1].SourceMergeBlock == 3);
+  assert(Incomings[1].SourceEdgeBlock == 4);
   assert(Incomings[1].Assignment.Id == 40);
 
   Cfg.setPayloadMaterializeHook(
-      [](const PayloadMaterializeContext &, PayloadMaterializeKind Kind,
+      [CopyEdge](const PayloadMaterializeContext &Context,
+         PayloadMaterializeKind Kind,
          PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        assert(Context.DephicationVVars.size() == 1);
+        assert(Context.DephicationVVars.front().Name == "x");
+        assert(Context.DephicationIncomings.size() == 1);
+        assert(Context.DephicationIncomings.front().Target == 0);
+        assert(Context.DephicationIncomings.front().EdgeBlock == CopyEdge);
         if (Kind == PayloadMaterializeKind::Statement) {
           return PayloadRef{Payload.Id + 1000};
         }
@@ -2167,6 +2179,7 @@ void testStructuredCFGRemoveBlockMaintainsDephicationMetadata() {
   assert(Cfg.getBlock(4) != nullptr);
   assert(Cfg.dephicationIncomings().size() == 1);
   assert(Cfg.dephicationIncomings().front().EdgeBlock == 4);
+  assert(Cfg.dephicationIncomings().front().SourceEdgeBlock == 4);
 
   CopyBlock->Cases.clear();
   assert(Cfg.removeBlock(4));

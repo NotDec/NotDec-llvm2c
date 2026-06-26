@@ -75,6 +75,28 @@ enum class PayloadMaterializeResult {
   Aborted,
 };
 
+// Angr-style dephication needs a shared variable identity before any renderer
+// sees the body. This table records the Phi destination as a vvar and keeps
+// incoming assignments tied to CFG edge blocks, so later copy/materialize passes
+// can rewrite payloads without asking C or Solidity to infer Phi semantics.
+struct DephicationVVar {
+  VVarId Id = InvalidVVarId;
+  std::string Name;
+  BlockId MergeBlock = InvalidBlockId;
+};
+
+struct DephicationIncoming {
+  VVarId Target = InvalidVVarId;
+  BlockId IncomingBlock = InvalidBlockId;
+  BlockId MergeBlock = InvalidBlockId;
+  BlockId EdgeBlock = InvalidBlockId;
+  BlockId SourceIncomingBlock = InvalidBlockId;
+  BlockId SourceMergeBlock = InvalidBlockId;
+  BlockId SourceEdgeBlock = InvalidBlockId;
+  PayloadRef Assignment;
+  std::string IncomingName;
+};
+
 struct PayloadMaterializeContext {
   BlockId SourceBlock = InvalidBlockId;
   BlockId BodyBlock = InvalidBlockId;
@@ -96,6 +118,8 @@ struct PayloadMaterializeContext {
   TerminatorKind NewTerminator = TerminatorKind::Fallthrough;
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
+  std::vector<DephicationVVar> DephicationVVars;
+  std::vector<DephicationIncoming> DephicationIncomings;
 };
 
 using PayloadMaterializeHook =
@@ -111,25 +135,6 @@ struct StructuredSwitchCase {
   PayloadRef Value;
   BlockId Target = InvalidBlockId;
   NodeId Body = InvalidNodeId;
-};
-
-// Angr-style dephication needs a shared variable identity before any renderer
-// sees the body. This table records the Phi destination as a vvar and keeps
-// incoming assignments tied to CFG edge blocks, so later copy/materialize passes
-// can rewrite payloads without asking C or Solidity to infer Phi semantics.
-struct DephicationVVar {
-  VVarId Id = InvalidVVarId;
-  std::string Name;
-  BlockId MergeBlock = InvalidBlockId;
-};
-
-struct DephicationIncoming {
-  VVarId Target = InvalidVVarId;
-  BlockId IncomingBlock = InvalidBlockId;
-  BlockId MergeBlock = InvalidBlockId;
-  BlockId EdgeBlock = InvalidBlockId;
-  PayloadRef Assignment;
-  std::string IncomingName;
 };
 
 struct CFGBlock {
@@ -251,6 +256,11 @@ private:
       BlockId EdgeBlock, const std::vector<PayloadRef> &OriginalStatements,
       const std::vector<PayloadRef> &RewrittenStatements);
   void removeDephicationBlockReferences(const std::vector<BlockId> &Ids);
+  std::vector<DephicationIncoming>
+  dephicationIncomingsForEdge(BlockId EdgeBlock) const;
+  std::vector<DephicationVVar>
+  dephicationVVarsForIncomings(const std::vector<DephicationIncoming> &Incomings)
+      const;
   BlockId nextBlockId() const;
   bool removeBlockInPlace(BlockId Id);
 
