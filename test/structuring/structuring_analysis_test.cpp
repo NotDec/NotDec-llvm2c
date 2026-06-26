@@ -1514,6 +1514,18 @@ void testSolidityBodyBuilderReadsSharedPhiAssignments() {
   assert(containsLineSubstring(Out, "x = b;"));
 }
 
+void testSolidityBodyBuilderRewritesCopiedDephicationVVars() {
+  using notdec::backend::solidity::BodyBuilder;
+
+  std::vector<std::pair<std::string, std::string>> Copies = {{"p", "p_copy1"}};
+  assert(BodyBuilder::rewriteCopiedDephicationVVars("p = a;", Copies) ==
+         "p_copy1 = a;");
+  assert(BodyBuilder::rewriteCopiedDephicationVVars("if (p) {", Copies) ==
+         "if (p_copy1) {");
+  assert(BodyBuilder::rewriteCopiedDephicationVVars("panic = p_copy0;", Copies) ==
+         "panic = p_copy0;");
+}
+
 void testStructuredCFGRemoveBlockMaterializesCopiedBody() {
   StructuredCFG Cfg;
   CFGBlock Source = block(10, {});
@@ -8818,6 +8830,7 @@ int main() {
   testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
   testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
   testSolidityBodyBuilderReadsSharedPhiAssignments();
+  testSolidityBodyBuilderRewritesCopiedDephicationVVars();
   testStructuredCFGDuplicateDephicationEdgeCopiesMetadata();
   testStructuredCFGQueriesDephicationEdgeContext();
   testStructuredCFGQueriesCopiedDephicationEdgeWithoutCopiedMerge();

@@ -3,6 +3,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <llvm/ADT/StringRef.h>
@@ -27,6 +28,9 @@ public:
   static std::vector<std::string>
   renderStructuredBody(const structuring::StructuredTree &Tree,
                        const std::vector<std::string> &Payloads);
+  static std::string rewriteCopiedDephicationVVars(
+      std::string Text,
+      const std::vector<std::pair<std::string, std::string>> &Copies);
   static std::optional<std::string> getStringMetadata(const llvm::Instruction &I,
                                                       llvm::StringRef Kind);
   static std::optional<std::string>

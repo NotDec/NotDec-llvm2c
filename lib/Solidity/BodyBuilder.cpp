@@ -3,8 +3,9 @@
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
 #include <cctype>
-#include <optional>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -28,10 +29,40 @@ using structuring::StructuredCFG;
 using structuring::StructuredNode;
 using structuring::StructuredNodeKind;
 using structuring::StructuredTree;
+using structuring::VVarId;
 
 PayloadRef addPayload(std::vector<std::string> &Payloads, std::string Text) {
   Payloads.push_back(std::move(Text));
   return PayloadRef{Payloads.size() - 1};
+}
+
+bool isIdentifierChar(char C) {
+  return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
+}
+
+std::string replaceIdentifier(std::string Text, llvm::StringRef From,
+                              llvm::StringRef To) {
+  if (From.empty() || From == To) {
+    return Text;
+  }
+
+  std::size_t Pos = 0;
+  while ((Pos = Text.find(From.str(), Pos)) != std::string::npos) {
+    bool HasLeft = Pos > 0 && isIdentifierChar(Text[Pos - 1]);
+    std::size_t End = Pos + From.size();
+    bool HasRight = End < Text.size() && isIdentifierChar(Text[End]);
+    if (HasLeft || HasRight) {
+      Pos = End;
+      continue;
+    }
+    Text.replace(Pos, From.size(), To.str());
+    Pos += To.size();
+  }
+  return Text;
+}
+
+std::string copiedVVarName(llvm::StringRef SourceName, VVarId Copy) {
+  return (SourceName + "_copy" + std::to_string(Copy)).str();
 }
 
 std::string payloadText(const std::vector<std::string> &Payloads,
@@ -290,18 +321,37 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
 
   SolidityPayloadProvider Provider(Payloads);
   StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(F, Provider);
-  // The Solidity payload store is string-based, so copied blocks can get new
-  // payload ids without pulling target-specific state into the structuring layer.
+  std::map<VVarId, std::string> DephicationVVarNames;
+  for (const structuring::DephicationVVar &VVar : Cfg.dephicationVVars()) {
+    DephicationVVarNames.emplace(VVar.Id, VVar.Name);
+  }
+
+  // The Solidity payload store is string-based. Copies still use shared
+  // dephication context; the backend only rewrites concrete payload text.
   Cfg.setPayloadMaterializeHook(
-      [&Payloads](const PayloadMaterializeContext &, PayloadMaterializeKind,
-                  PayloadRef Payload,
+      [&Payloads, &DephicationVVarNames](const PayloadMaterializeContext &Context,
+                  PayloadMaterializeKind, PayloadRef Payload,
                   std::size_t) -> std::optional<PayloadRef> {
         if (!Payload.isValid()) {
           return Payload;
         }
-        Payloads.push_back(Payloads[Payload.Id]);
+        std::string Text = Payloads[Payload.Id];
+        std::vector<std::pair<std::string, std::string>> Copies;
+        for (const auto &Copy : Context.DephicationVVarCopies) {
+          auto SourceIt = DephicationVVarNames.find(Copy.first);
+          if (SourceIt == DephicationVVarNames.end()) {
+            continue;
+          }
+          Copies.push_back(
+              {SourceIt->second, copiedVVarName(SourceIt->second, Copy.second)});
+        }
+        Text = BodyBuilder::rewriteCopiedDephicationVVars(std::move(Text),
+                                                          Copies);
+        Payloads.push_back(std::move(Text));
         return PayloadRef{Payloads.size() - 1};
-      });
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
 
   std::unique_ptr<structuring::Structurer> Structurer =
       structuring::createStructurer(structuring::DefaultStructurerName);
@@ -311,6 +361,15 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
   Result.push_back(Payloads.empty() ? "// TODO: recover body"
                                     : "// TODO: recover remaining body");
   return Result;
+}
+
+std::string BodyBuilder::rewriteCopiedDephicationVVars(
+    std::string Text,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  for (const auto &Copy : Copies) {
+    Text = replaceIdentifier(std::move(Text), Copy.first, Copy.second);
+  }
+  return Text;
 }
 
 std::vector<std::string>
