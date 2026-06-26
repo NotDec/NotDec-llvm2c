@@ -839,6 +839,9 @@ std::map<VVarId, VVarId> StructuredCFG::dephicationVVarCopiesForIncomings(
     if (Incoming.SourceEdgeBlock == Incoming.EdgeBlock) {
       continue;
     }
+    if (Incoming.SourceTarget == Incoming.Target) {
+      continue;
+    }
     Result.emplace(Incoming.SourceTarget, Incoming.Target);
   }
   return Result;

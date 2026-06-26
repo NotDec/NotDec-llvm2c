@@ -2252,6 +2252,35 @@ void testStructuredCFGQueriesDephicationEdgeContext() {
   assert(RetiredContext.VVarCopies.empty());
 }
 
+void testStructuredCFGQueriesCopiedDephicationEdgeWithoutCopiedMerge() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+  Cfg.addBlock(block(3, {}));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({1, 4});
+  assert(CopyRegion.has_value());
+  BlockId CopyEdge = CopyRegion->copyOf(4);
+  assert(CopyEdge != InvalidBlockId);
+
+  DephicationEdgeContext CopyContext = Cfg.dephicationEdgeContext(CopyEdge);
+  assert(CopyContext.Incomings.size() == 1);
+  assert(CopyContext.VVars.size() == 1);
+  assert(CopyContext.VVars.front().Id == VVar);
+  assert(CopyContext.VVarCopies.empty());
+}
+
 void testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(1, {4}));
@@ -8652,6 +8681,7 @@ int main() {
   testSolidityBodyBuilderReadsSharedPhiAssignments();
   testStructuredCFGDuplicateDephicationEdgeCopiesMetadata();
   testStructuredCFGQueriesDephicationEdgeContext();
+  testStructuredCFGQueriesCopiedDephicationEdgeWithoutCopiedMerge();
   testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar();
   testStructuredCFGRemoveBlockMaintainsDephicationMetadata();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
