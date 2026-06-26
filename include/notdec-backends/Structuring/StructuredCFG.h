@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -68,6 +69,7 @@ enum class PayloadMaterializeKind {
   Statement,
   Condition,
   SwitchCaseValue,
+  DephicationAssignment,
 };
 
 enum class PayloadMaterializeResult {
@@ -84,10 +86,12 @@ struct DephicationVVar {
   std::string Name;
   BlockId MergeBlock = InvalidBlockId;
   BlockId SourceMergeBlock = InvalidBlockId;
+  bool Retired = false;
 };
 
 struct DephicationIncoming {
   VVarId Target = InvalidVVarId;
+  VVarId SourceTarget = InvalidVVarId;
   BlockId IncomingBlock = InvalidBlockId;
   BlockId MergeBlock = InvalidBlockId;
   BlockId EdgeBlock = InvalidBlockId;
@@ -119,6 +123,8 @@ struct PayloadMaterializeContext {
   TerminatorKind NewTerminator = TerminatorKind::Fallthrough;
   CFGBlockCopyKind CopyKind = CFGBlockCopyKind::None;
   CFGBlockCreator CreatedBy = CFGBlockCreator::Input;
+  // Current-edge map from the original vvar id to the copied vvar id.
+  std::map<VVarId, VVarId> DephicationVVarCopies;
   std::vector<DephicationVVar> DephicationVVars;
   std::vector<DephicationIncoming> DephicationIncomings;
 };
@@ -252,10 +258,20 @@ private:
                                 std::vector<BlockId> NewPredecessors);
   void duplicateDephicationIncomings(BlockId SourceEdgeBlock,
                                      BlockId CopyEdgeBlock);
+  // Copy the vvar identity for a copied merge block so the copied edge can
+  // point at its own shared variable record.
+  std::map<VVarId, VVarId>
+  duplicateDephicationVVars(const DuplicatedRegion &Region);
   void rewriteCopiedDephicationIncomings(const DuplicatedRegion &Region);
+  void rewriteCopiedDephicationIncomingTargets(
+      const std::map<VVarId, VVarId> &CopiedVVars);
+  std::map<VVarId, VVarId>
+  dephicationVVarCopiesForIncomings(
+      const std::vector<DephicationIncoming> &Incomings) const;
   void rewriteDephicationIncomingAssignments(
       BlockId EdgeBlock, const std::vector<PayloadRef> &OriginalStatements,
       const std::vector<PayloadRef> &RewrittenStatements);
+  void removeDephicationVVarReferences(const std::vector<BlockId> &Ids);
   void removeDephicationBlockReferences(const std::vector<BlockId> &Ids);
   std::vector<DephicationIncoming>
   dephicationIncomingsForEdge(BlockId EdgeBlock) const;

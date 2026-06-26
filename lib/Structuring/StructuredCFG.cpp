@@ -40,6 +40,15 @@ void appendGeneratedPayload(std::vector<PayloadRef> &Generated,
   }
 }
 
+bool isDephicationAssignment(const PayloadMaterializeContext &Context,
+                             PayloadRef Payload) {
+  return std::any_of(Context.DephicationIncomings.begin(),
+                     Context.DephicationIncomings.end(),
+                     [Payload](const DephicationIncoming &Incoming) {
+                       return Incoming.Assignment.Id == Payload.Id;
+                     });
+}
+
 BlockId copyOf(const DuplicatedRegion &Region, BlockId Original) {
   return Region.copyOf(Original);
 }
@@ -207,6 +216,7 @@ void StructuredCFG::addDephicationIncoming(VVarId Target,
                                            PayloadRef Assignment,
                                            std::string IncomingName) {
   DephicationIncomings.push_back({.Target = Target,
+                                  .SourceTarget = Target,
                                   .IncomingBlock = IncomingBlock,
                                   .MergeBlock = MergeBlock,
                                   .EdgeBlock = EdgeBlock,
@@ -301,6 +311,8 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
   Context.DephicationIncomings = dephicationIncomingsForEdge(Id);
+  Context.DephicationVVarCopies =
+      dephicationVVarCopiesForIncomings(Context.DephicationIncomings);
   Context.DephicationVVars =
       dephicationVVarsForIncomings(Context.DephicationIncomings);
   if (BodyId == Id) {
@@ -369,6 +381,8 @@ bool StructuredCFG::materializeBlockBodyImpl(
   Context.CopyKind = Block->CopyKind;
   Context.CreatedBy = Block->CreatedBy;
   Context.DephicationIncomings = dephicationIncomingsForEdge(Id);
+  Context.DephicationVVarCopies =
+      dephicationVVarCopiesForIncomings(Context.DephicationIncomings);
   Context.DephicationVVars =
       dephicationVVarsForIncomings(Context.DephicationIncomings);
 
@@ -386,8 +400,12 @@ bool StructuredCFG::materializeBlockBodyImpl(
   for (std::size_t I = 0; I < Body->Statements.size(); ++I) {
     PayloadRef Payload = Body->Statements[I];
     if (MaterializeHook) {
+      PayloadMaterializeKind Kind =
+          isDephicationAssignment(Context, Payload)
+              ? PayloadMaterializeKind::DephicationAssignment
+              : PayloadMaterializeKind::Statement;
       std::optional<PayloadRef> Rewritten = MaterializeHook(
-          Context, PayloadMaterializeKind::Statement, Payload, I);
+          Context, Kind, Payload, I);
       if (!Rewritten.has_value()) {
         return AbortMaterialize();
       }
@@ -541,7 +559,9 @@ StructuredCFG::duplicateRegion(const std::vector<BlockId> &RegionBlocks,
     }
   }
 
+  std::map<VVarId, VVarId> CopiedVVars = duplicateDephicationVVars(Region);
   rewriteCopiedDephicationIncomings(Region);
+  rewriteCopiedDephicationIncomingTargets(CopiedVVars);
   return Region;
 }
 
@@ -577,6 +597,7 @@ bool StructuredCFG::removeBlock(BlockId Id) {
   }
 
   Blocks = std::move(Candidate.Blocks);
+  DephicationVVars = std::move(Candidate.DephicationVVars);
   DephicationIncomings = std::move(Candidate.DephicationIncomings);
   return true;
 }
@@ -622,6 +643,7 @@ bool StructuredCFG::removeBlockInPlace(BlockId Id) {
   }
 
   Blocks.erase(It);
+  removeDephicationVVarReferences({Id});
   removeDephicationBlockReferences({Id});
   return true;
 }
@@ -635,6 +657,7 @@ bool StructuredCFG::removeBlocks(const std::vector<BlockId> &Ids) {
   }
 
   Blocks = std::move(Candidate.Blocks);
+  DephicationVVars = std::move(Candidate.DephicationVVars);
   DephicationIncomings = std::move(Candidate.DephicationIncomings);
   return true;
 }
@@ -647,6 +670,7 @@ void StructuredCFG::duplicateDephicationIncomings(BlockId SourceEdgeBlock,
       continue;
     }
     DephicationIncoming Copy = Incoming;
+    Copy.SourceTarget = Incoming.Target;
     Copy.SourceIncomingBlock = Incoming.IncomingBlock;
     Copy.SourceMergeBlock = Incoming.MergeBlock;
     Copy.SourceEdgeBlock = Incoming.EdgeBlock;
@@ -655,6 +679,34 @@ void StructuredCFG::duplicateDephicationIncomings(BlockId SourceEdgeBlock,
   }
   DephicationIncomings.insert(DephicationIncomings.end(), Copies.begin(),
                               Copies.end());
+}
+
+std::map<VVarId, VVarId>
+StructuredCFG::duplicateDephicationVVars(const DuplicatedRegion &Region) {
+  std::map<VVarId, VVarId> CopiedVVars;
+  std::size_t OriginalCount = DephicationVVars.size();
+  // Copy the source records by value first. Appending to the vvar table can
+  // reallocate, so holding a reference across addDephicationVVar() is unsafe.
+  std::vector<DephicationVVar> OriginalVVars(DephicationVVars.begin(),
+                                             DephicationVVars.begin() +
+                                                 OriginalCount);
+  for (const DephicationVVar &SourceVVar : OriginalVVars) {
+    if (SourceVVar.Retired) {
+      continue;
+    }
+    if (Region.copyOf(SourceVVar.MergeBlock) == InvalidBlockId) {
+      continue;
+    }
+    if (CopiedVVars.find(SourceVVar.Id) != CopiedVVars.end()) {
+      continue;
+    }
+
+    VVarId CopyId =
+        addDephicationVVar(SourceVVar.Name, Region.copyOf(SourceVVar.MergeBlock));
+    DephicationVVars.back().SourceMergeBlock = SourceVVar.SourceMergeBlock;
+    CopiedVVars.emplace(SourceVVar.Id, CopyId);
+  }
+  return CopiedVVars;
 }
 
 void StructuredCFG::rewriteCopiedDephicationIncomings(
@@ -680,6 +732,32 @@ void StructuredCFG::rewriteCopiedDephicationIncomings(
     BlockId CopiedMerge = Region.copyOf(SourceMerge);
     if (CopiedMerge != InvalidBlockId) {
       Incoming.MergeBlock = CopiedMerge;
+    }
+  }
+}
+
+void StructuredCFG::rewriteCopiedDephicationIncomingTargets(
+    const std::map<VVarId, VVarId> &CopiedVVars) {
+  if (CopiedVVars.empty()) {
+    return;
+  }
+
+  for (DephicationIncoming &Incoming : DephicationIncomings) {
+    if (Incoming.SourceEdgeBlock == Incoming.EdgeBlock) {
+      continue;
+    }
+    auto It = CopiedVVars.find(Incoming.SourceTarget);
+    if (It != CopiedVVars.end()) {
+      Incoming.Target = It->second;
+    }
+  }
+}
+
+void StructuredCFG::removeDephicationVVarReferences(
+    const std::vector<BlockId> &Ids) {
+  for (DephicationVVar &VVar : DephicationVVars) {
+    if (std::find(Ids.begin(), Ids.end(), VVar.MergeBlock) != Ids.end()) {
+      VVar.Retired = true;
     }
   }
 }
@@ -737,10 +815,24 @@ StructuredCFG::dephicationVVarsForIncomings(
   for (const DephicationIncoming &Incoming : Incomings) {
     auto It = std::find_if(
         DephicationVVars.begin(), DephicationVVars.end(),
-        [&](const DephicationVVar &VVar) { return VVar.Id == Incoming.Target; });
+        [&](const DephicationVVar &VVar) {
+          return VVar.Id == Incoming.Target && !VVar.Retired;
+        });
     if (It != DephicationVVars.end()) {
       Result.push_back(*It);
     }
+  }
+  return Result;
+}
+
+std::map<VVarId, VVarId> StructuredCFG::dephicationVVarCopiesForIncomings(
+    const std::vector<DephicationIncoming> &Incomings) const {
+  std::map<VVarId, VVarId> Result;
+  for (const DephicationIncoming &Incoming : Incomings) {
+    if (Incoming.SourceEdgeBlock == Incoming.EdgeBlock) {
+      continue;
+    }
+    Result.emplace(Incoming.SourceTarget, Incoming.Target);
   }
   return Result;
 }

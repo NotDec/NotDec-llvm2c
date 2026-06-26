@@ -296,6 +296,38 @@ merge:
         "absent": ["phi", "reg2mem"],
     },
     {
+        "name": "sailr_angr_dephication_multi_phi_same_edge",
+        "ir": r"""
+define i32 @f(i1 %c, i32 %a, i32 %b, i32 %c0, i32 %d) {
+entry:
+  br i1 %c, label %then, label %else
+
+then:
+  br label %merge
+
+else:
+  br label %merge
+
+merge:
+  %x = phi i32 [ %a, %then ], [ %b, %else ]
+  %y = phi i32 [ %c0, %then ], [ %d, %else ]
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+""",
+        "args": ["--sailr-dephication-mode=angr"],
+        "contains": [
+            "int x;",
+            "int y;",
+            "x = a;",
+            "y = c0;",
+            "x = b;",
+            "y = d;",
+            "return x + y;",
+        ],
+        "absent": ["phi", "reg2mem"],
+    },
+    {
         "name": "phi_demote_before_structuring",
         "ir": r"""
 define i32 @main(i32 %x) {

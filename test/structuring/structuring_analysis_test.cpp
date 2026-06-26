@@ -511,7 +511,8 @@ llvm::Function *makeSharedPhiFunction(llvm::LLVMContext &Context,
   llvm::Type *I1Ty = llvm::Type::getInt1Ty(Context);
   llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
   auto *FnTy =
-      llvm::FunctionType::get(I32Ty, {I1Ty, I32Ty, I32Ty}, /*isVarArg=*/false);
+      llvm::FunctionType::get(I32Ty, {I1Ty, I32Ty, I32Ty, I32Ty, I32Ty},
+                              /*isVarArg=*/false);
   auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
                                    "phi_merge", Module);
   auto ArgIt = F->arg_begin();
@@ -521,6 +522,10 @@ llvm::Function *makeSharedPhiFunction(llvm::LLVMContext &Context,
   A->setName("a");
   llvm::Value *B = &*ArgIt++;
   B->setName("b");
+  llvm::Value *C = &*ArgIt++;
+  C->setName("c");
+  llvm::Value *D = &*ArgIt++;
+  D->setName("d");
 
   llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
   llvm::BasicBlock *Then = llvm::BasicBlock::Create(Context, "then", F);
@@ -541,6 +546,9 @@ llvm::Function *makeSharedPhiFunction(llvm::LLVMContext &Context,
   auto *Phi = Builder.CreatePHI(I32Ty, 2, "x");
   Phi->addIncoming(A, Then);
   Phi->addIncoming(B, Else);
+  auto *Phi2 = Builder.CreatePHI(I32Ty, 2, "y");
+  Phi2->addIncoming(C, Then);
+  Phi2->addIncoming(D, Else);
   Builder.CreateRet(Phi);
 
   return F;
@@ -1446,31 +1454,52 @@ void testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads() {
   assert(ElseEdge->SyntheticTarget == 3);
   assert(ThenEdge->Successors == std::vector<BlockId>({3}));
   assert(ElseEdge->Successors == std::vector<BlockId>({3}));
-  assert(ThenEdge->Statements.size() == 1);
-  assert(ElseEdge->Statements.size() == 1);
-  assert(Payloads[ThenEdge->Statements.front().Id] == "x = a;");
-  assert(Payloads[ElseEdge->Statements.front().Id] == "x = b;");
+  assert(ThenEdge->Statements.size() == 2);
+  assert(ElseEdge->Statements.size() == 2);
+  assert(Payloads[ThenEdge->Statements[0].Id] == "x = a;");
+  assert(Payloads[ThenEdge->Statements[1].Id] == "y = c;");
+  assert(Payloads[ElseEdge->Statements[0].Id] == "x = b;");
+  assert(Payloads[ElseEdge->Statements[1].Id] == "y = d;");
 
   const std::vector<DephicationVVar> &VVars = Cfg.dephicationVVars();
   const std::vector<DephicationIncoming> &Incomings =
       Cfg.dephicationIncomings();
-  assert(VVars.size() == 1);
-  assert(VVars.front().Id == 0);
-  assert(VVars.front().Name == "x");
-  assert(VVars.front().MergeBlock == 3);
-  assert(Incomings.size() == 2);
+  assert(VVars.size() == 2);
+  assert(VVars[0].Id == 0);
+  assert(VVars[0].Name == "x");
+  assert(VVars[0].MergeBlock == 3);
+  assert(VVars[1].Id == 1);
+  assert(VVars[1].Name == "y");
+  assert(VVars[1].MergeBlock == 3);
+  assert(Incomings.size() == 4);
   assert(Incomings[0].Target == 0);
+  assert(Incomings[0].SourceTarget == 0);
   assert(Incomings[0].IncomingBlock == 1);
   assert(Incomings[0].MergeBlock == 3);
   assert(Incomings[0].EdgeBlock == 4);
-  assert(Incomings[0].Assignment.Id == ThenEdge->Statements.front().Id);
+  assert(Incomings[0].Assignment.Id == ThenEdge->Statements[0].Id);
   assert(Incomings[0].IncomingName == "a");
-  assert(Incomings[1].Target == 0);
-  assert(Incomings[1].IncomingBlock == 2);
+  assert(Incomings[1].Target == 1);
+  assert(Incomings[1].SourceTarget == 1);
+  assert(Incomings[1].IncomingBlock == 1);
   assert(Incomings[1].MergeBlock == 3);
-  assert(Incomings[1].EdgeBlock == 5);
-  assert(Incomings[1].Assignment.Id == ElseEdge->Statements.front().Id);
-  assert(Incomings[1].IncomingName == "b");
+  assert(Incomings[1].EdgeBlock == 4);
+  assert(Incomings[1].Assignment.Id == ThenEdge->Statements[1].Id);
+  assert(Incomings[1].IncomingName == "c");
+  assert(Incomings[2].Target == 0);
+  assert(Incomings[2].SourceTarget == 0);
+  assert(Incomings[2].IncomingBlock == 2);
+  assert(Incomings[2].MergeBlock == 3);
+  assert(Incomings[2].EdgeBlock == 5);
+  assert(Incomings[2].Assignment.Id == ElseEdge->Statements[0].Id);
+  assert(Incomings[2].IncomingName == "b");
+  assert(Incomings[3].Target == 1);
+  assert(Incomings[3].SourceTarget == 1);
+  assert(Incomings[3].IncomingBlock == 2);
+  assert(Incomings[3].MergeBlock == 3);
+  assert(Incomings[3].EdgeBlock == 5);
+  assert(Incomings[3].Assignment.Id == ElseEdge->Statements[1].Id);
+  assert(Incomings[3].IncomingName == "d");
 }
 
 void testSolidityBodyBuilderReadsSharedPhiAssignments() {
@@ -2106,13 +2135,15 @@ void testStructuredCFGDuplicateDephicationEdgeCopiesMetadata() {
   VVarId VVar = Cfg.addDephicationVVar("x", 3);
   Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
 
-  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({1, 4});
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({1, 4, 3});
   assert(CopyRegion.has_value());
 
   BlockId CopyIncoming = CopyRegion->copyOf(1);
   BlockId CopyEdge = CopyRegion->copyOf(4);
+  BlockId CopyMerge = CopyRegion->copyOf(3);
   assert(CopyIncoming != InvalidBlockId);
   assert(CopyEdge != InvalidBlockId);
+  assert(CopyMerge != InvalidBlockId);
 
   const std::vector<DephicationIncoming> &Incomings =
       Cfg.dephicationIncomings();
@@ -2120,39 +2151,96 @@ void testStructuredCFGDuplicateDephicationEdgeCopiesMetadata() {
   assert(Incomings[0].IncomingBlock == 1);
   assert(Incomings[0].MergeBlock == 3);
   assert(Incomings[0].EdgeBlock == 4);
+  assert(Incomings[0].Target == VVar);
+  assert(Incomings[0].SourceTarget == VVar);
   assert(Incomings[0].SourceIncomingBlock == 1);
   assert(Incomings[0].SourceMergeBlock == 3);
   assert(Incomings[0].SourceEdgeBlock == 4);
   assert(Incomings[0].Assignment.Id == 40);
   assert(Incomings[1].IncomingBlock == CopyIncoming);
-  assert(Incomings[1].MergeBlock == 3);
+  assert(Incomings[1].MergeBlock == CopyMerge);
   assert(Incomings[1].EdgeBlock == CopyEdge);
+  assert(Incomings[1].Target != VVar);
+  assert(Incomings[1].SourceTarget == VVar);
   assert(Incomings[1].SourceIncomingBlock == 1);
   assert(Incomings[1].SourceMergeBlock == 3);
   assert(Incomings[1].SourceEdgeBlock == 4);
   assert(Incomings[1].Assignment.Id == 40);
 
+  const std::vector<DephicationVVar> &VVarsAfterCopy = Cfg.dephicationVVars();
+  assert(VVarsAfterCopy.size() == 2);
+  assert(VVarsAfterCopy[0].Id == VVar);
+  assert(VVarsAfterCopy[0].MergeBlock == 3);
+  VVarId CopyVVar = VVarsAfterCopy[1].Id;
+  assert(VVarsAfterCopy[1].MergeBlock == CopyMerge);
+  assert(VVarsAfterCopy[1].Name == "x");
+
+  bool SawDephicationAssignment = false;
   Cfg.setPayloadMaterializeHook(
-      [CopyEdge](const PayloadMaterializeContext &Context,
+      [CopyEdge, CopyMerge, CopyVVar, VVar,
+       &SawDephicationAssignment](const PayloadMaterializeContext &Context,
          PayloadMaterializeKind Kind,
          PayloadRef Payload, std::size_t) -> std::optional<PayloadRef> {
+        assert(Context.DephicationVVarCopies.size() == 1);
+        assert(Context.DephicationVVarCopies.begin()->first == VVar);
+        assert(Context.DephicationVVarCopies.begin()->second == CopyVVar);
         assert(Context.DephicationVVars.size() == 1);
         assert(Context.DephicationVVars.front().Name == "x");
+        assert(Context.DephicationVVars.front().MergeBlock == CopyMerge);
         assert(Context.DephicationIncomings.size() == 1);
-        assert(Context.DephicationIncomings.front().Target == 0);
+        assert(Context.DephicationIncomings.front().Target == CopyVVar);
         assert(Context.DephicationIncomings.front().EdgeBlock == CopyEdge);
-        if (Kind == PayloadMaterializeKind::Statement) {
+        if (Kind == PayloadMaterializeKind::DephicationAssignment) {
+          SawDephicationAssignment = true;
           return PayloadRef{Payload.Id + 1000};
         }
         return Payload;
       });
   assert(Cfg.materializeBlockBody(CopyEdge));
+  assert(SawDephicationAssignment);
 
   const CFGBlock *CopyEdgeBlock = Cfg.getBlock(CopyEdge);
   assert(CopyEdgeBlock != nullptr);
   assert(CopyEdgeBlock->Statements.size() == 1);
   assert(CopyEdgeBlock->Statements.front().Id == 1040);
   assert(Cfg.dephicationIncomings()[1].Assignment.Id == 1040);
+}
+
+void testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+  Cfg.addBlock(block(3, {}));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  std::optional<DuplicatedRegion> CopyRegion = Cfg.duplicateRegion({1, 4, 3});
+  assert(CopyRegion.has_value());
+  BlockId CopyMerge = CopyRegion->copyOf(3);
+  assert(CopyMerge != InvalidBlockId);
+  assert(Cfg.dephicationVVars().size() == 2);
+
+  assert(Cfg.removeBlock(CopyMerge));
+  assert(Cfg.dephicationIncomings().size() == 1);
+  assert(Cfg.dephicationVVars().size() == 2);
+  assert(Cfg.dephicationVVars()[0].Id == VVar);
+  assert(Cfg.dephicationVVars()[0].Retired == false);
+  assert(Cfg.dephicationVVars()[1].Retired == true);
+
+  const std::vector<DephicationVVar> &AllVVars = Cfg.dephicationVVars();
+  assert(AllVVars.size() == 2);
+  assert(AllVVars[0].Id == VVar);
+  assert(AllVVars[0].Retired == false);
+  assert(AllVVars[1].Retired == true);
 }
 
 void testStructuredCFGRemoveBlockMaintainsDephicationMetadata() {
@@ -8517,6 +8605,7 @@ int main() {
   testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
   testSolidityBodyBuilderReadsSharedPhiAssignments();
   testStructuredCFGDuplicateDephicationEdgeCopiesMetadata();
+  testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar();
   testStructuredCFGRemoveBlockMaintainsDephicationMetadata();
   testStructuredCFGRemoveBlockMaterializesCopiedBody();
   testStructuredCFGRemoveBlockRejectsUnmaterializedCopy();

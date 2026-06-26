@@ -209,6 +209,10 @@ public:
   /// A numerical ID assigned to a CFGBlock during construction of the CFG.
   unsigned BlockID;
 
+  bool IsSAILRDephicationEdge = false;
+  unsigned SAILRDephicationSourceBlock = 0;
+  unsigned SAILRDephicationTargetBlock = 0;
+
 public:
   class AdjacentBlock {
     CFGBlock *Block;
@@ -435,6 +439,18 @@ public:
   bool hasNoReturnElement() const { return HasNoReturnElement; }
 
   unsigned getBlockID() const { return BlockID; }
+  bool isSAILRDephicationEdge() const { return IsSAILRDephicationEdge; }
+  unsigned getSAILRDephicationSourceBlock() const {
+    return SAILRDephicationSourceBlock;
+  }
+  unsigned getSAILRDephicationTargetBlock() const {
+    return SAILRDephicationTargetBlock;
+  }
+  void setSAILRDephicationEdge(unsigned SourceBlock, unsigned TargetBlock) {
+    IsSAILRDephicationEdge = true;
+    SAILRDephicationSourceBlock = SourceBlock;
+    SAILRDephicationTargetBlock = TargetBlock;
+  }
 
   CFG *getParent() const { return Parent; }
 

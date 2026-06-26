@@ -124,6 +124,13 @@ private:
       st::CFGBlock NewBlock;
       NewBlock.Id = Block->getBlockID();
       bool HasReturnStmt = false;
+      if (Block->isSAILRDephicationEdge()) {
+        NewBlock.Origin = st::CFGBlockOrigin::Synthetic;
+        NewBlock.CopyKind = st::CFGBlockCopyKind::SyntheticForwarder;
+        NewBlock.CreatedBy = st::CFGBlockCreator::SAILRDephication;
+        NewBlock.SyntheticSource = Block->getSAILRDephicationSourceBlock();
+        NewBlock.SyntheticTarget = Block->getSAILRDephicationTargetBlock();
+      }
 
       for (auto It = Block->begin(); It != Block->end(); ++It) {
         if (clang::Stmt *Stmt = getStmt(*It)) {

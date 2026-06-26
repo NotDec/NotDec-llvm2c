@@ -1,4 +1,5 @@
 #include <cassert>
+#include <algorithm>
 #include <cctype>
 #include <clang/Sema/Ownership.h>
 #include <cstddef>
@@ -1150,24 +1151,52 @@ void SAFuncContext::materializePhiRewrites() {
     return;
   }
 
+  struct PhiRewriteGroup {
+    CFGBlock *IncomingBlock = nullptr;
+    CFGBlock *MergeBlock = nullptr;
+    std::vector<const PendingPhiRewrite *> Rewrites;
+  };
+
+  std::vector<PhiRewriteGroup> Groups;
   for (const PendingPhiRewrite &Rewrite : PendingPhiRewrites) {
     assert(Rewrite.Phi != nullptr);
     assert(Rewrite.Var != nullptr);
     assert(Rewrite.Block != nullptr);
     assert(Rewrite.IncomingBlock != nullptr);
     CFGBlock *IncomingBlock = getBlock(*Rewrite.IncomingBlock);
-    auto *IncomingValue = Rewrite.Phi->getIncomingValue(Rewrite.IncomingIndex);
-    auto *IncomingExpr =
-        ExprBuilder(*this).visitValue(IncomingValue, Rewrite.Phi,
-                                      Rewrite.IncomingIndex,
-                                      Rewrite.Var->getType());
-    auto *IncomingStmt = createBinaryOperator(
-        getASTContext(), makeDeclRefExpr(Rewrite.Var), IncomingExpr,
-        clang::BO_Assign, Rewrite.Var->getType(), clang::VK_LValue);
+    auto It = std::find_if(
+        Groups.begin(), Groups.end(), [&](const PhiRewriteGroup &Group) {
+          return Group.IncomingBlock == IncomingBlock &&
+                 Group.MergeBlock == Rewrite.Block;
+        });
+    if (It == Groups.end()) {
+      Groups.push_back({.IncomingBlock = IncomingBlock,
+                        .MergeBlock = Rewrite.Block,
+                        .Rewrites = {&Rewrite}});
+    } else {
+      It->Rewrites.push_back(&Rewrite);
+    }
+  }
+
+  for (const PhiRewriteGroup &Group : Groups) {
     CFGBlock *EdgeBlock = *Cfg->createBlock();
-    EdgeBlock->appendStmt(IncomingStmt);
-    replaceAllSucc(IncomingBlock, Rewrite.Block, EdgeBlock);
-    addEdge(EdgeBlock, Rewrite.Block);
+    for (const PendingPhiRewrite *Rewrite : Group.Rewrites) {
+      assert(Rewrite != nullptr);
+      auto *IncomingValue =
+          Rewrite->Phi->getIncomingValue(Rewrite->IncomingIndex);
+      auto *IncomingExpr =
+          ExprBuilder(*this).visitValue(IncomingValue, Rewrite->Phi,
+                                        Rewrite->IncomingIndex,
+                                        Rewrite->Var->getType());
+      auto *IncomingStmt = createBinaryOperator(
+          getASTContext(), makeDeclRefExpr(Rewrite->Var), IncomingExpr,
+          clang::BO_Assign, Rewrite->Var->getType(), clang::VK_LValue);
+      EdgeBlock->appendStmt(IncomingStmt);
+    }
+    EdgeBlock->setSAILRDephicationEdge(Group.IncomingBlock->getBlockID(),
+                                       Group.MergeBlock->getBlockID());
+    replaceAllSucc(Group.IncomingBlock, Group.MergeBlock, EdgeBlock);
+    addEdge(EdgeBlock, Group.MergeBlock);
   }
   PendingPhiRewrites.clear();
 }
