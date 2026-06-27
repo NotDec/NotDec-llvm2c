@@ -595,21 +595,35 @@ bool hasDephicationContext(const StructuredCFG &Graph, BlockId Id) {
          !BlockContext.VVars.empty() || !BlockContext.Incomings.empty();
 }
 
+bool canUseForSharedTailMerge(const StructuredCFG &Graph,
+                              const CFGBlock &Block) {
+  if (!Block.BodyMaterialized || Block.BodyBlock != Block.Id ||
+      hasDephicationContext(Graph, Block.Id)) {
+    return false;
+  }
+
+  if (Block.Origin == CFGBlockOrigin::Original) {
+    return Block.CopyKind == CFGBlockCopyKind::None;
+  }
+
+  if (Block.Origin == CFGBlockOrigin::Copied) {
+    return Block.CopyKind == CFGBlockCopyKind::RegionCopy;
+  }
+
+  return false;
+}
+
 bool canSplitCommonStatementTailBlock(const StructuredCFG &Graph,
                                       const CFGBlock &Block) {
-  // This first DuplicationReverter step only splits already-materialized input
-  // blocks. Copied/synthetic/dephication blocks need richer payload ownership
-  // rules before moving statements out of them is safe.
-  if (Block.Origin != CFGBlockOrigin::Original ||
-      Block.CopyKind != CFGBlockCopyKind::None ||
-      Block.CreatedBy != CFGBlockCreator::Input ||
-      !Block.BodyMaterialized || Block.BodyBlock != Block.Id ||
+  // Shared tail extraction now accepts already-materialized copied region
+  // blocks too, but still keeps synthetic and dephication blocks out.
+  if (!canUseForSharedTailMerge(Graph, Block) ||
       Block.Terminator != TerminatorKind::Fallthrough ||
       Block.Successors.size() != 1 ||
       Block.Statements.empty()) {
     return false;
   }
-  return !hasDephicationContext(Graph, Block.Id);
+  return true;
 }
 
 std::size_t commonStatementSuffixLength(const StructuredCFG &Graph,
@@ -637,7 +651,6 @@ bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
   const CFGBlock *Lhs = Graph.getBlock(LhsId);
   const CFGBlock *Rhs = Graph.getBlock(RhsId);
   if (Lhs == nullptr || Rhs == nullptr ||
-      !sameBlockIdentityKind(*Lhs, *Rhs) ||
       !sameBlockControlShapeByReference(Graph, *Lhs, *Rhs) ||
       !canSplitCommonStatementTailBlock(Graph, *Lhs) ||
       !canSplitCommonStatementTailBlock(Graph, *Rhs) ||
@@ -659,16 +672,14 @@ bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
 
 bool canShareLinearRegionTailBlock(const StructuredCFG &Graph,
                                    const CFGBlock &Block) {
-  // The first region-tail merge keeps the same conservative ownership rules as
-  // the statement-tail split: only already-materialized original blocks
-  // without dephication state are allowed to become shared tail blocks.
-  if (Block.Origin != CFGBlockOrigin::Original ||
-      Block.CopyKind != CFGBlockCopyKind::None ||
-      !Block.BodyMaterialized || Block.BodyBlock != Block.Id ||
+  // Linear tail sharing uses the same ownership gate as statement tails:
+  // materialized copied region blocks are allowed, but synthetic and
+  // dephication blocks stay excluded.
+  if (!canUseForSharedTailMerge(Graph, Block) ||
       Block.Statements.empty()) {
     return false;
   }
-  return !hasDephicationContext(Graph, Block.Id);
+  return true;
 }
 
 bool commonLinearRegionTailCandidate(const StructuredCFG &Graph, BlockId LhsId,

@@ -4212,6 +4212,62 @@ void testDuplicationReverterMergesGotoRelatedLinearRegionTail() {
   assert(Cfg.getBlock(5)->Successors == std::vector<BlockId>{8});
 }
 
+void testDuplicationReverterMergesGotoRelatedLinearRegionTailWithCopiedPrefix() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Left0 = block(1, {4});
+  Left0.Statements.push_back({101});
+  Cfg.addBlock(std::move(Left0));
+
+  CFGBlock Left1 = block(4, {5});
+  Left1.Statements.push_back({201});
+  Left1.Statements.push_back({301});
+  Cfg.addBlock(std::move(Left1));
+
+  CFGBlock Left2 = block(5, {8});
+  Left2.Statements.push_back({401});
+  Cfg.addBlock(std::move(Left2));
+
+  Cfg.addBlock(block(8, {}));
+
+  std::optional<DuplicatedRegion> CopyRegion =
+      Cfg.duplicateRegion(std::vector<BlockId>{1, 4, 5});
+  assert(CopyRegion.has_value());
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    assert(Cfg.materializeBlockBody(Copy));
+  }
+
+  BlockId CopyHead = CopyRegion->copyOf(1);
+  BlockId CopyTail = CopyRegion->copyOf(5);
+  assert(CopyHead != InvalidBlockId && CopyTail != InvalidBlockId);
+  CFGBlock *CopyHeadBlock = Cfg.getBlock(CopyHead);
+  assert(CopyHeadBlock != nullptr && !CopyHeadBlock->Statements.empty());
+  CopyHeadBlock->Statements.front() = PayloadRef{102};
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *LeftHead = Cfg.getBlock(1);
+  const CFGBlock *LeftMid = Cfg.getBlock(4);
+  const CFGBlock *LeftTail = Cfg.getBlock(5);
+  const CFGBlock *CopyHeadAfter = Cfg.getBlock(CopyHead);
+  assert(LeftHead != nullptr && LeftMid != nullptr && LeftTail != nullptr);
+  assert(CopyHeadAfter != nullptr);
+  assert(LeftHead->Statements.size() == 1);
+  assert(hasSinglePayload(LeftHead->Statements, 101));
+  assert(hasSinglePayload(CopyHeadAfter->Statements, 102));
+  assert(LeftHead->Successors == std::vector<BlockId>{4});
+  assert(CopyHeadAfter->Successors == std::vector<BlockId>{4});
+  assert(Cfg.getBlock(CopyRegion->copyOf(4)) == nullptr);
+  assert(Cfg.getBlock(CopyTail) == nullptr);
+}
+
 void testDuplicationReverterSkipsGotoRelatedLinearTailWithoutHint() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -9867,6 +9923,7 @@ int main() {
   testDuplicationReverterKeepsCommonStatementTailWithoutGotoHint();
   testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear();
   testDuplicationReverterMergesGotoRelatedLinearRegionTail();
+  testDuplicationReverterMergesGotoRelatedLinearRegionTailWithCopiedPrefix();
   testDuplicationReverterSkipsGotoRelatedLinearTailWithoutHint();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
