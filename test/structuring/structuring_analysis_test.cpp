@@ -5971,6 +5971,117 @@ void testReturnDuplicatorLowCopiesJoinedDiamondReturnRegion() {
   CheckCopy(Cfg.getBlock(Block1->Successors.front()));
 }
 
+void testReturnDuplicatorLowCopiesJoinedDiamondWithDirectJoinSide() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Head = branchBlock(2, {3, 5});
+  Head.Condition = {20};
+  Head.Statements.push_back({21});
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Left = block(3, {5});
+  Left.Statements.push_back({30});
+  Cfg.addBlock(std::move(Left));
+
+  CFGBlock Join = block(5, {6});
+  Join.Statements.push_back({50});
+  Cfg.addBlock(std::move(Join));
+
+  CFGBlock Ret = block(6, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({60});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2},
+                                          StructuredGoto{1, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  for (BlockId Original : {2, 3, 5, 6}) {
+    assert(Cfg.getBlock(Original) == nullptr);
+  }
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors.size() == 1);
+  assert(Block0->Successors.front() != Block1->Successors.front());
+
+  auto CheckCopy = [&](const CFGBlock *CopyHead) {
+    assert(CopyHead != nullptr);
+    assert(CopyHead->SourceBlock == 2);
+    assert(CopyHead->Terminator == TerminatorKind::Branch);
+    assert(CopyHead->Condition.Id == 20);
+    assert(hasSinglePayload(CopyHead->Statements, 21));
+    assert(CopyHead->Successors.size() == 2);
+
+    const CFGBlock *CopyLeft = nullptr;
+    const CFGBlock *CopyJoin = nullptr;
+    for (BlockId Succ : CopyHead->Successors) {
+      const CFGBlock *SuccBlock = Cfg.getBlock(Succ);
+      assert(SuccBlock != nullptr);
+      if (SuccBlock->SourceBlock == 3) {
+        CopyLeft = SuccBlock;
+      } else if (SuccBlock->SourceBlock == 5) {
+        CopyJoin = SuccBlock;
+      }
+    }
+    assert(CopyLeft != nullptr && CopyJoin != nullptr);
+    assert(hasSinglePayload(CopyLeft->Statements, 30));
+    assert(CopyLeft->Successors == std::vector<BlockId>{CopyJoin->Id});
+    assert(hasSinglePayload(CopyJoin->Statements, 50));
+
+    const CFGBlock *CopyRet = Cfg.getBlock(CopyJoin->Successors.front());
+    assert(CopyRet != nullptr);
+    assert(CopyRet->SourceBlock == 6);
+    assert(CopyRet->Terminator == TerminatorKind::Return);
+    assert(hasSinglePayload(CopyRet->Statements, 60));
+  };
+
+  CheckCopy(Cfg.getBlock(Block0->Successors.front()));
+  CheckCopy(Cfg.getBlock(Block1->Successors.front()));
+}
+
+void testReturnDuplicatorLowSkipsAllDirectJoinedDiamond() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Head = branchBlock(2, {5, 5});
+  Head.Condition = {20};
+  Head.Statements.push_back({21});
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Join = block(5, {6});
+  Join.Statements.push_back({50});
+  Cfg.addBlock(std::move(Join));
+
+  CFGBlock Ret = block(6, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({60});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2},
+                                          StructuredGoto{1, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(Cfg.getBlock(5) != nullptr);
+  assert(Cfg.getBlock(6) != nullptr);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(1)->Successors == std::vector<BlockId>{2});
+}
+
 void testReturnDuplicatorLowCopiesPrefixedDiamondReturnRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -11477,6 +11588,8 @@ int main() {
   testReturnDuplicatorLowCopiesDiamondReturnRegionWithGroupedPredecessorRewrite();
   testReturnDuplicatorLowCopiesDiamondReturnRegionWithDirectReturnSide();
   testReturnDuplicatorLowCopiesJoinedDiamondReturnRegion();
+  testReturnDuplicatorLowCopiesJoinedDiamondWithDirectJoinSide();
+  testReturnDuplicatorLowSkipsAllDirectJoinedDiamond();
   testReturnDuplicatorLowCopiesPrefixedDiamondReturnRegion();
   testReturnDuplicatorLowCopiesBranchPrefixedDiamondReturnRegion();
   testReturnDuplicatorLowCopiesBranchWithDiamondReturnTail();
