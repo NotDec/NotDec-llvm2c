@@ -397,6 +397,47 @@ shared:
         "absent": ["phi", "reg2mem"],
     },
     {
+        "name": "sailr_angr_dephication_copied_return_tail",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %shared_tail
+
+case2:
+  br label %shared_tail
+
+default:
+  ret i32 0
+
+shared_tail:
+  %p = phi i32 [ %a, %case1 ], [ %b, %case2 ]
+  %r = add i32 %p, 1
+  br label %shared_ret
+
+shared_ret:
+  ret i32 %r
+}
+""",
+        "args": ["--sailr-dephication-mode=angr"],
+        "contains": [
+            "int r;",
+            "int p_copy",
+            "p_copy1 = a;",
+            "r = p_copy1 + 1;",
+            "p = b;",
+            "r = p + 1;",
+            "return r;",
+        ],
+        "absent": ["phi", "reg2mem"],
+        "counts": {"return r;": 2},
+    },
+    {
         "name": "sailr_unreachable_tail_region",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a) {
