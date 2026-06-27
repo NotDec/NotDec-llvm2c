@@ -477,6 +477,165 @@ bool collectClosedDiamondReturnTail(const StructuredCFG &Graph, BlockId Head,
   return true;
 }
 
+bool collectReverseFallthroughSideToBranch(
+    const StructuredCFG &Graph, BlockId Start,
+    const std::set<BlockId> &TailBlocks, BlockId &Head,
+    std::vector<BlockId> &ReverseSide) {
+  BlockId Current = Start;
+  BlockId ExpectedSucc = InvalidBlockId;
+  std::set<BlockId> Seen;
+  while (true) {
+    if (TailBlocks.count(Current) != 0 || !Seen.insert(Current).second) {
+      return false;
+    }
+
+    const CFGBlock *CurrentBlock = Graph.getBlock(Current);
+    if (CurrentBlock == nullptr ||
+        CurrentBlock->Terminator != TerminatorKind::Fallthrough ||
+        CurrentBlock->Successors.size() != 1) {
+      return false;
+    }
+    if (ExpectedSucc != InvalidBlockId &&
+        CurrentBlock->Successors.front() != ExpectedSucc) {
+      return false;
+    }
+
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Current);
+    if (Preds.size() != 1) {
+      return false;
+    }
+    BlockId Pred = Preds.front();
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock == nullptr) {
+      return false;
+    }
+
+    ReverseSide.push_back(Current);
+    if (PredBlock->Terminator == TerminatorKind::Branch &&
+        PredBlock->Successors.size() == 2) {
+      Head = Pred;
+      return true;
+    }
+
+    if (PredBlock->Terminator != TerminatorKind::Fallthrough ||
+        PredBlock->Successors.size() != 1 ||
+        PredBlock->Successors.front() != Current) {
+      return false;
+    }
+    ExpectedSucc = Current;
+    Current = Pred;
+  }
+}
+
+// Conservative joined-diamond support for:
+//   branch -> private left/right fallthrough paths -> shared fallthrough tail
+//          -> closed terminal
+// This is still much narrower than Angr's general single-entry region search:
+// it rejects loops, direct-to-join sides, nested branch sides, and non-linear
+// shared tails.
+bool collectJoinedDiamondReturnRegion(const StructuredCFG &Graph,
+                                      BlockId Terminal,
+                                      ReturnRegion &Region) {
+  const CFGBlock *TerminalBlock = Graph.getBlock(Terminal);
+  if (TerminalBlock == nullptr || !isClosedTerminal(*TerminalBlock)) {
+    return false;
+  }
+
+  std::vector<BlockId> ReverseTail = {Terminal};
+  BlockId Current = Terminal;
+  std::set<BlockId> TailSeen = {Terminal};
+  while (true) {
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Current);
+    if (Preds.size() != 1) {
+      break;
+    }
+
+    BlockId Pred = Preds.front();
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock == nullptr ||
+        PredBlock->Terminator != TerminatorKind::Fallthrough ||
+        PredBlock->Successors.size() != 1 ||
+        PredBlock->Successors.front() != Current ||
+        !TailSeen.insert(Pred).second) {
+      return false;
+    }
+
+    ReverseTail.push_back(Pred);
+    Current = Pred;
+  }
+
+  BlockId Join = Current;
+  if (Join == Terminal || ReverseTail.size() < 2) {
+    return false;
+  }
+
+  std::vector<BlockId> JoinPreds = predecessorsOf(Graph, Join);
+  if (JoinPreds.size() != 2 || JoinPreds[0] == JoinPreds[1]) {
+    return false;
+  }
+
+  BlockId LeftHead = InvalidBlockId;
+  BlockId RightHead = InvalidBlockId;
+  std::vector<BlockId> LeftReverse;
+  std::vector<BlockId> RightReverse;
+  std::set<BlockId> TailBlocks(ReverseTail.begin(), ReverseTail.end());
+  if (!collectReverseFallthroughSideToBranch(Graph, JoinPreds[0], TailBlocks,
+                                             LeftHead, LeftReverse) ||
+      !collectReverseFallthroughSideToBranch(Graph, JoinPreds[1], TailBlocks,
+                                             RightHead, RightReverse) ||
+      LeftHead == InvalidBlockId || LeftHead != RightHead) {
+    return false;
+  }
+
+  const CFGBlock *HeadBlock = Graph.getBlock(LeftHead);
+  if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Branch ||
+      HeadBlock->Successors.size() != 2 || LeftReverse.empty() ||
+      RightReverse.empty()) {
+    return false;
+  }
+
+  std::vector<BlockId> LeftForward(LeftReverse.rbegin(), LeftReverse.rend());
+  std::vector<BlockId> RightForward(RightReverse.rbegin(), RightReverse.rend());
+  if (!containsBlock(HeadBlock->Successors, LeftForward.front()) ||
+      !containsBlock(HeadBlock->Successors, RightForward.front()) ||
+      LeftForward.front() == RightForward.front()) {
+    return false;
+  }
+
+  std::set<BlockId> RegionSeen;
+  auto AddUnique = [&](BlockId Id, std::vector<BlockId> &Out) {
+    if (!RegionSeen.insert(Id).second) {
+      return false;
+    }
+    Out.push_back(Id);
+    return true;
+  };
+
+  std::vector<BlockId> Blocks;
+  if (!AddUnique(LeftHead, Blocks)) {
+    return false;
+  }
+  for (BlockId Id : LeftForward) {
+    if (!AddUnique(Id, Blocks)) {
+      return false;
+    }
+  }
+  for (BlockId Id : RightForward) {
+    if (!AddUnique(Id, Blocks)) {
+      return false;
+    }
+  }
+  for (auto It = ReverseTail.rbegin(); It != ReverseTail.rend(); ++It) {
+    if (!AddUnique(*It, Blocks)) {
+      return false;
+    }
+  }
+
+  Region.Head = LeftHead;
+  Region.Blocks = std::move(Blocks);
+  return true;
+}
+
 bool collectClosedReturnTail(const StructuredCFG &Graph, BlockId Head,
                              BlockId ExpectedPred, std::set<BlockId> &Seen,
                              std::vector<BlockId> &Blocks) {
@@ -698,6 +857,10 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
       // The prepend loop below stores blocks tail-to-head until the final
       // reverse. Convert the diamond result so simple wrappers above the
       // diamond can be absorbed by the same code path.
+      std::reverse(Region.Blocks.begin(), Region.Blocks.end());
+    } else if (collectJoinedDiamondReturnRegion(Graph, ReturnBlock, Region)) {
+      // Keep the same tail-to-head convention as collectDiamondReturnRegion()
+      // before the prepend loop below.
       std::reverse(Region.Blocks.begin(), Region.Blocks.end());
     }
   }
