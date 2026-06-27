@@ -5456,6 +5456,50 @@ void testReturnDuplicatorLowCopiesReturnTailForkRegion() {
   assert(hasSinglePayload(CopyRet1->Statements, 21));
 }
 
+void testReturnDuplicatorLowCopiesUnreachableTailRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Tail = block(2, {3});
+  Tail.Statements.push_back({24});
+  Cfg.addBlock(std::move(Tail));
+
+  CFGBlock Trap = block(3, {});
+  Trap.Terminator = TerminatorKind::Unreachable;
+  Trap.Statements.push_back({25});
+  Cfg.addBlock(std::move(Trap));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(Cfg.getBlock(3) != nullptr);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors == std::vector<BlockId>{2});
+  assert(Block0->Successors.front() != 2);
+
+  const CFGBlock *CopyTail = Cfg.getBlock(Block0->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->Successors.size() == 1);
+  assert(CopyTail->BodyBlock == CopyTail->Id);
+  assert(hasSinglePayload(CopyTail->Statements, 24));
+
+  const CFGBlock *CopyTrap = Cfg.getBlock(CopyTail->Successors.front());
+  assert(CopyTrap != nullptr);
+  assert(CopyTrap->Terminator == TerminatorKind::Unreachable);
+  assert(CopyTrap->BodyBlock == CopyTrap->Id);
+  assert(hasSinglePayload(CopyTrap->Statements, 25));
+}
+
 void testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -9987,6 +10031,7 @@ int main() {
   testReturnDuplicatorLowCopiesDiamondReturnRegionWithGroupedPredecessorRewrite();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testReturnDuplicatorLowCopiesReturnTailForkRegion();
+  testReturnDuplicatorLowCopiesUnreachableTailRegion();
   testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();
   testReturnDuplicatorLowCopiesBranchReturnRegionWithoutPredecessorRewriteSupport();
   testReturnDuplicatorLowCopiesSwitchReturnRegionWithoutPredecessorRewriteSupport();

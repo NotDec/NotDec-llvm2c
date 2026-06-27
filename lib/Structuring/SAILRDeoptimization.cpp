@@ -390,8 +390,7 @@ bool collectDiamondReturnSide(const StructuredCFG &Graph, BlockId Start,
 bool collectDiamondReturnRegion(const StructuredCFG &Graph, BlockId Terminal,
                                ReturnRegion &Region) {
   const CFGBlock *TerminalBlock = Graph.getBlock(Terminal);
-  if (TerminalBlock == nullptr || TerminalBlock->Terminator != TerminatorKind::Return ||
-      !TerminalBlock->Successors.empty()) {
+  if (TerminalBlock == nullptr || !isClosedTerminal(*TerminalBlock)) {
     return false;
   }
 
@@ -516,8 +515,7 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
                                     bool AllowComplexReturnRegion) {
   ReturnRegion Region;
   const CFGBlock *EndBlock = Graph.getBlock(ReturnBlock);
-  if (EndBlock == nullptr || EndBlock->Terminator != TerminatorKind::Return ||
-      !EndBlock->Successors.empty()) {
+  if (EndBlock == nullptr || !isClosedTerminal(*EndBlock)) {
     return Region;
   }
 
