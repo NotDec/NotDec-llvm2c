@@ -25,6 +25,40 @@ BlockId sourceBlockForNode(const StructuredNode &Node, BlockId CurrentSource) {
   return CurrentSource;
 }
 
+bool preservesSwitchEdgeContext(StructuredNodeKind Kind) {
+  switch (Kind) {
+  case StructuredNodeKind::Sequence:
+  case StructuredNodeKind::BasicBlock:
+  case StructuredNodeKind::Label:
+  case StructuredNodeKind::Goto:
+    return true;
+  case StructuredNodeKind::If:
+  case StructuredNodeKind::Switch:
+  case StructuredNodeKind::Break:
+  case StructuredNodeKind::Continue:
+  case StructuredNodeKind::While:
+  case StructuredNodeKind::DoWhile:
+  case StructuredNodeKind::InfiniteLoop:
+  case StructuredNodeKind::Return:
+  case StructuredNodeKind::Unreachable:
+    return false;
+  }
+  return false;
+}
+
+StructuredGotoEdgeKind childEdgeKind(const StructuredNode &Parent,
+                                     const StructuredNode *Child,
+                                     StructuredGotoEdgeKind EdgeKind) {
+  // Switch case/default bodies may be wrapped in a Sequence with labels and
+  // block bodies before the real synthetic goto. Keep the switch edge identity
+  // through that linear shell, but stop at nested control structures.
+  if (Parent.Kind == StructuredNodeKind::Sequence && Child != nullptr &&
+      preservesSwitchEdgeContext(Child->Kind)) {
+    return EdgeKind;
+  }
+  return StructuredGotoEdgeKind::Unknown;
+}
+
 void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
                   StructuredGotoEdgeKind EdgeKind,
                   std::set<StructuredGoto> &Gotos) {
@@ -40,8 +74,9 @@ void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
   }
 
   for (NodeId Child : Node->Children) {
-    collectGotos(Tree, Child, Source, StructuredGotoEdgeKind::Unknown, Gotos);
     const StructuredNode *ChildNode = Tree.getNode(Child);
+    collectGotos(Tree, Child, Source, childEdgeKind(*Node, ChildNode, EdgeKind),
+                 Gotos);
     if (ChildNode != nullptr && ChildNode->Block != InvalidBlockId) {
       Source = ChildNode->Block;
     }

@@ -1025,6 +1025,59 @@ void testGotoManagerCollectsSwitchGotoEdgeKinds() {
   assert(SawCase);
 }
 
+void testGotoManagerKeepsSwitchEdgeKindsThroughLinearBodies() {
+  StructuredTree Tree;
+
+  StructuredNode DefaultBody;
+  DefaultBody.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode DefaultBlock;
+  DefaultBlock.Kind = StructuredNodeKind::BasicBlock;
+  DefaultBlock.Block = 20;
+  DefaultBody.Children.push_back(Tree.addNode(std::move(DefaultBlock)));
+
+  StructuredNode DefaultGoto;
+  DefaultGoto.Kind = StructuredNodeKind::Goto;
+  DefaultGoto.Target = 50;
+  DefaultBody.Children.push_back(Tree.addNode(std::move(DefaultGoto)));
+  NodeId DefaultId = Tree.addNode(std::move(DefaultBody));
+
+  StructuredNode CaseBody;
+  CaseBody.Kind = StructuredNodeKind::Sequence;
+
+  StructuredNode CaseBlock;
+  CaseBlock.Kind = StructuredNodeKind::BasicBlock;
+  CaseBlock.Block = 30;
+  CaseBody.Children.push_back(Tree.addNode(std::move(CaseBlock)));
+
+  StructuredNode CaseGoto;
+  CaseGoto.Kind = StructuredNodeKind::Goto;
+  CaseGoto.Target = 60;
+  CaseBody.Children.push_back(Tree.addNode(std::move(CaseGoto)));
+  NodeId CaseId = Tree.addNode(std::move(CaseBody));
+
+  StructuredNode Switch;
+  Switch.Kind = StructuredNodeKind::Switch;
+  Switch.Block = 10;
+  Switch.Default = DefaultId;
+  Switch.StructuredCases.push_back({{}, 30, CaseId});
+  Tree.setRoot(Tree.addNode(std::move(Switch)));
+
+  GotoManager Manager = GotoManager::collect(Tree);
+  assert(Manager.size() == 2);
+
+  std::vector<StructuredGoto> DefaultGotos = Manager.gotosInBlock(20);
+  assert(DefaultGotos.size() == 1);
+  assert(DefaultGotos.front().Target == 50);
+  assert(DefaultGotos.front().EdgeKind ==
+         StructuredGotoEdgeKind::SwitchDefault);
+
+  std::vector<StructuredGoto> CaseGotos = Manager.gotosInBlock(30);
+  assert(CaseGotos.size() == 1);
+  assert(CaseGotos.front().Target == 60);
+  assert(CaseGotos.front().EdgeKind == StructuredGotoEdgeKind::SwitchCase);
+}
+
 void testStructuringEvaluatorCollectsGotoSummary() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -12035,6 +12088,7 @@ int main() {
   testGotoManagerCollectsSequenceGotoSources();
   testGotoManagerCollectsIfGotoSources();
   testGotoManagerCollectsSwitchGotoEdgeKinds();
+  testGotoManagerKeepsSwitchEdgeKindsThroughLinearBodies();
   testStructuringEvaluatorCollectsGotoSummary();
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
