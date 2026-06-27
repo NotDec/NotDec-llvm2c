@@ -610,6 +610,78 @@ diamond_ret:
         "counts": {"return 7;": 2, "return 9;": 4},
     },
     {
+        "name": "sailr_switch_diamond_return_tail",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %outer_default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %inner_switch
+
+case2:
+  br label %inner_switch
+
+outer_default:
+  ret i32 0
+
+inner_switch:
+  switch i32 %a, label %plain_tail [
+    i32 10, label %diamond_head
+    i32 11, label %case_tail
+  ]
+
+plain_tail:
+  %plain = add i32 %a, 1
+  br label %plain_ret
+
+plain_ret:
+  ret i32 7
+
+case_tail:
+  %case_add = add i32 %b, 1
+  br label %case_ret
+
+case_ret:
+  ret i32 8
+
+diamond_head:
+  %diamond_cond = icmp sgt i32 %a, %b
+  br i1 %diamond_cond, label %left, label %right
+
+left:
+  %left_sum = add i32 %a, 2
+  br label %left_join
+
+right:
+  %right_sum = add i32 %b, 2
+  br label %right_join
+
+left_join:
+  %left_more = add i32 %a, 3
+  br label %diamond_ret
+
+right_join:
+  %right_more = add i32 %b, 3
+  br label %diamond_ret
+
+diamond_ret:
+  ret i32 9
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "switch (a)",
+                     "case 10:", "case 11:", "if (a > b)", "return 7;",
+                     "return 8;", "return 9;"],
+        "absent": ["goto inner_switch", "goto plain_tail", "goto plain_ret",
+                   "goto case_tail", "goto case_ret", "goto diamond_head",
+                   "goto diamond_ret", "phi", "reg2mem"],
+        "counts": {"switch (a)": 2, "return 7;": 2, "return 8;": 2,
+                   "return 9;": 4},
+    },
+    {
         "name": "sailr_switch_case_default_overlap_body_once",
         "ir": r"""
 declare void @a()
