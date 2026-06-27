@@ -3127,6 +3127,38 @@ void testCrossJumpReverterDuplicatesLinearGotoTarget() {
   assert(ExitCopy3->Successors.empty());
 }
 
+void testCrossJumpReverterSkipsLargeLinearGotoTarget() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({7});
+  Target.Statements.push_back({8});
+  Cfg.addBlock(std::move(Target));
+
+  Cfg.addBlock(block(2, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{0, 1, InvalidNodeId}});
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions(),
+                             /*MaxDuplicatedStatements=*/1);
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Source = Cfg.getBlock(0);
+  const CFGBlock *OriginalTarget = Cfg.getBlock(1);
+  const CFGBlock *Exit = Cfg.getBlock(2);
+  assert(Source != nullptr && Source->Successors == std::vector<BlockId>{1});
+  assert(OriginalTarget != nullptr);
+  assert(OriginalTarget->Successors == std::vector<BlockId>{2});
+  assert(OriginalTarget->Statements.size() == 2);
+  assert(OriginalTarget->Statements[0].Id == 7);
+  assert(OriginalTarget->Statements[1].Id == 8);
+  assert(Exit != nullptr);
+}
+
 void testCrossJumpReverterCommitsCopyAtomically() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -11337,6 +11369,7 @@ int main() {
   testDuplicationReverterMergesGotoRelatedLinearRegionTailWithCopiedPrefix();
   testDuplicationReverterSkipsGotoRelatedLinearTailWithoutHint();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
+  testCrossJumpReverterSkipsLargeLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
   testCrossJumpReverterKeepsPredSensitiveCopiesSeparate();
