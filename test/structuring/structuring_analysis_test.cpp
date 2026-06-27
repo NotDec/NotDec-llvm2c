@@ -6103,6 +6103,54 @@ void testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse() {
   assert(hasSinglePayload(DefaultBlock->Statements, 24));
 }
 
+void testSwitchDefaultCaseDuplicatorSkipsCaseDefaultOverlap() {
+  StructuredCFG Cfg;
+
+  CFGBlock OverlapSwitch = switchBlock(0, {1});
+  OverlapSwitch.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(OverlapSwitch));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({24});
+  Cfg.addBlock(std::move(Default));
+
+  Cfg.addBlock(block(3, {1}));
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *Overlap = Cfg.getBlock(0);
+  const CFGBlock *ExternalPred = Cfg.getBlock(3);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  assert(Overlap != nullptr && ExternalPred != nullptr &&
+         DefaultBlock != nullptr);
+
+  assert(Overlap->Successors.front() == 1);
+  assert(Overlap->Cases.size() == 1);
+  assert(Overlap->Cases.front().Target == 1);
+  assert(DefaultBlock->Successors == std::vector<BlockId>{5});
+  assert(hasSinglePayload(DefaultBlock->Statements, 24));
+
+  BlockId CopyId = ExternalPred->Successors.front();
+  assert(CopyId != 1);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->SourceBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 24));
+
+  assert(Copy->Successors.size() == 1);
+  const CFGBlock *CopyTail = Cfg.getBlock(Copy->Successors.front());
+  assert(CopyTail != nullptr);
+  assert(CopyTail->SourceBlock == 5);
+  assert(CopyTail->Terminator == TerminatorKind::Return);
+  assert(CopyTail->Successors.empty());
+}
+
 void testLoweredSwitchSimplifierKeepsSwitchReuseShape() {
   StructuredCFG Cfg;
 
@@ -10106,6 +10154,7 @@ int main() {
   testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders();
   testSwitchDefaultCaseDuplicatorGotosTerminalSharedDefault();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
+  testSwitchDefaultCaseDuplicatorSkipsCaseDefaultOverlap();
   testLoweredSwitchSimplifierKeepsSwitchReuseShape();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();

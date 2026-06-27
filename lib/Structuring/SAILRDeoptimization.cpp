@@ -1080,6 +1080,13 @@ bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   return false;
 }
 
+bool switchDefaultAlsoCaseTarget(const CFGBlock &Block, BlockId DefaultTarget) {
+  if (DefaultTarget == InvalidBlockId) {
+    return false;
+  }
+  return switchCaseReachesBlock(Block, DefaultTarget);
+}
+
 bool switchCaseEdgeReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (!switchCaseReachesBlock(Block, Target)) {
     return false;
@@ -2001,6 +2008,12 @@ bool SwitchDefaultCaseDuplicator::runOnGraph(
     std::vector<BlockId> PredsToUpdate;
     for (BlockId Pred : Preds) {
       const CFGBlock *PredBlock = Candidate.getBlock(Pred);
+      if (PredBlock != nullptr &&
+          PredBlock->Terminator == TerminatorKind::Switch &&
+          defaultSwitchSuccessor(Candidate, *PredBlock) == DefaultTarget &&
+          switchDefaultAlsoCaseTarget(*PredBlock, DefaultTarget)) {
+        continue;
+      }
       if (PredBlock != nullptr &&
           (PredBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder ||
            PredBlock->CopyKind == CFGBlockCopyKind::SyntheticGoto) &&
