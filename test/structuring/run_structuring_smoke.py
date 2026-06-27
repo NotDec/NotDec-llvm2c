@@ -363,6 +363,63 @@ shared:
         "absent": ["phi", "reg2mem"],
     },
     {
+        "name": "sailr_angr_dephication_switch_return_region",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %outer_default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %inner_switch
+
+case2:
+  br label %inner_switch
+
+outer_default:
+  ret i32 0
+
+inner_switch:
+  switch i32 %a, label %inner_default [
+    i32 10, label %inner_case
+    i32 11, label %inner_case2
+  ]
+
+inner_default:
+  br label %inner_ret
+
+inner_case:
+  br label %inner_ret
+
+inner_case2:
+  br label %inner_ret
+
+inner_ret:
+  %p = phi i32 [ %b, %inner_default ], [ %a, %inner_case ], [ %x, %inner_case2 ]
+  %r = add i32 %p, 1
+  ret i32 %r
+}
+""",
+        "args": ["--sailr-dephication-mode=angr"],
+        "contains": [
+            "int p;",
+            "switch (x)",
+            "case 1:",
+            "case 2:",
+            "switch (a)",
+            "case 10:",
+            "case 11:",
+            "p = a;",
+            "p = x;",
+            "p = b;",
+            "return p + 1;",
+        ],
+        "absent": ["phi", "reg2mem", "goto inner_switch", "goto inner_ret"],
+        "counts": {"switch (a)": 2, "return p + 1;": 2},
+    },
+    {
         "name": "sailr_angr_dephication_copied_return_end",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a, i32 %b) {
