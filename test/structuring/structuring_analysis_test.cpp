@@ -8747,6 +8747,7 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
   assert(ReturnOptions.RequireStructurableGraph);
   assert(ReturnOptions.RequireGotos);
   assert(ReturnOptions.PreventNewGotos);
+  assert(ReturnOptions.MustImproveRelativeQuality);
   assert(ReturnOptions.MaxOptIters == 4);
 
   StructuringOptimizationOptions CrossJumpOptions =
@@ -8755,6 +8756,7 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
   assert(CrossJumpOptions.RequireGotos);
   assert(CrossJumpOptions.PreventNewGotos);
   assert(CrossJumpOptions.StrictlyLessGotos);
+  assert(CrossJumpOptions.MustImproveRelativeQuality);
   assert(CrossJumpOptions.MaxOptIters == 3);
 
   StructuringOptimizationOptions ReusedEntryOptions =
