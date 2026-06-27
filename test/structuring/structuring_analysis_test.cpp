@@ -5505,6 +5505,47 @@ void testReturnDuplicatorLowSkipsAmbiguousSingleSwitchCaseDefaultOverlap() {
   assert(hasSinglePayload(Original->Statements, 21));
 }
 
+void testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapBothEdges() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({22});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({
+      StructuredGoto{0, 1, 10, StructuredGotoEdgeKind::SwitchCase},
+      StructuredGoto{0, 1, 11, StructuredGotoEdgeKind::SwitchDefault},
+  });
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) == nullptr);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Successors.size() == 2);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Successors.front() != 1);
+  assert(Switch->Cases.front().Target != 1);
+  assert(Switch->Successors.front() != Switch->Cases.front().Target);
+
+  const CFGBlock *DefaultCopy = Cfg.getBlock(Switch->Successors.front());
+  const CFGBlock *CaseCopy = Cfg.getBlock(Switch->Cases.front().Target);
+  assert(DefaultCopy != nullptr && CaseCopy != nullptr);
+  assert(DefaultCopy->SourceBlock == 1);
+  assert(CaseCopy->SourceBlock == 1);
+  assert(DefaultCopy->Terminator == TerminatorKind::Return);
+  assert(CaseCopy->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(DefaultCopy->Statements, 22));
+  assert(hasSinglePayload(CaseCopy->Statements, 22));
+}
+
 void testReturnDuplicatorLowNormalizesCopiedGotoTargets() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -12368,6 +12409,7 @@ int main() {
   testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapCaseOnly();
   testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapDefaultOnly();
   testReturnDuplicatorLowSkipsAmbiguousSingleSwitchCaseDefaultOverlap();
+  testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapBothEdges();
   testReturnDuplicatorLowNormalizesCopiedGotoTargets();
   testReturnDuplicatorLowKeepsCopiedGotoTargetsWhenEdgeKindChanges();
   testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion();
