@@ -346,6 +346,155 @@ bool collectClosedLinearReturnTail(const StructuredCFG &Graph, BlockId Head,
   }
 }
 
+bool collectFallthroughPathToClosedTerminal(
+    const StructuredCFG &Graph, BlockId Start, BlockId ExpectedPred,
+    const std::set<BlockId> &RegionSeen, std::vector<BlockId> &Path,
+    BlockId &Terminal) {
+  BlockId Current = Start;
+  BlockId Pred = ExpectedPred;
+  std::set<BlockId> PathSeen;
+  while (true) {
+    if (RegionSeen.count(Current) != 0 || !PathSeen.insert(Current).second) {
+      return false;
+    }
+
+    const CFGBlock *Block = Graph.getBlock(Current);
+    if (Block == nullptr) {
+      return false;
+    }
+
+    Path.push_back(Current);
+    if (isClosedTerminal(*Block)) {
+      Terminal = Current;
+      return true;
+    }
+
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Current);
+    if (Preds.size() != 1 || Preds.front() != Pred ||
+        Block->Terminator != TerminatorKind::Fallthrough ||
+        Block->Successors.size() != 1) {
+      return false;
+    }
+
+    Pred = Current;
+    Current = Block->Successors.front();
+  }
+}
+
+// This is intentionally narrower than Angr's full single-entry region search:
+// it only accepts a branch whose two private fallthrough paths meet at one
+// closed terminal.
+bool collectClosedDiamondReturnTail(const StructuredCFG &Graph, BlockId Head,
+                                    BlockId ExpectedPred,
+                                    std::set<BlockId> &Seen,
+                                    std::vector<BlockId> &Blocks) {
+  const CFGBlock *HeadBlock = Graph.getBlock(Head);
+  if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Branch ||
+      HeadBlock->Successors.size() != 2 || Seen.count(Head) != 0 ||
+      HeadBlock->Successors[0] == HeadBlock->Successors[1]) {
+    return false;
+  }
+
+  std::vector<BlockId> HeadPreds = predecessorsOf(Graph, Head);
+  if (HeadPreds.size() != 1 || HeadPreds.front() != ExpectedPred) {
+    return false;
+  }
+
+  std::vector<BlockId> LeftPath;
+  std::vector<BlockId> RightPath;
+  BlockId LeftTerminal = InvalidBlockId;
+  BlockId RightTerminal = InvalidBlockId;
+  if (!collectFallthroughPathToClosedTerminal(
+          Graph, HeadBlock->Successors[0], Head, Seen, LeftPath,
+          LeftTerminal) ||
+      !collectFallthroughPathToClosedTerminal(
+          Graph, HeadBlock->Successors[1], Head, Seen, RightPath,
+          RightTerminal)) {
+    return false;
+  }
+
+  if (LeftTerminal == InvalidBlockId || LeftTerminal != RightTerminal ||
+      LeftPath.size() < 2 || RightPath.size() < 2) {
+    return false;
+  }
+
+  for (std::size_t I = 0; I + 1 < LeftPath.size(); ++I) {
+    for (std::size_t J = 0; J + 1 < RightPath.size(); ++J) {
+      if (LeftPath[I] == RightPath[J]) {
+        return false;
+      }
+    }
+  }
+
+  BlockId LeftTerminalPred = LeftPath[LeftPath.size() - 2];
+  BlockId RightTerminalPred = RightPath[RightPath.size() - 2];
+  if (LeftTerminalPred == RightTerminalPred) {
+    return false;
+  }
+
+  std::vector<BlockId> TerminalPreds = predecessorsOf(Graph, LeftTerminal);
+  if (TerminalPreds.size() != 2 ||
+      !containsBlock(TerminalPreds, LeftTerminalPred) ||
+      !containsBlock(TerminalPreds, RightTerminalPred)) {
+    return false;
+  }
+
+  std::set<BlockId> NewSeen = Seen;
+  std::vector<BlockId> NewBlocks;
+  if (!NewSeen.insert(Head).second) {
+    return false;
+  }
+  NewBlocks.push_back(Head);
+
+  auto AppendSidePath = [&](const std::vector<BlockId> &Path) {
+    for (std::size_t I = 0; I + 1 < Path.size(); ++I) {
+      if (!NewSeen.insert(Path[I]).second) {
+        return false;
+      }
+      NewBlocks.push_back(Path[I]);
+    }
+    return true;
+  };
+
+  if (!AppendSidePath(LeftPath) || !AppendSidePath(RightPath) ||
+      !NewSeen.insert(LeftTerminal).second) {
+    return false;
+  }
+  NewBlocks.push_back(LeftTerminal);
+
+  Seen = std::move(NewSeen);
+  Blocks.insert(Blocks.end(), NewBlocks.begin(), NewBlocks.end());
+  return true;
+}
+
+bool collectClosedReturnTail(const StructuredCFG &Graph, BlockId Head,
+                             BlockId ExpectedPred, std::set<BlockId> &Seen,
+                             std::vector<BlockId> &Blocks) {
+  // Try each shape transactionally. Some helpers may touch Seen before they
+  // discover a later mismatch.
+  std::set<BlockId> CandidateSeen = Seen;
+  std::vector<BlockId> CandidateBlocks;
+  if (collectClosedLinearReturnTail(Graph, Head, ExpectedPred, CandidateSeen,
+                                    CandidateBlocks)) {
+    Seen = std::move(CandidateSeen);
+    Blocks.insert(Blocks.end(), CandidateBlocks.begin(),
+                  CandidateBlocks.end());
+    return true;
+  }
+
+  CandidateSeen = Seen;
+  CandidateBlocks.clear();
+  if (collectClosedDiamondReturnTail(Graph, Head, ExpectedPred, CandidateSeen,
+                                     CandidateBlocks)) {
+    Seen = std::move(CandidateSeen);
+    Blocks.insert(Blocks.end(), CandidateBlocks.begin(),
+                  CandidateBlocks.end());
+    return true;
+  }
+
+  return false;
+}
+
 struct DiamondReturnSide {
   BlockId Head = InvalidBlockId;
   std::vector<BlockId> Blocks;
@@ -455,8 +604,7 @@ bool prependBranchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
       continue;
     }
 
-    if (!collectClosedLinearReturnTail(Graph, Succ, Pred, NewSeen,
-                                       BranchBlocks)) {
+    if (!collectClosedReturnTail(Graph, Succ, Pred, NewSeen, BranchBlocks)) {
       return false;
     }
   }
@@ -491,8 +639,7 @@ bool prependSwitchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
       continue;
     }
 
-    if (!collectClosedLinearReturnTail(Graph, Succ, Pred, NewSeen,
-                                       SwitchBlocks)) {
+    if (!collectClosedReturnTail(Graph, Succ, Pred, NewSeen, SwitchBlocks)) {
       return false;
     }
   }

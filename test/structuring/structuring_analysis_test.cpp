@@ -5915,6 +5915,228 @@ void testReturnDuplicatorLowCopiesBranchPrefixedDiamondReturnRegion() {
   assert(hasSinglePayload(CopyDiamondRet->Statements, 80));
 }
 
+void testReturnDuplicatorLowCopiesBranchWithDiamondReturnTail() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Outer = branchBlock(2, {3, 5});
+  Outer.Condition = {20};
+  Outer.Statements.push_back({21});
+  Cfg.addBlock(std::move(Outer));
+
+  CFGBlock PlainTail = block(3, {4});
+  PlainTail.Statements.push_back({30});
+  Cfg.addBlock(std::move(PlainTail));
+
+  CFGBlock PlainRet = block(4, {});
+  PlainRet.Terminator = TerminatorKind::Return;
+  PlainRet.Statements.push_back({40});
+  Cfg.addBlock(std::move(PlainRet));
+
+  CFGBlock DiamondHead = branchBlock(5, {6, 7});
+  DiamondHead.Condition = {50};
+  DiamondHead.Statements.push_back({51});
+  Cfg.addBlock(std::move(DiamondHead));
+
+  CFGBlock Left = block(6, {8});
+  Left.Statements.push_back({60});
+  Cfg.addBlock(std::move(Left));
+
+  CFGBlock Right = block(7, {9});
+  Right.Statements.push_back({70});
+  Cfg.addBlock(std::move(Right));
+
+  CFGBlock LeftJoin = block(8, {10});
+  LeftJoin.Statements.push_back({80});
+  Cfg.addBlock(std::move(LeftJoin));
+
+  CFGBlock RightJoin = block(9, {10});
+  RightJoin.Statements.push_back({90});
+  Cfg.addBlock(std::move(RightJoin));
+
+  CFGBlock DiamondRet = block(10, {});
+  DiamondRet.Terminator = TerminatorKind::Return;
+  DiamondRet.Statements.push_back({100});
+  Cfg.addBlock(std::move(DiamondRet));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  for (BlockId Original : {2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+    assert(Cfg.getBlock(Original) != nullptr);
+  }
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors == std::vector<BlockId>{2});
+  assert(Block0->Successors.front() != 2);
+
+  const CFGBlock *CopyOuter = Cfg.getBlock(Block0->Successors.front());
+  assert(CopyOuter != nullptr);
+  assert(CopyOuter->SourceBlock == 2);
+  assert(CopyOuter->Terminator == TerminatorKind::Branch);
+  assert(CopyOuter->Condition.Id == 20);
+  assert(hasSinglePayload(CopyOuter->Statements, 21));
+  assert(CopyOuter->Successors.size() == 2);
+
+  const CFGBlock *CopyPlainTail = Cfg.getBlock(CopyOuter->Successors[0]);
+  const CFGBlock *CopyDiamondHead = Cfg.getBlock(CopyOuter->Successors[1]);
+  assert(CopyPlainTail != nullptr && CopyDiamondHead != nullptr);
+  assert(CopyPlainTail->SourceBlock == 3);
+  assert(CopyDiamondHead->SourceBlock == 5);
+  assert(CopyDiamondHead->Terminator == TerminatorKind::Branch);
+  assert(CopyDiamondHead->Condition.Id == 50);
+  assert(hasSinglePayload(CopyPlainTail->Statements, 30));
+  assert(hasSinglePayload(CopyDiamondHead->Statements, 51));
+
+  const CFGBlock *CopyPlainRet =
+      Cfg.getBlock(CopyPlainTail->Successors.front());
+  assert(CopyPlainRet != nullptr);
+  assert(CopyPlainRet->SourceBlock == 4);
+  assert(CopyPlainRet->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyPlainRet->Statements, 40));
+
+  const CFGBlock *CopyLeft = Cfg.getBlock(CopyDiamondHead->Successors[0]);
+  const CFGBlock *CopyRight = Cfg.getBlock(CopyDiamondHead->Successors[1]);
+  assert(CopyLeft != nullptr && CopyRight != nullptr);
+  assert(hasSinglePayload(CopyLeft->Statements, 60));
+  assert(hasSinglePayload(CopyRight->Statements, 70));
+
+  const CFGBlock *CopyLeftJoin = Cfg.getBlock(CopyLeft->Successors.front());
+  const CFGBlock *CopyRightJoin = Cfg.getBlock(CopyRight->Successors.front());
+  assert(CopyLeftJoin != nullptr && CopyRightJoin != nullptr);
+  assert(hasSinglePayload(CopyLeftJoin->Statements, 80));
+  assert(hasSinglePayload(CopyRightJoin->Statements, 90));
+
+  const CFGBlock *CopyDiamondRet =
+      Cfg.getBlock(CopyLeftJoin->Successors.front());
+  assert(CopyDiamondRet != nullptr);
+  assert(CopyDiamondRet == Cfg.getBlock(CopyRightJoin->Successors.front()));
+  assert(CopyDiamondRet->SourceBlock == 10);
+  assert(CopyDiamondRet->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyDiamondRet->Statements, 100));
+}
+
+void testReturnDuplicatorLowCopiesSwitchWithDiamondReturnTail() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Switch = switchBlock(2, {3, 5});
+  Switch.Condition = {20};
+  Switch.Cases.clear();
+  Switch.Cases.push_back({{21}, 5});
+  Switch.Statements.push_back({22});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock DefaultTail = block(3, {4});
+  DefaultTail.Statements.push_back({30});
+  Cfg.addBlock(std::move(DefaultTail));
+
+  CFGBlock DefaultRet = block(4, {});
+  DefaultRet.Terminator = TerminatorKind::Return;
+  DefaultRet.Statements.push_back({40});
+  Cfg.addBlock(std::move(DefaultRet));
+
+  CFGBlock DiamondHead = branchBlock(5, {6, 7});
+  DiamondHead.Condition = {50};
+  DiamondHead.Statements.push_back({51});
+  Cfg.addBlock(std::move(DiamondHead));
+
+  CFGBlock Left = block(6, {8});
+  Left.Statements.push_back({60});
+  Cfg.addBlock(std::move(Left));
+
+  CFGBlock Right = block(7, {9});
+  Right.Statements.push_back({70});
+  Cfg.addBlock(std::move(Right));
+
+  CFGBlock LeftJoin = block(8, {10});
+  LeftJoin.Statements.push_back({80});
+  Cfg.addBlock(std::move(LeftJoin));
+
+  CFGBlock RightJoin = block(9, {10});
+  RightJoin.Statements.push_back({90});
+  Cfg.addBlock(std::move(RightJoin));
+
+  CFGBlock DiamondRet = block(10, {});
+  DiamondRet.Terminator = TerminatorKind::Return;
+  DiamondRet.Statements.push_back({100});
+  Cfg.addBlock(std::move(DiamondRet));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  for (BlockId Original : {2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+    assert(Cfg.getBlock(Original) != nullptr);
+  }
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors == std::vector<BlockId>{2});
+  assert(Block0->Successors.front() != 2);
+
+  const CFGBlock *CopySwitch = Cfg.getBlock(Block0->Successors.front());
+  assert(CopySwitch != nullptr);
+  assert(CopySwitch->SourceBlock == 2);
+  assert(CopySwitch->Terminator == TerminatorKind::Switch);
+  assert(CopySwitch->Condition.Id == 20);
+  assert(CopySwitch->Cases.size() == 1);
+  assert(CopySwitch->Cases.front().Value.Id == 21);
+  assert(hasSinglePayload(CopySwitch->Statements, 22));
+  assert(CopySwitch->Successors.size() == 2);
+
+  const CFGBlock *CopyDefaultTail = Cfg.getBlock(CopySwitch->Successors[0]);
+  const CFGBlock *CopyDiamondHead = Cfg.getBlock(CopySwitch->Cases.front().Target);
+  assert(CopyDefaultTail != nullptr && CopyDiamondHead != nullptr);
+  assert(CopyDefaultTail->SourceBlock == 3);
+  assert(CopyDiamondHead->SourceBlock == 5);
+  assert(CopyDiamondHead->Terminator == TerminatorKind::Branch);
+  assert(CopyDiamondHead->Condition.Id == 50);
+  assert(hasSinglePayload(CopyDefaultTail->Statements, 30));
+  assert(hasSinglePayload(CopyDiamondHead->Statements, 51));
+
+  const CFGBlock *CopyDefaultRet =
+      Cfg.getBlock(CopyDefaultTail->Successors.front());
+  assert(CopyDefaultRet != nullptr);
+  assert(CopyDefaultRet->SourceBlock == 4);
+  assert(CopyDefaultRet->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyDefaultRet->Statements, 40));
+
+  const CFGBlock *CopyLeft = Cfg.getBlock(CopyDiamondHead->Successors[0]);
+  const CFGBlock *CopyRight = Cfg.getBlock(CopyDiamondHead->Successors[1]);
+  assert(CopyLeft != nullptr && CopyRight != nullptr);
+  assert(hasSinglePayload(CopyLeft->Statements, 60));
+  assert(hasSinglePayload(CopyRight->Statements, 70));
+
+  const CFGBlock *CopyLeftJoin = Cfg.getBlock(CopyLeft->Successors.front());
+  const CFGBlock *CopyRightJoin = Cfg.getBlock(CopyRight->Successors.front());
+  assert(CopyLeftJoin != nullptr && CopyRightJoin != nullptr);
+  assert(hasSinglePayload(CopyLeftJoin->Statements, 80));
+  assert(hasSinglePayload(CopyRightJoin->Statements, 90));
+
+  const CFGBlock *CopyDiamondRet =
+      Cfg.getBlock(CopyLeftJoin->Successors.front());
+  assert(CopyDiamondRet != nullptr);
+  assert(CopyDiamondRet == Cfg.getBlock(CopyRightJoin->Successors.front()));
+  assert(CopyDiamondRet->SourceBlock == 10);
+  assert(CopyDiamondRet->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyDiamondRet->Statements, 100));
+}
+
 void testReturnDuplicatorLowCopiesPrefixedSwitchReturnRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -10989,6 +11211,8 @@ int main() {
   testReturnDuplicatorLowCopiesDiamondReturnRegionWithGroupedPredecessorRewrite();
   testReturnDuplicatorLowCopiesPrefixedDiamondReturnRegion();
   testReturnDuplicatorLowCopiesBranchPrefixedDiamondReturnRegion();
+  testReturnDuplicatorLowCopiesBranchWithDiamondReturnTail();
+  testReturnDuplicatorLowCopiesSwitchWithDiamondReturnTail();
   testReturnDuplicatorLowCopiesPrefixedSwitchReturnRegion();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
   testReturnDuplicatorLowCopiesReturnTailForkRegion();
