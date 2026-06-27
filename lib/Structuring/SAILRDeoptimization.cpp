@@ -381,6 +381,16 @@ bool collectFallthroughPathToClosedTerminal(
   }
 }
 
+BlockId terminalPredecessorForReturnPath(const std::vector<BlockId> &Path,
+                                         BlockId Head) {
+  if (Path.empty()) {
+    return InvalidBlockId;
+  }
+  // A direct branch-to-return side has no private block before the terminal;
+  // the branch head itself is the terminal predecessor in the region.
+  return Path.size() == 1 ? Head : Path[Path.size() - 2];
+}
+
 // This is intentionally narrower than Angr's full single-entry region search:
 // it only accepts a branch whose two private fallthrough paths meet at one
 // closed terminal.
@@ -414,7 +424,7 @@ bool collectClosedDiamondReturnTail(const StructuredCFG &Graph, BlockId Head,
   }
 
   if (LeftTerminal == InvalidBlockId || LeftTerminal != RightTerminal ||
-      LeftPath.size() < 2 || RightPath.size() < 2) {
+      LeftPath.empty() || RightPath.empty()) {
     return false;
   }
 
@@ -426,8 +436,8 @@ bool collectClosedDiamondReturnTail(const StructuredCFG &Graph, BlockId Head,
     }
   }
 
-  BlockId LeftTerminalPred = LeftPath[LeftPath.size() - 2];
-  BlockId RightTerminalPred = RightPath[RightPath.size() - 2];
+  BlockId LeftTerminalPred = terminalPredecessorForReturnPath(LeftPath, Head);
+  BlockId RightTerminalPred = terminalPredecessorForReturnPath(RightPath, Head);
   if (LeftTerminalPred == RightTerminalPred) {
     return false;
   }
@@ -511,7 +521,7 @@ bool collectDiamondReturnSide(const StructuredCFG &Graph, BlockId Start,
     }
 
     if (Block->Terminator == TerminatorKind::Branch) {
-      if (Block->Successors.size() != 2 || Side.Blocks.empty()) {
+      if (Block->Successors.size() != 2) {
         return false;
       }
       Side.Head = Current;
@@ -568,11 +578,28 @@ bool collectDiamondReturnRegion(const StructuredCFG &Graph, BlockId Terminal,
       HeadBlock->Successors.size() != 2) {
     return false;
   }
-  if (Sides[0].Blocks.empty() || Sides[1].Blocks.empty()) {
+  bool SawSideBlock = false;
+  bool SawDirectSide = false;
+  for (const DiamondReturnSide &Side : Sides) {
+    if (!Side.Blocks.empty()) {
+      SawSideBlock = true;
+      if (!containsBlock(HeadBlock->Successors, Side.Blocks.back())) {
+        return false;
+      }
+      continue;
+    }
+
+    SawDirectSide = true;
+    if (!containsBlock(HeadBlock->Successors, Terminal)) {
+      return false;
+    }
+  }
+  if (!SawSideBlock) {
     return false;
   }
-  if (!containsBlock(HeadBlock->Successors, Sides[0].Blocks.back()) ||
-      !containsBlock(HeadBlock->Successors, Sides[1].Blocks.back())) {
+  // Do not absorb a component entry as the diamond head. Direct-return sides
+  // are only safe when the head is already inside a shared return region.
+  if (SawDirectSide && predecessorsOf(Graph, Sides[0].Head).empty()) {
     return false;
   }
 
