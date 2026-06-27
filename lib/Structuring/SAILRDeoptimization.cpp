@@ -313,6 +313,29 @@ bool collectClosedLinearReturnTail(const StructuredCFG &Graph, BlockId Head,
       return true;
     }
 
+    if (Block->Terminator == TerminatorKind::Branch &&
+        Block->Successors.size() == 2) {
+      for (BlockId Succ : Block->Successors) {
+        if (Seen.count(Succ) != 0) {
+          return false;
+        }
+        const CFGBlock *SuccBlock = Graph.getBlock(Succ);
+        if (SuccBlock == nullptr || !isClosedTerminal(*SuccBlock)) {
+          return false;
+        }
+        std::vector<BlockId> SuccPreds = predecessorsOf(Graph, Succ);
+        if (SuccPreds.size() != 1 || SuccPreds.front() != Current) {
+          return false;
+        }
+      }
+
+      for (BlockId Succ : Block->Successors) {
+        Seen.insert(Succ);
+        Blocks.push_back(Succ);
+      }
+      return true;
+    }
+
     if (Block->Terminator != TerminatorKind::Fallthrough ||
         Block->Successors.size() != 1) {
       return false;
