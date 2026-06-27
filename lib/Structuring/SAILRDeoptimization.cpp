@@ -2576,7 +2576,9 @@ GotoManager DuplicationReverter::getNewGotos(
 bool hasInitialSourceGoto(const StructuringEvaluation &Initial,
                           const StructuredGoto &Goto, BlockId Target) {
   for (const StructuredGoto &InitialGoto : Initial.Gotos.gotos()) {
-    if (InitialGoto.Source == Goto.Source && InitialGoto.Target == Target) {
+    if (InitialGoto.Source == Goto.Source &&
+        InitialGoto.Target == Target &&
+        InitialGoto.EdgeKind == Goto.EdgeKind) {
       return true;
     }
   }

@@ -4182,6 +4182,36 @@ void testDuplicationReverterNormalizesCopiedGotoTargets() {
   assert(!Filtered.isGotoEdge(0, Copy));
 }
 
+void testDuplicationReverterKeepsCopiedGotoTargetsWhenEdgeKindChanges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {});
+  Target.Statements.push_back({8});
+  Cfg.addBlock(std::move(Target));
+
+  BlockId Copy = Cfg.duplicateBlock(1, {});
+  assert(Copy != InvalidBlockId);
+
+  StructuringEvaluation Initial;
+  Initial.Gotos = GotoManager::fromGotos({StructuredGoto{
+      0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchCase}});
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{
+      0, Copy, InvalidNodeId, StructuredGotoEdgeKind::SwitchDefault}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  GotoManager Filtered = Pass.getNewGotos(Cfg, Initial, Current);
+
+  assert(Filtered.size() == 1);
+  assert(!Filtered.isGotoEdge(0, 1));
+  assert(Filtered.isGotoEdge(0, Copy));
+  std::vector<StructuredGoto> Gotos = Filtered.gotosInBlock(0);
+  assert(Gotos.size() == 1);
+  assert(Gotos.front().EdgeKind == StructuredGotoEdgeKind::SwitchDefault);
+}
+
 void testDuplicationReverterSeparatesWrittenAndMergeableDuplication() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -5213,6 +5243,36 @@ void testReturnDuplicatorLowNormalizesCopiedGotoTargets() {
   assert(Filtered.size() == 1);
   assert(Filtered.isGotoEdge(0, 1));
   assert(!Filtered.isGotoEdge(0, Copy));
+}
+
+void testReturnDuplicatorLowKeepsCopiedGotoTargetsWhenEdgeKindChanges() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {});
+  Target.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(Target));
+
+  BlockId Copy = Cfg.duplicateBlock(1, {});
+  assert(Copy != InvalidBlockId);
+
+  StructuringEvaluation Initial;
+  Initial.Gotos = GotoManager::fromGotos({StructuredGoto{
+      0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchCase}});
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{
+      0, Copy, InvalidNodeId, StructuredGotoEdgeKind::SwitchDefault}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  GotoManager Filtered = Pass.getNewGotos(Cfg, Initial, Current);
+
+  assert(Filtered.size() == 1);
+  assert(!Filtered.isGotoEdge(0, 1));
+  assert(Filtered.isGotoEdge(0, Copy));
+  std::vector<StructuredGoto> Gotos = Filtered.gotosInBlock(0);
+  assert(Gotos.size() == 1);
+  assert(Gotos.front().EdgeKind == StructuredGotoEdgeKind::SwitchDefault);
 }
 
 void testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion() {
@@ -11945,6 +12005,7 @@ int main() {
   testDuplicationReverterKeepsGotosWithinEndpointCutoff();
   testDuplicationReverterKeepsValidEndGotos();
   testDuplicationReverterNormalizesCopiedGotoTargets();
+  testDuplicationReverterKeepsCopiedGotoTargetsWhenEdgeKindChanges();
   testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference();
@@ -11972,6 +12033,7 @@ int main() {
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowUsesSwitchCaseGotoSource();
   testReturnDuplicatorLowNormalizesCopiedGotoTargets();
+  testReturnDuplicatorLowKeepsCopiedGotoTargetsWhenEdgeKindChanges();
   testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion();
   testReturnDuplicatorLowReportsGroupedPredecessorRewrite();
   testReturnDuplicatorLowCopiesGroupedReturnPredsWithPayloadRewrite();
