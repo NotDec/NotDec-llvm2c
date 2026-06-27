@@ -3968,6 +3968,31 @@ void testDuplicationReverterKeepsValidEndGotos() {
   assert(Filtered.isGotoEdge(1, 2));
 }
 
+void testDuplicationReverterNormalizesCopiedGotoTargets() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {});
+  Target.Statements.push_back({7});
+  Cfg.addBlock(std::move(Target));
+
+  BlockId Copy = Cfg.duplicateBlock(1, {});
+  assert(Copy != InvalidBlockId);
+
+  StructuringEvaluation Initial;
+  Initial.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, Copy}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  GotoManager Filtered = Pass.getNewGotos(Cfg, Initial, Current);
+
+  assert(Filtered.size() == 1);
+  assert(Filtered.isGotoEdge(0, 1));
+  assert(!Filtered.isGotoEdge(0, Copy));
+}
+
 void testDuplicationReverterSeparatesWrittenAndMergeableDuplication() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1, 2}));
@@ -11174,6 +11199,7 @@ int main() {
   testDuplicationReverterFiltersFutureIrreducibleGotos();
   testDuplicationReverterKeepsGotosWithinEndpointCutoff();
   testDuplicationReverterKeepsValidEndGotos();
+  testDuplicationReverterNormalizesCopiedGotoTargets();
   testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference();

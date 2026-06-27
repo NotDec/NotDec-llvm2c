@@ -1871,6 +1871,9 @@ std::size_t statementCountInRegion(const StructuredCFG &Graph,
 
 } // namespace
 
+bool hasInitialSourceGoto(const StructuringEvaluation &Initial,
+                          const StructuredGoto &Goto, BlockId Target);
+
 StructuringOptimizationOptions SwitchReusedEntryRewriter::defaultOptions() {
   StructuringOptimizationOptions Options;
   Options.RequireStructurableGraph = false;
@@ -2287,19 +2290,25 @@ bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
 GotoManager DuplicationReverter::getNewGotos(
     const StructuredCFG &Cfg, const StructuringEvaluation &Initial,
     const StructuringEvaluation &Current) const {
-  (void)Initial;
   constexpr unsigned MaxEndpointDistance = 5;
   std::vector<StructuredGoto> Filtered;
 
   for (const StructuredGoto &Goto : Current.Gotos.gotos()) {
-    const CFGBlock *Target = Cfg.getBlock(Goto.Target);
+    StructuredGoto Normalized = Goto;
+    const CFGBlock *Target = Cfg.getBlock(Normalized.Target);
+    if (Target != nullptr && Target->Origin == CFGBlockOrigin::Copied &&
+        Target->SourceBlock != InvalidBlockId &&
+        hasInitialSourceGoto(Initial, Normalized, Target->SourceBlock)) {
+      Normalized.Target = Target->SourceBlock;
+      Target = Cfg.getBlock(Normalized.Target);
+    }
     if (Target == nullptr) {
-      Filtered.push_back(Goto);
+      Filtered.push_back(Normalized);
       continue;
     }
     if (Cfg.successorsOf(Target->Id).empty() ||
         reachesAnyEndBlockWithin(Cfg, Target->Id, MaxEndpointDistance)) {
-      Filtered.push_back(Goto);
+      Filtered.push_back(Normalized);
     }
   }
 
