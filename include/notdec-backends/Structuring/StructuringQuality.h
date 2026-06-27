@@ -25,6 +25,7 @@ struct ControlFlowStructureCounter {
   std::vector<BlockId> OrderedLabels;
 
   static ControlFlowStructureCounter collect(const StructuredTree &Tree);
+  void normalizeGotoLabels();
 };
 
 bool improvesRelativeStructuringQuality(

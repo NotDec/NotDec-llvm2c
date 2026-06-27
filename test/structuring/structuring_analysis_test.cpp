@@ -1005,7 +1005,7 @@ void testStructuringEvaluatorCollectsGotoSummary() {
   assert(Result.Succeeded);
   assert(Result.Tree.root() != InvalidNodeId);
   assert(Result.Gotos.isGotoEdge(0, 1));
-  assert(Result.Quality.GotoTargets[1] == 1);
+  assert(Result.Quality.GotoTargets.empty());
 }
 
 void testStructuringEvaluatorRemovesEdgesForTrialOnly() {
@@ -7533,10 +7533,19 @@ void testControlFlowStructureCounterCollectsSharedQuality() {
   Goto20.Kind = StructuredNodeKind::Goto;
   Goto20.Target = 20;
 
+  StructuredNode Goto30;
+  Goto30.Kind = StructuredNodeKind::Goto;
+  Goto30.Target = 30;
+
   StructuredNode WhileNode;
   WhileNode.Kind = StructuredNodeKind::While;
   WhileNode.Block = 11;
-  WhileNode.Body = Tree.addNode(std::move(Goto20));
+
+  StructuredNode WhileBody;
+  WhileBody.Kind = StructuredNodeKind::Sequence;
+  WhileBody.Children.push_back(Tree.addNode(std::move(Goto20)));
+  WhileBody.Children.push_back(Tree.addNode(std::move(Goto30)));
+  WhileNode.Body = Tree.addNode(std::move(WhileBody));
 
   StructuredNode Label20;
   Label20.Kind = StructuredNodeKind::Label;
@@ -7554,7 +7563,8 @@ void testControlFlowStructureCounterCollectsSharedQuality() {
   assert(Counter.WhileLoops == 1);
   assert(Counter.DoWhileLoops == 0);
   assert(Counter.GotoTargets[20] == 1);
-  assert((Counter.OrderedLabels == std::vector<BlockId>{10, 20}));
+  assert(Counter.GotoTargets.count(30) == 0);
+  assert((Counter.OrderedLabels == std::vector<BlockId>{20}));
 }
 
 void testRelativeQualityRejectsBackwardGotoTrade() {

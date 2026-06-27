@@ -78,7 +78,29 @@ ControlFlowStructureCounter
 ControlFlowStructureCounter::collect(const StructuredTree &Tree) {
   ControlFlowStructureCounter Counter;
   collectQuality(Tree, Tree.root(), Counter);
+  Counter.normalizeGotoLabels();
   return Counter;
+}
+
+void ControlFlowStructureCounter::normalizeGotoLabels() {
+  // Match Angr's post-walk cleanup: a goto to a block with no output label does
+  // not participate in relative-quality checks, and unused labels do not affect
+  // left/right label ordering.
+  for (auto It = GotoTargets.begin(); It != GotoTargets.end();) {
+    if (std::find(OrderedLabels.begin(), OrderedLabels.end(), It->first) ==
+        OrderedLabels.end()) {
+      It = GotoTargets.erase(It);
+      continue;
+    }
+    ++It;
+  }
+
+  OrderedLabels.erase(
+      std::remove_if(OrderedLabels.begin(), OrderedLabels.end(),
+                     [&](BlockId Label) {
+                       return GotoTargets.count(Label) == 0;
+                     }),
+      OrderedLabels.end());
 }
 
 bool improvesRelativeStructuringQuality(
