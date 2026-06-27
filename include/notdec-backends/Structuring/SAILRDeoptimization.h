@@ -33,8 +33,11 @@ public:
 
   explicit ReturnDuplicatorLow(
       StructuringOptimizationOptions Options = defaultOptions(),
-      std::size_t MaxFunctionBlocks = 500)
-      : StructuringOptimizationPass(Options), MaxFunctionBlocks(MaxFunctionBlocks) {}
+      std::size_t MaxFunctionBlocks = 500,
+      std::size_t MaxDuplicatedStatements = 16)
+      : StructuringOptimizationPass(Options),
+        MaxFunctionBlocks(MaxFunctionBlocks),
+        MaxDuplicatedStatements(MaxDuplicatedStatements) {}
 
   const char *name() const override { return "ReturnDuplicatorLow"; }
 
@@ -47,6 +50,7 @@ protected:
 
 private:
   std::size_t MaxFunctionBlocks;
+  std::size_t MaxDuplicatedStatements;
 };
 
 class SwitchDefaultCaseDuplicator : public StructuringOptimizationPass {

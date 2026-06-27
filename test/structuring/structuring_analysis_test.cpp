@@ -4397,6 +4397,42 @@ void testReturnDuplicatorLowSkipsLargeFunction() {
   assert(Cfg.getBlock(2) != nullptr);
 }
 
+void testReturnDuplicatorLowSkipsLargeReturnRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Head = block(2, {3});
+  Head.Statements.push_back({20});
+  Head.Statements.push_back({21});
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Tail = block(3, {4});
+  Tail.Statements.push_back({30});
+  Tail.Statements.push_back({31});
+  Cfg.addBlock(std::move(Tail));
+
+  CFGBlock Ret = block(4, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({40});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions(),
+                               /*MaxFunctionBlocks=*/500,
+                               /*MaxDuplicatedStatements=*/4);
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(1)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(Cfg.getBlock(3) != nullptr);
+  assert(Cfg.getBlock(4) != nullptr);
+}
+
 void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 2}));
@@ -9935,6 +9971,7 @@ int main() {
   testCrossJumpReverterUsesSwitchDefaultGotoKind();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowSkipsLargeFunction();
+  testReturnDuplicatorLowSkipsLargeReturnRegion();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowUsesSwitchCaseGotoSource();

@@ -1696,6 +1696,19 @@ std::size_t statementCountInRegion(const StructuredCFG &Graph,
   return Count;
 }
 
+std::size_t statementCountInRegion(const StructuredCFG &Graph,
+                                   const ReturnRegion &Region) {
+  std::size_t Count = 0;
+  for (BlockId Id : Region.Blocks) {
+    const CFGBlock *Block = Graph.getBlock(Id);
+    if (Block == nullptr) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    Count += Block->Statements.size();
+  }
+  return Count;
+}
+
 } // namespace
 
 StructuringOptimizationOptions SwitchReusedEntryRewriter::defaultOptions() {
@@ -2183,6 +2196,10 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
   bool Changed = false;
   for (auto &Entry : Regions) {
     const ReturnRegion &Region = Entry.second;
+    if (statementCountInRegion(Graph, Region) > MaxDuplicatedStatements) {
+      continue;
+    }
+
     std::vector<BlockId> CurrentPreds = externalPredecessorsOf(Graph, Region);
     std::vector<BlockId> GotoPreds;
     for (BlockId Pred : CurrentPreds) {
