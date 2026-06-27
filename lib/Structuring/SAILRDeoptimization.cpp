@@ -2113,6 +2113,31 @@ gotoEdgeKindsFor(const GotoManager &Gotos, BlockId Source, BlockId Target) {
   return Kinds;
 }
 
+bool hasCaseDefaultOverlapPredecessor(const StructuredCFG &Graph,
+                                      const std::vector<BlockId> &Preds,
+                                      BlockId Target) {
+  for (BlockId Pred : Preds) {
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    if (PredBlock != nullptr &&
+        PredBlock->Terminator == TerminatorKind::Switch &&
+        blockUsesSwitchCaseEdge(Graph, Pred, Target) &&
+        nonCaseSuccessorReachesBlock(*PredBlock, Target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasMultipleLogicalPredecessors(const StructuredCFG &Graph,
+                                    const std::vector<BlockId> &Preds,
+                                    BlockId Target) {
+  // predecessorsOf() de-duplicates by block id. A switch whose case and default
+  // both reach the same region is still two logical incoming edges for
+  // ReturnDuplicatorLow's edge-splitting path.
+  return Preds.size() > 1 ||
+         hasCaseDefaultOverlapPredecessor(Graph, Preds, Target);
+}
+
 bool copyRegionForNonCasePredecessors(StructuredCFG &Graph,
                                       const ReturnRegion &Region,
                                       const std::vector<BlockId> &Preds,
@@ -2698,7 +2723,7 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
       continue;
     }
     std::vector<BlockId> Preds = externalPredecessorsOf(Graph, Region);
-    if (Preds.size() <= 1) {
+    if (!hasMultipleLogicalPredecessors(Graph, Preds, Region.Head)) {
       continue;
     }
     Regions.emplace(Region.Head, std::move(Region));
@@ -2712,6 +2737,9 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     }
 
     std::vector<BlockId> CurrentPreds = externalPredecessorsOf(Graph, Region);
+    if (!hasMultipleLogicalPredecessors(Graph, CurrentPreds, Region.Head)) {
+      continue;
+    }
     std::vector<BlockId> GotoPreds;
     for (BlockId Pred : CurrentPreds) {
       if (gotoEdgeFromSourceOrParent(Graph, Current.Gotos, Pred, Region.Head)) {

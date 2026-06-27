@@ -5411,6 +5411,100 @@ void testReturnDuplicatorLowSkipsAmbiguousSwitchCaseDefaultOverlap() {
   assert(hasSinglePayload(Original->Statements, 17));
 }
 
+void testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapCaseOnly() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({18});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{
+          0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchCase}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *Original = Cfg.getBlock(1);
+  assert(Switch != nullptr && Original != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target != 1);
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch->Cases.front().Target);
+  assert(Copy != nullptr);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(Copy->Statements, 18));
+  assert(hasSinglePayload(Original->Statements, 18));
+}
+
+void testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapDefaultOnly() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({19});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{
+          0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchDefault}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *Original = Cfg.getBlock(1);
+  assert(Switch != nullptr && Original != nullptr);
+  assert(Switch->Successors.front() != 1);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target == 1);
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch->Successors.front());
+  assert(Copy != nullptr);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(Copy->Statements, 19));
+  assert(hasSinglePayload(Original->Statements, 19));
+}
+
+void testReturnDuplicatorLowSkipsAmbiguousSingleSwitchCaseDefaultOverlap() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({21});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *Original = Cfg.getBlock(1);
+  assert(Switch != nullptr && Original != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target == 1);
+  assert(hasSinglePayload(Original->Statements, 21));
+}
+
 void testReturnDuplicatorLowNormalizesCopiedGotoTargets() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -12271,6 +12365,9 @@ int main() {
   testReturnDuplicatorLowSplitsSwitchCaseDefaultOverlapCaseOnly();
   testReturnDuplicatorLowSplitsSwitchCaseDefaultOverlapDefaultOnly();
   testReturnDuplicatorLowSkipsAmbiguousSwitchCaseDefaultOverlap();
+  testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapCaseOnly();
+  testReturnDuplicatorLowSplitsSingleSwitchCaseDefaultOverlapDefaultOnly();
+  testReturnDuplicatorLowSkipsAmbiguousSingleSwitchCaseDefaultOverlap();
   testReturnDuplicatorLowNormalizesCopiedGotoTargets();
   testReturnDuplicatorLowKeepsCopiedGotoTargetsWhenEdgeKindChanges();
   testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion();
