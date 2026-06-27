@@ -436,6 +436,42 @@ ret:
         "counts": {"return 7;": 2},
     },
     {
+        "name": "sailr_direct_diamond_return_region",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %head
+
+case2:
+  br label %head
+
+default:
+  ret i32 0
+
+head:
+  %cond = icmp eq i32 %a, %b
+  br i1 %cond, label %ret, label %tail
+
+tail:
+  %sum = add i32 %a, 1
+  br label %ret
+
+ret:
+  ret i32 7
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "if (a == b)",
+                     "a + 1;", "return 7;"],
+        "absent": ["goto head", "goto tail", "goto ret", "phi", "reg2mem"],
+        "counts": {"return 7;": 4},
+    },
+    {
         "name": "sailr_prefixed_switch_return_region",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a) {
