@@ -363,6 +363,40 @@ shared:
         "absent": ["phi", "reg2mem"],
     },
     {
+        "name": "sailr_angr_dephication_copied_return_end",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %shared
+
+case2:
+  br label %shared
+
+default:
+  ret i32 0
+
+shared:
+  %p = phi i32 [ %a, %case1 ], [ %b, %case2 ]
+  ret i32 %p
+}
+""",
+        "args": ["--sailr-dephication-mode=angr"],
+        "contains": [
+            "int p_copy",
+            "p_copy1 = a;",
+            "return p_copy1;",
+            "p = b;",
+            "return p;",
+        ],
+        "absent": ["phi", "reg2mem"],
+    },
+    {
         "name": "phi_demote_before_structuring",
         "ir": r"""
 define i32 @main(i32 %x) {
