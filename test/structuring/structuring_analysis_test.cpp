@@ -7871,6 +7871,60 @@ void testSwitchDefaultCaseDuplicatorSkipsCaseDefaultOverlap() {
   assert(CopyTail->Successors.empty());
 }
 
+void testSwitchDefaultCaseDuplicatorKeepsCaseAfterSharedDefaultRewrite() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock OverlapSwitch = switchBlock(3, {1});
+  OverlapSwitch.Cases.push_back({{}, 1});
+  Cfg.addBlock(std::move(OverlapSwitch));
+
+  CFGBlock Default = block(1, {5});
+  Default.Statements.push_back({25});
+  Cfg.addBlock(std::move(Default));
+
+  Cfg.addBlock(block(2, {5}));
+  Cfg.addBlock(block(4, {1}));
+  Cfg.addBlock(block(5, {}));
+
+  TestSwitchDefaultCaseDuplicator Pass(
+      SwitchDefaultCaseDuplicator::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Overlap = Cfg.getBlock(3);
+  const CFGBlock *ExternalPred = Cfg.getBlock(4);
+  const CFGBlock *DefaultBlock = Cfg.getBlock(1);
+  assert(Switch0 != nullptr && Overlap != nullptr && ExternalPred != nullptr &&
+         DefaultBlock != nullptr);
+
+  assert(Switch0->Successors.front() != 1);
+  assert(Overlap->Successors.front() != 1);
+  assert(Overlap->Cases.size() == 1);
+  assert(Overlap->Cases.front().Target == 1);
+  assert(DefaultBlock->Successors == std::vector<BlockId>{5});
+  assert(hasSinglePayload(DefaultBlock->Statements, 25));
+
+  const CFGBlock *Goto0 = Cfg.getBlock(Switch0->Successors.front());
+  const CFGBlock *OverlapGoto = Cfg.getBlock(Overlap->Successors.front());
+  assert(Goto0 != nullptr && OverlapGoto != nullptr);
+  assert(Goto0->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(OverlapGoto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto0->SyntheticTarget == 1);
+  assert(OverlapGoto->SyntheticTarget == 1);
+
+  BlockId CopyId = ExternalPred->Successors.front();
+  assert(CopyId != 1);
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  assert(Copy->SourceBlock == 1);
+  assert(hasSinglePayload(Copy->Statements, 25));
+}
+
 void testLoweredSwitchSimplifierKeepsSwitchReuseShape() {
   StructuredCFG Cfg;
 
@@ -11973,6 +12027,7 @@ int main() {
   testSwitchDefaultCaseDuplicatorGotosTerminalSharedDefault();
   testSwitchDefaultCaseDuplicatorKeepsCaseTargetsOnDefaultReuse();
   testSwitchDefaultCaseDuplicatorSkipsCaseDefaultOverlap();
+  testSwitchDefaultCaseDuplicatorKeepsCaseAfterSharedDefaultRewrite();
   testLoweredSwitchSimplifierKeepsSwitchReuseShape();
   testSwitchDefaultCaseDuplicatorSkipsSwitchInternalDefaultPred();
   testSwitchDefaultCaseDuplicatorCopiesDefaultTailRegion();
