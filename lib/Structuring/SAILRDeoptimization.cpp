@@ -2481,10 +2481,13 @@ void setDefaultSAILRDeoptimizationPipelineOptions(
 StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline(
     SAILRDeoptimizationPipelineOptions Options) {
   StructuringOptimizationPipeline Pipeline;
+  // Angr runs both jump-table graph-creation passes before the SAILR
+  // during-region passes. NotDec folds them into this shared CFG pipeline, but
+  // keeps the same stage order.
   Pipeline.addPass(std::make_unique<SwitchDefaultCaseDuplicator>(
       SwitchDefaultCaseDuplicator::defaultOptions(), Options.SharedDefaultMode));
-  Pipeline.addPass(std::make_unique<DuplicationReverter>());
   Pipeline.addPass(std::make_unique<SwitchReusedEntryRewriter>());
+  Pipeline.addPass(std::make_unique<DuplicationReverter>());
   Pipeline.addPass(std::make_unique<LoweredSwitchSimplifier>());
   Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());

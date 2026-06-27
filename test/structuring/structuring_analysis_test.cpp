@@ -8234,12 +8234,12 @@ void testStructuringOptimizationPipelineSkipsRejectedPassAndContinues() {
   assert(Block0->Successors.empty());
 }
 
-void testSAILRDeoptimizationPipelineMatchesAngrOrder() {
+void testSAILRDeoptimizationPipelineMatchesAngrStageOrder() {
   StructuringOptimizationPipeline Pipeline = buildSAILRDeoptimizationPipeline();
   assert((Pipeline.passNames() == std::vector<std::string>{
                                       "SwitchDefaultCaseDuplicator",
-                                      "DuplicationReverter",
                                       "SwitchReusedEntryRewriter",
+                                      "DuplicationReverter",
                                       "LoweredSwitchSimplifier",
                                       "ReturnDuplicatorLow",
                                       "CrossJumpReverter",
@@ -10863,7 +10863,7 @@ int main() {
   testStructuringOptimizationPassRollsBackCopiedDephicationMetadata();
   testStructuringOptimizationPipelineKeepsAcceptedPasses();
   testStructuringOptimizationPipelineSkipsRejectedPassAndContinues();
-  testSAILRDeoptimizationPipelineMatchesAngrOrder();
+  testSAILRDeoptimizationPipelineMatchesAngrStageOrder();
   testSAILRDeoptimizationPipelineCanUseSharedDefaultForwarders();
   testSAILRDefaultSharedRewriteModeUsesSyntheticGoto();
   testSAILRDeoptimizationDefaultOptionsMatchAngr();
