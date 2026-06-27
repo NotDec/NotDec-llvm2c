@@ -1711,6 +1711,7 @@ std::size_t statementCountInRegion(const StructuredCFG &Graph,
 
 StructuringOptimizationOptions SwitchReusedEntryRewriter::defaultOptions() {
   StructuringOptimizationOptions Options;
+  Options.RequireStructurableGraph = false;
   Options.RequireGotos = false;
   Options.PreventNewGotos = false;
   Options.MustImproveRelativeQuality = false;
@@ -1799,6 +1800,7 @@ bool SwitchReusedEntryRewriter::runOnGraph(
 
 StructuringOptimizationOptions LoweredSwitchSimplifier::defaultOptions() {
   StructuringOptimizationOptions Options;
+  Options.RequireStructurableGraph = false;
   Options.RequireGotos = false;
   Options.PreventNewGotos = false;
   Options.MustImproveRelativeQuality = false;
@@ -1903,6 +1905,7 @@ bool LoweredSwitchSimplifier::runOnGraph(
 
 StructuringOptimizationOptions SwitchDefaultCaseDuplicator::defaultOptions() {
   StructuringOptimizationOptions Options;
+  Options.RequireStructurableGraph = false;
   Options.RequireGotos = false;
   Options.PreventNewGotos = false;
   Options.MustImproveRelativeQuality = false;

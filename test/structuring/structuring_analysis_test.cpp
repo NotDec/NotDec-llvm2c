@@ -346,6 +346,22 @@ protected:
   }
 };
 
+class AddFirstSuccessorNoInitialStructuringPass : public AddFirstSuccessorPass {
+public:
+  AddFirstSuccessorNoInitialStructuringPass()
+      : AddFirstSuccessorPass(options()) {}
+
+private:
+  static StructuringOptimizationOptions options() {
+    StructuringOptimizationOptions Options;
+    Options.RequireStructurableGraph = false;
+    Options.RequireGotos = false;
+    Options.PreventNewGotos = false;
+    Options.MustImproveRelativeQuality = false;
+    return Options;
+  }
+};
+
 class RetargetFirstSuccessorIgnoringNewGotosPass
     : public StructuringOptimizationPass {
 public:
@@ -7312,6 +7328,29 @@ void testStructuringOptimizationPassCanOverrideNewGotos() {
   assert(Block0->Successors.front() == 1);
 }
 
+void testStructuringOptimizationPassCanSkipInitialStructurableGraph() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {}));
+  Cfg.addBlock(block(1, {}));
+
+  CFGEdgeGotoRegionStructurer AcceptingStructurer;
+  AddFirstSuccessorNoInitialStructuringPass AcceptedPass;
+  StructuringOptimizationResult Accepted =
+      AcceptedPass.analyze(Cfg, AcceptingStructurer);
+
+  assert(Accepted.Succeeded);
+  const CFGBlock *AcceptedBlock0 = Accepted.Output.getBlock(0);
+  assert(AcceptedBlock0 != nullptr);
+  assert(AcceptedBlock0->Successors == std::vector<BlockId>{1});
+
+  FailOnBlockRegionStructurer Structurer;
+  Structurer.FailingBlock = 0;
+  AddFirstSuccessorNoInitialStructuringPass Pass;
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
+}
+
 void testStructuringOptimizationPassUsesFilteredGotosForQuality() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -7524,6 +7563,7 @@ void testSAILRDefaultSharedRewriteModeUsesSyntheticGoto() {
 void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
   StructuringOptimizationOptions SwitchDefaultOptions =
       SwitchDefaultCaseDuplicator::defaultOptions();
+  assert(!SwitchDefaultOptions.RequireStructurableGraph);
   assert(!SwitchDefaultOptions.RequireGotos);
   assert(!SwitchDefaultOptions.PreventNewGotos);
   assert(!SwitchDefaultOptions.MustImproveRelativeQuality);
@@ -7531,6 +7571,7 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
 
   StructuringOptimizationOptions DuplicationOptions =
       DuplicationReverter::defaultOptions();
+  assert(DuplicationOptions.RequireStructurableGraph);
   assert(DuplicationOptions.RequireGotos);
   assert(DuplicationOptions.PreventNewGotos);
   assert(DuplicationOptions.MustImproveRelativeQuality);
@@ -7538,6 +7579,7 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
 
   StructuringOptimizationOptions LoweredSwitchOptions =
       LoweredSwitchSimplifier::defaultOptions();
+  assert(!LoweredSwitchOptions.RequireStructurableGraph);
   assert(!LoweredSwitchOptions.RequireGotos);
   assert(!LoweredSwitchOptions.PreventNewGotos);
   assert(!LoweredSwitchOptions.MustImproveRelativeQuality);
@@ -7545,12 +7587,14 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
 
   StructuringOptimizationOptions ReturnOptions =
       ReturnDuplicatorLow::defaultOptions();
+  assert(ReturnOptions.RequireStructurableGraph);
   assert(ReturnOptions.RequireGotos);
   assert(ReturnOptions.PreventNewGotos);
   assert(ReturnOptions.MaxOptIters == 4);
 
   StructuringOptimizationOptions CrossJumpOptions =
       CrossJumpReverter::defaultOptions();
+  assert(CrossJumpOptions.RequireStructurableGraph);
   assert(CrossJumpOptions.RequireGotos);
   assert(CrossJumpOptions.PreventNewGotos);
   assert(CrossJumpOptions.StrictlyLessGotos);
@@ -7558,6 +7602,7 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
 
   StructuringOptimizationOptions ReusedEntryOptions =
       SwitchReusedEntryRewriter::defaultOptions();
+  assert(!ReusedEntryOptions.RequireStructurableGraph);
   assert(!ReusedEntryOptions.RequireGotos);
   assert(!ReusedEntryOptions.PreventNewGotos);
   assert(!ReusedEntryOptions.MustImproveRelativeQuality);
@@ -10075,6 +10120,7 @@ int main() {
   testStructuringOptimizationPassRejectsNewGotos();
   testStructuringOptimizationPassEnforcesStrictlyLessGotos();
   testStructuringOptimizationPassCanOverrideNewGotos();
+  testStructuringOptimizationPassCanSkipInitialStructurableGraph();
   testStructuringOptimizationPassUsesFilteredGotosForQuality();
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
