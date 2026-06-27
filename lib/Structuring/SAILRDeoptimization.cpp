@@ -172,6 +172,10 @@ struct LinearRegion {
 
 constexpr std::size_t MaxLinearRegionMergeBlocks = 12;
 
+bool collectJoinedDiamondReturnRegion(const StructuredCFG &Graph,
+                                      BlockId Terminal,
+                                      ReturnRegion &Region);
+
 const LinearRegion *cachedLinearRegion(const StructuredCFG &Graph, BlockId Head,
                                        std::map<BlockId, LinearRegion> &Cache) {
   auto It = Cache.find(Head);
@@ -477,6 +481,52 @@ bool collectClosedDiamondReturnTail(const StructuredCFG &Graph, BlockId Head,
   return true;
 }
 
+// Conservative wrapper-tail support for:
+//   branch -> private left/right fallthrough paths -> shared fallthrough tail
+//          -> closed terminal
+// The body shape is shared with collectJoinedDiamondReturnRegion(); this wrapper
+// only anchors it to the side head being absorbed by a branch/switch parent.
+bool collectClosedJoinedDiamondReturnTail(const StructuredCFG &Graph,
+                                          BlockId Head, BlockId ExpectedPred,
+                                          std::set<BlockId> &Seen,
+                                          std::vector<BlockId> &Blocks) {
+  std::vector<BlockId> HeadPreds = predecessorsOf(Graph, Head);
+  if (HeadPreds.size() != 1 || HeadPreds.front() != ExpectedPred ||
+      Seen.count(Head) != 0) {
+    return false;
+  }
+
+  for (const CFGBlock &Block : Graph.blocks()) {
+    if (!isClosedTerminal(Block)) {
+      continue;
+    }
+
+    ReturnRegion Region;
+    if (!collectJoinedDiamondReturnRegion(Graph, Block.Id, Region) ||
+        Region.Head != Head) {
+      continue;
+    }
+
+    std::set<BlockId> NewSeen = Seen;
+    bool OverlapsSeen = false;
+    for (BlockId Id : Region.Blocks) {
+      if (!NewSeen.insert(Id).second) {
+        OverlapsSeen = true;
+        break;
+      }
+    }
+    if (OverlapsSeen) {
+      continue;
+    }
+
+    Seen = std::move(NewSeen);
+    Blocks.insert(Blocks.end(), Region.Blocks.begin(), Region.Blocks.end());
+    return true;
+  }
+
+  return false;
+}
+
 bool collectReverseFallthroughSideToBranch(
     const StructuredCFG &Graph, BlockId Start, BlockId TailHead,
     const std::set<BlockId> &TailBlocks, BlockId &Head,
@@ -671,6 +721,16 @@ bool collectClosedReturnTail(const StructuredCFG &Graph, BlockId Head,
   CandidateBlocks.clear();
   if (collectClosedDiamondReturnTail(Graph, Head, ExpectedPred, CandidateSeen,
                                      CandidateBlocks)) {
+    Seen = std::move(CandidateSeen);
+    Blocks.insert(Blocks.end(), CandidateBlocks.begin(),
+                  CandidateBlocks.end());
+    return true;
+  }
+
+  CandidateSeen = Seen;
+  CandidateBlocks.clear();
+  if (collectClosedJoinedDiamondReturnTail(Graph, Head, ExpectedPred,
+                                           CandidateSeen, CandidateBlocks)) {
     Seen = std::move(CandidateSeen);
     Blocks.insert(Blocks.end(), CandidateBlocks.begin(),
                   CandidateBlocks.end());
