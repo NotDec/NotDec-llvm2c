@@ -1,17 +1,40 @@
 #include "notdec-backends/Structuring/StructuringOptimizationPass.h"
 
+#include <algorithm>
+
 namespace notdec::backend::structuring {
 namespace {
 
 ControlFlowStructureCounter
 qualityWithGotos(ControlFlowStructureCounter Quality,
-                 const GotoManager &Gotos) {
+                 const GotoManager &Gotos,
+                 const ControlFlowStructureCounter &InitialQuality) {
   Quality.GotoTargets.clear();
   for (const StructuredGoto &Goto : Gotos.gotos()) {
     if (Goto.Target != InvalidBlockId) {
       ++Quality.GotoTargets[Goto.Target];
     }
   }
+
+  for (auto It = Quality.GotoTargets.begin();
+       It != Quality.GotoTargets.end();) {
+    bool HasCurrentLabel =
+        std::find(Quality.OrderedLabels.begin(), Quality.OrderedLabels.end(),
+                  It->first) != Quality.OrderedLabels.end();
+    bool WasInitialTarget = InitialQuality.GotoTargets.count(It->first) != 0;
+    if (!HasCurrentLabel && !WasInitialTarget) {
+      It = Quality.GotoTargets.erase(It);
+      continue;
+    }
+    ++It;
+  }
+
+  Quality.OrderedLabels.erase(
+      std::remove_if(Quality.OrderedLabels.begin(), Quality.OrderedLabels.end(),
+                     [&](BlockId Label) {
+                       return Quality.GotoTargets.count(Label) == 0;
+                     }),
+      Quality.OrderedLabels.end());
   return Quality;
 }
 
@@ -49,7 +72,7 @@ bool StructuringOptimizationPass::acceptsFinalEvaluation(
 
   if (Options.MustImproveRelativeQuality) {
     ControlFlowStructureCounter FilteredCurrentQuality =
-        qualityWithGotos(Current.Quality, FinalGotos);
+        qualityWithGotos(Current.Quality, FinalGotos, Initial.Quality);
     if (!improvesRelativeStructuringQuality(Initial.Quality,
                                             FilteredCurrentQuality)) {
       return false;

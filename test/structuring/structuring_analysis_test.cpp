@@ -392,6 +392,39 @@ protected:
   }
 };
 
+class DropSecondSuccessorWithUnlabeledFilteredGotoPass
+    : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  const char *name() const override {
+    return "DropSecondSuccessorWithUnlabeledFilteredGotoPass";
+  }
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    CFGBlock *Block = Graph.getBlock(1);
+    if (Block == nullptr || Block->Successors != std::vector<BlockId>({20})) {
+      return false;
+    }
+    Block->Successors.clear();
+    Block->Terminator = TerminatorKind::Return;
+    return true;
+  }
+
+  GotoManager getNewGotos(const StructuredCFG &Cfg,
+                          const StructuringEvaluation &Initial,
+                          const StructuringEvaluation &Current) const override {
+    (void)Cfg;
+    (void)Initial;
+    (void)Current;
+    return GotoManager::fromGotos({StructuredGoto{0, 20},
+                                   StructuredGoto{1, 30}});
+  }
+};
+
 class RecoverThenRemoveSuccessorPass : public StructuringOptimizationPass {
 public:
   using StructuringOptimizationPass::StructuringOptimizationPass;
@@ -8528,6 +8561,27 @@ void testStructuringOptimizationPassUsesFilteredGotosForQuality() {
   assert(Block0->Successors == std::vector<BlockId>{1});
 }
 
+void testStructuringOptimizationPassNormalizesFilteredGotoQuality() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {20}));
+  Cfg.addBlock(block(1, {20}));
+  Cfg.addBlock(block(20, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.PreventNewGotos = true;
+  Options.MustImproveRelativeQuality = true;
+  CFGEdgeGotoRegionStructurer Structurer;
+  DropSecondSuccessorWithUnlabeledFilteredGotoPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  const CFGBlock *Block1 = Result.Output.getBlock(1);
+  assert(Block1 != nullptr);
+  assert(Block1->Successors.empty());
+  assert(Block1->Terminator == TerminatorKind::Return);
+}
+
 void testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -11294,6 +11348,7 @@ int main() {
   testStructuringOptimizationPassCanOverrideNewGotos();
   testStructuringOptimizationPassCanSkipInitialStructurableGraph();
   testStructuringOptimizationPassUsesFilteredGotosForQuality();
+  testStructuringOptimizationPassNormalizesFilteredGotoQuality();
   testStructuringOptimizationPassUsesRemovedEdgesForInitialGotos();
   testStructuringOptimizationPassRecoversAndContinuesFixedPoint();
   testStructuringOptimizationPassRejectsOnlyRolledBackChanges();
