@@ -4,6 +4,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <clang/AST/Decl.h>
@@ -36,6 +37,23 @@ clang::VarDecl *assignmentTargetVar(clang::Stmt *Stmt) {
   return Target == nullptr ? nullptr
                            : llvm::dyn_cast<clang::VarDecl>(Target->getDecl());
 }
+
+struct SwitchBodyKey {
+  st::StructuredNodeKind Kind = st::StructuredNodeKind::Sequence;
+  st::BlockId Target = st::InvalidBlockId;
+  st::NodeId Body = st::InvalidNodeId;
+
+  friend bool operator<(const SwitchBodyKey &Lhs,
+                        const SwitchBodyKey &Rhs) {
+    return std::tie(Lhs.Kind, Lhs.Target, Lhs.Body) <
+           std::tie(Rhs.Kind, Rhs.Target, Rhs.Body);
+  }
+};
+
+struct SwitchBodyLabel {
+  clang::SwitchCase *Label = nullptr;
+  st::NodeId Body = st::InvalidNodeId;
+};
 
 class DeclRefRewriter : public StmtTransform<DeclRefRewriter> {
   std::map<clang::ValueDecl *, clang::ValueDecl *> Replacements;
@@ -540,23 +558,69 @@ private:
         Ctx, nullptr, nullptr, Cond, clang::SourceLocation(),
         clang::SourceLocation());
     std::vector<clang::Stmt *> Cases;
+    std::map<SwitchBodyKey, SwitchBodyLabel> LastLabelForBody;
+    const st::CFGBlock *Block = getSharedBlock(Node.Block);
+    st::BlockId DefaultTarget = Block->Successors.empty()
+                                    ? st::InvalidBlockId
+                                    : Block->Successors.front();
+    bool HasCaseDefaultOverlap = false;
+    for (const auto &Case : Node.StructuredCases) {
+      if (Case.Target != st::InvalidBlockId && Case.Target == DefaultTarget) {
+        HasCaseDefaultOverlap = true;
+        break;
+      }
+    }
+
+    auto BodyKey = [&](st::NodeId Body, st::BlockId Target) {
+      if (HasCaseDefaultOverlap && Target != st::InvalidBlockId &&
+          Target == DefaultTarget) {
+        return SwitchBodyKey{st::StructuredNodeKind::Goto, Target,
+                             st::InvalidNodeId};
+      }
+      return SwitchBodyKey{st::StructuredNodeKind::Sequence,
+                           st::InvalidBlockId, Body};
+    };
+
+    auto AppendSwitchLabel = [&](st::NodeId Body,
+                                 st::BlockId Target,
+                                 clang::SwitchCase *Label) {
+      SwitchBodyKey Key = BodyKey(Body, Target);
+      auto It = LastLabelForBody.find(Key);
+      if (It != LastLabelForBody.end()) {
+        if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(It->second.Label)) {
+          CaseLabel->setSubStmt(Label);
+        } else {
+          llvm::cast<clang::DefaultStmt>(It->second.Label)->setSubStmt(Label);
+        }
+      } else {
+        Cases.push_back(Label);
+      }
+      Switch->addSwitchCase(Label);
+      LastLabelForBody[Key] = {Label, Body};
+    };
 
     for (const auto &Case : Node.StructuredCases) {
       auto *CaseStmt = clang::CaseStmt::Create(
           Ctx, llvm::cast<clang::Expr>(getPayload(Case.Value)), nullptr,
           clang::SourceLocation(), clang::SourceLocation(),
           clang::SourceLocation());
-      CaseStmt->setSubStmt(renderCompound(Tree, Case.Body));
-      Switch->addSwitchCase(CaseStmt);
-      Cases.push_back(CaseStmt);
+      AppendSwitchLabel(Case.Body, Case.Target, CaseStmt);
     }
 
     if (Node.Default != st::InvalidNodeId) {
-      auto *Default = new (Ctx)
-          clang::DefaultStmt(clang::SourceLocation(), clang::SourceLocation(),
-                             renderCompound(Tree, Node.Default));
-      Switch->addSwitchCase(Default);
-      Cases.push_back(Default);
+      auto *Default = new (Ctx) clang::DefaultStmt(
+          clang::SourceLocation(), clang::SourceLocation(), nullptr);
+      AppendSwitchLabel(Node.Default, DefaultTarget, Default);
+    }
+
+    for (const auto &[Key, BodyLabel] : LastLabelForBody) {
+      (void)Key;
+      if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(BodyLabel.Label)) {
+        CaseLabel->setSubStmt(renderCompound(Tree, BodyLabel.Body));
+      } else {
+        llvm::cast<clang::DefaultStmt>(BodyLabel.Label)->setSubStmt(
+            renderCompound(Tree, BodyLabel.Body));
+      }
     }
 
     auto *Body = clang::CompoundStmt::Create(
