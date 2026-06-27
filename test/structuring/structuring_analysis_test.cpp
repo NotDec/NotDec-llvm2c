@@ -4525,6 +4525,129 @@ void testReturnDuplicatorLowCopiesReturnEndNodeWithDephicationVVars() {
   assert(CopyEdgeContext.Incomings.front().Assignment.Id == 1030);
 }
 
+void testReturnDuplicatorLowDeletesOriginalReturnEndNodeWithDephicationVVars() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {3}));
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Ret = block(2, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({20});
+  Cfg.addBlock(std::move(Ret));
+
+  CFGBlock Edge0 = block(3, {2});
+  Edge0.Origin = CFGBlockOrigin::Synthetic;
+  Edge0.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge0.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge0.SyntheticSource = 0;
+  Edge0.SyntheticTarget = 2;
+  Edge0.Statements.push_back({30});
+  Cfg.addBlock(std::move(Edge0));
+
+  CFGBlock Edge1 = block(4, {2});
+  Edge1.Origin = CFGBlockOrigin::Synthetic;
+  Edge1.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge1.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge1.SyntheticSource = 1;
+  Edge1.SyntheticTarget = 2;
+  Edge1.Statements.push_back({31});
+  Cfg.addBlock(std::move(Edge1));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 2);
+  Cfg.addDephicationIncoming(VVar, 0, 2, 3, {30}, "x");
+  Cfg.addDephicationIncoming(VVar, 1, 2, 4, {31}, "x");
+
+  std::set<VVarId> CopiedVVars;
+  std::map<BlockId, PayloadId> RewrittenAssignments;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Kind == PayloadMaterializeKind::DephicationAssignment) {
+          assert(Context.DephicationVVarCopies.size() == 1);
+          auto CopyIt = Context.DephicationVVarCopies.begin();
+          assert(CopyIt->first == VVar);
+          assert(Context.CurrentDephicationIncoming.has_value());
+          assert(Context.CurrentDephicationIncoming->SourceTarget == VVar);
+          assert(Context.CurrentDephicationIncoming->Target == CopyIt->second);
+          CopiedVVars.insert(CopyIt->second);
+          PayloadRef Rewritten{Payload.Id + 1000};
+          RewrittenAssignments[Context.CopyBlock] = Rewritten.Id;
+          return Rewritten;
+        }
+
+        if (Kind == PayloadMaterializeKind::Statement && Payload.Id == 20) {
+          assert(Context.DephicationVVarCopies.size() == 1);
+          return PayloadRef{Payload.Id + 1000};
+        }
+
+        return Payload;
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{3, 2}, StructuredGoto{4, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) == nullptr);
+  assert(CopiedVVars.size() == 2);
+  assert(RewrittenAssignments.size() == 2);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  const CFGBlock *Edge0Block = Cfg.getBlock(3);
+  const CFGBlock *Edge1Block = Cfg.getBlock(4);
+  assert(Block0 != nullptr && Block1 != nullptr && Edge0Block != nullptr &&
+         Edge1Block != nullptr);
+  assert(Block0->Successors == std::vector<BlockId>{3});
+  assert(Block1->Successors == std::vector<BlockId>{4});
+  assert(Edge0Block->Successors.size() == 1);
+  assert(Edge1Block->Successors.size() == 1);
+  assert(Edge0Block->Successors.front() != 2);
+  assert(Edge1Block->Successors.front() != 2);
+  assert(Edge0Block->Successors.front() != Edge1Block->Successors.front());
+  assert(hasSinglePayload(Edge0Block->Statements, RewrittenAssignments[3]));
+  assert(hasSinglePayload(Edge1Block->Statements, RewrittenAssignments[4]));
+
+  const CFGBlock *CopyRet0 = Cfg.getBlock(Edge0Block->Successors.front());
+  const CFGBlock *CopyRet1 = Cfg.getBlock(Edge1Block->Successors.front());
+  assert(CopyRet0 != nullptr && CopyRet1 != nullptr);
+  assert(CopyRet0->Terminator == TerminatorKind::Return);
+  assert(CopyRet1->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyRet0->Statements, 1020));
+  assert(hasSinglePayload(CopyRet1->Statements, 1020));
+
+  const std::vector<DephicationVVar> &AllVVars = Cfg.dephicationVVars();
+  assert(AllVVars.size() == 3);
+  assert(AllVVars[VVar].Retired);
+  for (VVarId CopyVVar : CopiedVVars) {
+    assert(CopyVVar < AllVVars.size());
+    assert(!AllVVars[CopyVVar].Retired);
+    assert(AllVVars[CopyVVar].SourceId == VVar);
+  }
+
+  assert(Cfg.dephicationBlockContext(2).VVars.empty());
+  assert(Cfg.dephicationIncomings().size() == 2);
+
+  DephicationEdgeContext CopyEdge0 = Cfg.dephicationEdgeContext(3);
+  DephicationEdgeContext CopyEdge1 = Cfg.dephicationEdgeContext(4);
+  assert(CopyEdge0.Incomings.size() == 1);
+  assert(CopyEdge1.Incomings.size() == 1);
+  assert(CopyEdge0.Incomings.front().MergeBlock == CopyRet0->Id);
+  assert(CopyEdge1.Incomings.front().MergeBlock == CopyRet1->Id);
+  assert(CopiedVVars.count(CopyEdge0.Incomings.front().Target) == 1);
+  assert(CopiedVVars.count(CopyEdge1.Incomings.front().Target) == 1);
+  assert(CopyEdge0.Incomings.front().Target !=
+         CopyEdge1.Incomings.front().Target);
+  assert(CopyEdge0.Incomings.front().SourceTarget == VVar);
+  assert(CopyEdge1.Incomings.front().SourceTarget == VVar);
+}
+
 void testReturnDuplicatorLowSkipsLargeFunction() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -10489,6 +10612,7 @@ int main() {
   testCrossJumpReverterUsesSwitchDefaultGotoKind();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowCopiesReturnEndNodeWithDephicationVVars();
+  testReturnDuplicatorLowDeletesOriginalReturnEndNodeWithDephicationVVars();
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowSkipsLargeReturnRegion();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
