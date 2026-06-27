@@ -5,6 +5,10 @@
 namespace notdec::backend::structuring {
 namespace {
 
+bool collectsChildList(StructuredNodeKind Kind) {
+  return Kind == StructuredNodeKind::Sequence;
+}
+
 void collectQuality(const StructuredTree &Tree, NodeId Id,
                     ControlFlowStructureCounter &Counter) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -45,8 +49,10 @@ void collectQuality(const StructuredTree &Tree, NodeId Id,
     break;
   }
 
-  for (NodeId Child : Node->Children) {
-    collectQuality(Tree, Child, Counter);
+  if (collectsChildList(Node->Kind)) {
+    for (NodeId Child : Node->Children) {
+      collectQuality(Tree, Child, Counter);
+    }
   }
   for (const StructuredSwitchCase &Case : Node->StructuredCases) {
     collectQuality(Tree, Case.Body, Counter);

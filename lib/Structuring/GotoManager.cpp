@@ -59,6 +59,10 @@ StructuredGotoEdgeKind childEdgeKind(const StructuredNode &Parent,
   return StructuredGotoEdgeKind::Unknown;
 }
 
+bool collectsChildList(StructuredNodeKind Kind) {
+  return Kind == StructuredNodeKind::Sequence;
+}
+
 void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
                   StructuredGotoEdgeKind EdgeKind,
                   std::set<StructuredGoto> &Gotos) {
@@ -73,12 +77,14 @@ void collectGotos(const StructuredTree &Tree, NodeId Id, BlockId CurrentSource,
     Gotos.insert({Source, Node->Target, Id, EdgeKind});
   }
 
-  for (NodeId Child : Node->Children) {
-    const StructuredNode *ChildNode = Tree.getNode(Child);
-    collectGotos(Tree, Child, Source, childEdgeKind(*Node, ChildNode, EdgeKind),
-                 Gotos);
-    if (ChildNode != nullptr && ChildNode->Block != InvalidBlockId) {
-      Source = ChildNode->Block;
+  if (collectsChildList(Node->Kind)) {
+    for (NodeId Child : Node->Children) {
+      const StructuredNode *ChildNode = Tree.getNode(Child);
+      collectGotos(Tree, Child, Source,
+                   childEdgeKind(*Node, ChildNode, EdgeKind), Gotos);
+      if (ChildNode != nullptr && ChildNode->Block != InvalidBlockId) {
+        Source = ChildNode->Block;
+      }
     }
   }
   for (const StructuredSwitchCase &Case : Node->StructuredCases) {

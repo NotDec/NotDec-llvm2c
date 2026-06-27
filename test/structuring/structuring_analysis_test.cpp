@@ -1078,6 +1078,43 @@ void testGotoManagerKeepsSwitchEdgeKindsThroughLinearBodies() {
   assert(CaseGotos.front().EdgeKind == StructuredGotoEdgeKind::SwitchCase);
 }
 
+void testGotoManagerDoesNotDoubleCountSwitchHelperChildren() {
+  StructuredTree Tree;
+
+  StructuredNode DefaultGoto;
+  DefaultGoto.Kind = StructuredNodeKind::Goto;
+  DefaultGoto.Target = 20;
+  NodeId DefaultId = Tree.addNode(std::move(DefaultGoto));
+
+  StructuredNode CaseGoto;
+  CaseGoto.Kind = StructuredNodeKind::Goto;
+  CaseGoto.Target = 30;
+  NodeId CaseId = Tree.addNode(std::move(CaseGoto));
+
+  StructuredNode Switch;
+  Switch.Kind = StructuredNodeKind::Switch;
+  Switch.Block = 10;
+  Switch.Default = DefaultId;
+  Switch.StructuredCases.push_back({{}, 30, CaseId});
+  Switch.Children.push_back(DefaultId);
+  Switch.Children.push_back(CaseId);
+  Tree.setRoot(Tree.addNode(std::move(Switch)));
+
+  GotoManager Manager = GotoManager::collect(Tree);
+  assert(Manager.size() == 2);
+
+  std::vector<StructuredGoto> DefaultGotos = Manager.gotosInBlock(10);
+  assert(DefaultGotos.size() == 1);
+  assert(DefaultGotos.front().Target == 20);
+  assert(DefaultGotos.front().EdgeKind ==
+         StructuredGotoEdgeKind::SwitchDefault);
+
+  std::vector<StructuredGoto> CaseGotos = Manager.gotosInBlock(30);
+  assert(CaseGotos.size() == 1);
+  assert(CaseGotos.front().Target == 30);
+  assert(CaseGotos.front().EdgeKind == StructuredGotoEdgeKind::SwitchCase);
+}
+
 void testStructuringEvaluatorCollectsGotoSummary() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -9317,6 +9354,49 @@ void testControlFlowStructureCounterCollectsSharedQuality() {
   assert((Counter.OrderedLabels == std::vector<BlockId>{20}));
 }
 
+void testControlFlowStructureCounterDoesNotDoubleCountSwitchHelperChildren() {
+  StructuredTree Tree;
+
+  StructuredNode DefaultGoto;
+  DefaultGoto.Kind = StructuredNodeKind::Goto;
+  DefaultGoto.Target = 20;
+  NodeId DefaultId = Tree.addNode(std::move(DefaultGoto));
+
+  StructuredNode CaseGoto;
+  CaseGoto.Kind = StructuredNodeKind::Goto;
+  CaseGoto.Target = 30;
+  NodeId CaseId = Tree.addNode(std::move(CaseGoto));
+
+  StructuredNode Switch;
+  Switch.Kind = StructuredNodeKind::Switch;
+  Switch.Block = 10;
+  Switch.Default = DefaultId;
+  Switch.StructuredCases.push_back({{}, 30, CaseId});
+  Switch.Children.push_back(DefaultId);
+  Switch.Children.push_back(CaseId);
+
+  StructuredNode Label20;
+  Label20.Kind = StructuredNodeKind::Label;
+  Label20.Block = 20;
+
+  StructuredNode Label30;
+  Label30.Kind = StructuredNodeKind::Label;
+  Label30.Block = 30;
+
+  StructuredNode Root;
+  Root.Kind = StructuredNodeKind::Sequence;
+  Root.Children.push_back(Tree.addNode(std::move(Switch)));
+  Root.Children.push_back(Tree.addNode(std::move(Label20)));
+  Root.Children.push_back(Tree.addNode(std::move(Label30)));
+  Tree.setRoot(Tree.addNode(std::move(Root)));
+
+  ControlFlowStructureCounter Counter =
+      ControlFlowStructureCounter::collect(Tree);
+  assert(Counter.GotoTargets[20] == 1);
+  assert(Counter.GotoTargets[30] == 1);
+  assert((Counter.OrderedLabels == std::vector<BlockId>{20, 30}));
+}
+
 void testRelativeQualityRejectsBackwardGotoTrade() {
   ControlFlowStructureCounter Initial;
   Initial.GotoTargets[20] = 1;
@@ -12089,6 +12169,7 @@ int main() {
   testGotoManagerCollectsIfGotoSources();
   testGotoManagerCollectsSwitchGotoEdgeKinds();
   testGotoManagerKeepsSwitchEdgeKindsThroughLinearBodies();
+  testGotoManagerDoesNotDoubleCountSwitchHelperChildren();
   testStructuringEvaluatorCollectsGotoSummary();
   testStructuringEvaluatorRemovesEdgesForTrialOnly();
   testStructuredCFGDuplicatesBlockBodySource();
@@ -12256,6 +12337,7 @@ int main() {
   testSwitchDefaultCaseDuplicatorRollsBackGroupedPredecessorFailure();
   testSwitchDefaultCaseDuplicatorCommitsRewriteAtomically();
   testControlFlowStructureCounterCollectsSharedQuality();
+  testControlFlowStructureCounterDoesNotDoubleCountSwitchHelperChildren();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
   testRelativeQualityIgnoresInfiniteLoopsForAngrParity();
