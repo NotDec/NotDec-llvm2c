@@ -436,6 +436,49 @@ ret:
         "counts": {"return 7;": 2},
     },
     {
+        "name": "sailr_prefixed_switch_return_region",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %prefix
+
+case2:
+  br label %prefix
+
+default:
+  ret i32 0
+
+prefix:
+  %sel = add i32 %a, 1
+  switch i32 %sel, label %inner_default [
+    i32 10, label %inner_case
+    i32 11, label %inner_case2
+  ]
+
+inner_default:
+  ret i32 7
+
+inner_case:
+  ret i32 8
+
+inner_case2:
+  ret i32 9
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "switch (a + 1)",
+                     "case 10:", "case 11:", "return 7;", "return 8;",
+                     "return 9;"],
+        "absent": ["goto prefix", "goto inner_default", "goto inner_case",
+                   "phi", "reg2mem"],
+        "counts": {"return 7;": 2, "return 8;": 2, "return 9;": 2},
+    },
+    {
         "name": "sailr_branch_return_region",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a, i32 %b) {
