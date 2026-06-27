@@ -5774,6 +5774,145 @@ void testReturnDuplicatorLowCopiesSwitchReturnRegionWithoutPredecessorRewriteSup
   assert(hasSinglePayload(OriginalCaseTail->Statements, 54));
 }
 
+void testReturnDuplicatorLowCopiesSwitchReturnRegionWithDephicationVVars() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Switch = switchBlock(2, {3, 5});
+  Switch.Statements.push_back({40});
+  Switch.Condition = {50};
+  Switch.Cases.clear();
+  Switch.Cases.push_back({{51}, 5});
+  Cfg.addBlock(std::move(Switch));
+
+  CFGBlock DefaultTail = block(3, {4});
+  DefaultTail.Statements.push_back({52});
+  Cfg.addBlock(std::move(DefaultTail));
+
+  CFGBlock DefaultRet = block(4, {});
+  DefaultRet.Terminator = TerminatorKind::Return;
+  DefaultRet.Statements.push_back({53});
+  Cfg.addBlock(std::move(DefaultRet));
+
+  CFGBlock CaseTail = block(5, {6});
+  CaseTail.Statements.push_back({54});
+  Cfg.addBlock(std::move(CaseTail));
+
+  CFGBlock CaseRet = block(6, {});
+  CaseRet.Terminator = TerminatorKind::Return;
+  CaseRet.Statements.push_back({55});
+  Cfg.addBlock(std::move(CaseRet));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 4);
+  Cfg.addDephicationIncoming(VVar, 2, 4, 2, {40}, "x");
+
+  VVarId CopiedVVar = InvalidVVarId;
+  bool SawDephicationAssignment = false;
+  bool SawSwitchCondition = false;
+  bool SawSwitchCaseValue = false;
+  bool SawCopiedMergeReturn = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (!Payload.isValid()) {
+          return Payload;
+        }
+        if (!Context.DephicationVVarCopies.empty()) {
+          auto CopyIt = Context.DephicationVVarCopies.begin();
+          if (CopiedVVar == InvalidVVarId) {
+            CopiedVVar = CopyIt->second;
+          } else {
+            assert(CopyIt->second == CopiedVVar);
+          }
+          assert(Context.DephicationVVars.size() == 1);
+          assert(Context.DephicationVVars.front().Id == CopiedVVar);
+        }
+
+        if (Kind == PayloadMaterializeKind::DephicationAssignment) {
+          SawDephicationAssignment = true;
+          assert(Context.CurrentDephicationIncoming.has_value());
+          assert(Context.CurrentDephicationIncoming->SourceTarget == VVar);
+          assert(Context.CurrentDephicationIncoming->Target == CopiedVVar);
+        } else {
+          assert(!Context.CurrentDephicationIncoming.has_value());
+        }
+        if (Kind == PayloadMaterializeKind::Condition && Payload.Id == 50) {
+          SawSwitchCondition = true;
+        }
+        if (Kind == PayloadMaterializeKind::SwitchCaseValue &&
+            Payload.Id == 51) {
+          SawSwitchCaseValue = true;
+        }
+        if (Kind == PayloadMaterializeKind::Statement && Payload.Id == 53 &&
+            Context.CopyBlock != 4) {
+          SawCopiedMergeReturn = true;
+        }
+        return PayloadRef{Payload.Id + 1000};
+      },
+      /*SupportsPredecessorRewrite=*/true,
+      /*SupportsGroupedPredecessorRewrite=*/true);
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(CopiedVVar != InvalidVVarId);
+  assert(SawDephicationAssignment);
+  assert(SawSwitchCondition);
+  assert(SawSwitchCaseValue);
+  assert(SawCopiedMergeReturn);
+
+  const CFGBlock *Block0 = Cfg.getBlock(0);
+  const CFGBlock *Block1 = Cfg.getBlock(1);
+  assert(Block0 != nullptr && Block1 != nullptr);
+  assert(Block0->Successors.size() == 1);
+  assert(Block1->Successors == std::vector<BlockId>{2});
+  assert(Block0->Successors.front() != 2);
+
+  const CFGBlock *CopySwitch = Cfg.getBlock(Block0->Successors.front());
+  const CFGBlock *OriginalSwitch = Cfg.getBlock(2);
+  assert(CopySwitch != nullptr && OriginalSwitch != nullptr);
+  assert(CopySwitch->Terminator == TerminatorKind::Switch);
+  assert(OriginalSwitch->Terminator == TerminatorKind::Switch);
+  assert(hasSinglePayload(CopySwitch->Statements, 1040));
+  assert(CopySwitch->Condition.Id == 1050);
+  assert(CopySwitch->Cases.size() == 1);
+  assert(CopySwitch->Cases.front().Value.Id == 1051);
+  assert(CopySwitch->Cases.front().Target != 5);
+  assert(OriginalSwitch->Cases.front().Target == 5);
+
+  const CFGBlock *CopyDefaultTail = Cfg.getBlock(CopySwitch->Successors[0]);
+  const CFGBlock *CopyCaseTail = Cfg.getBlock(CopySwitch->Cases.front().Target);
+  assert(CopyDefaultTail != nullptr && CopyCaseTail != nullptr);
+  assert(hasSinglePayload(CopyDefaultTail->Statements, 1052));
+  assert(hasSinglePayload(CopyCaseTail->Statements, 1054));
+
+  const CFGBlock *CopyDefaultRet =
+      Cfg.getBlock(CopyDefaultTail->Successors.front());
+  const CFGBlock *CopyCaseRet = Cfg.getBlock(CopyCaseTail->Successors.front());
+  assert(CopyDefaultRet != nullptr && CopyCaseRet != nullptr);
+  assert(CopyDefaultRet->Terminator == TerminatorKind::Return);
+  assert(CopyCaseRet->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(CopyDefaultRet->Statements, 1053));
+  assert(hasSinglePayload(CopyCaseRet->Statements, 1055));
+
+  DephicationEdgeContext CopySwitchContext =
+      Cfg.dephicationEdgeContext(CopySwitch->Id);
+  assert(CopySwitchContext.Incomings.size() == 1);
+  assert(CopySwitchContext.Incomings.front().Target == CopiedVVar);
+  assert(CopySwitchContext.Incomings.front().Assignment.Id == 1040);
+  DephicationEdgeContext CopyMergeContext =
+      Cfg.dephicationBlockContext(CopyDefaultRet->Id);
+  assert(CopyMergeContext.VVarCopies.size() == 1);
+  assert(CopyMergeContext.VVarCopies.begin()->first == VVar);
+  assert(CopyMergeContext.VVarCopies.begin()->second == CopiedVVar);
+}
+
 void testReturnDuplicatorLowUsesGotoInReturnTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -10128,6 +10267,7 @@ int main() {
   testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();
   testReturnDuplicatorLowCopiesBranchReturnRegionWithoutPredecessorRewriteSupport();
   testReturnDuplicatorLowCopiesSwitchReturnRegionWithoutPredecessorRewriteSupport();
+  testReturnDuplicatorLowCopiesSwitchReturnRegionWithDephicationVVars();
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testReturnDuplicatorLowRollsBackGroupedPredecessorFailure();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
