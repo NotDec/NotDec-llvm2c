@@ -2613,6 +2613,130 @@ void testStructuredCFGDuplicateCopiedDephicationEdgeKeepsIdentityChain() {
   assert(CopyContext.VVarCopies.begin()->second == CopyVVar2);
 }
 
+void testStructuredCFGDuplicateCopiedDephicationEdgeAfterOriginalRemoval() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {4}));
+
+  CFGBlock Edge = block(4, {3});
+  Edge.Origin = CFGBlockOrigin::Synthetic;
+  Edge.CopyKind = CFGBlockCopyKind::SyntheticForwarder;
+  Edge.CreatedBy = CFGBlockCreator::SAILRDephication;
+  Edge.SyntheticSource = 1;
+  Edge.SyntheticTarget = 3;
+  Edge.Statements.push_back({40});
+  Cfg.addBlock(std::move(Edge));
+
+  CFGBlock Merge = block(3, {});
+  Merge.Statements.push_back({41});
+  Cfg.addBlock(std::move(Merge));
+
+  VVarId VVar = Cfg.addDephicationVVar("x", 3);
+  Cfg.addDephicationIncoming(VVar, 1, 3, 4, {40}, "a");
+
+  std::optional<DuplicatedRegion> FirstCopy = Cfg.duplicateRegion({1, 4, 3});
+  assert(FirstCopy.has_value());
+  BlockId CopyIncoming1 = FirstCopy->copyOf(1);
+  BlockId CopyEdge1 = FirstCopy->copyOf(4);
+  BlockId CopyMerge1 = FirstCopy->copyOf(3);
+  assert(CopyIncoming1 != InvalidBlockId);
+  assert(CopyEdge1 != InvalidBlockId);
+  assert(CopyMerge1 != InvalidBlockId);
+  assert(Cfg.dephicationVVars().size() == 2);
+  VVarId CopyVVar1 = Cfg.dephicationVVars()[1].Id;
+
+  assert(Cfg.removeBlocks({1, 4, 3}));
+  assert(Cfg.getBlock(1) == nullptr);
+  assert(Cfg.getBlock(4) == nullptr);
+  assert(Cfg.getBlock(3) == nullptr);
+  assert(Cfg.dephicationVVars()[0].Retired);
+  assert(!Cfg.dephicationVVars()[1].Retired);
+  assert(Cfg.dephicationIncomings().size() == 1);
+  assert(Cfg.dephicationIncomings().front().IncomingBlock == CopyIncoming1);
+  assert(Cfg.dephicationIncomings().front().MergeBlock == CopyMerge1);
+  assert(Cfg.dephicationIncomings().front().EdgeBlock == CopyEdge1);
+  assert(Cfg.dephicationIncomings().front().Target == CopyVVar1);
+
+  std::optional<DuplicatedRegion> SecondCopy =
+      Cfg.duplicateRegion({CopyIncoming1, CopyEdge1, CopyMerge1});
+  assert(SecondCopy.has_value());
+  BlockId CopyIncoming2 = SecondCopy->copyOf(CopyIncoming1);
+  BlockId CopyEdge2 = SecondCopy->copyOf(CopyEdge1);
+  BlockId CopyMerge2 = SecondCopy->copyOf(CopyMerge1);
+  assert(CopyIncoming2 != InvalidBlockId);
+  assert(CopyEdge2 != InvalidBlockId);
+  assert(CopyMerge2 != InvalidBlockId);
+  assert(Cfg.dephicationVVars().size() == 3);
+  VVarId CopyVVar2 = Cfg.dephicationVVars()[2].Id;
+  assert(Cfg.dephicationVVars()[2].SourceId == VVar);
+  assert(Cfg.dephicationVVars()[2].MergeBlock == CopyMerge2);
+  assert(!Cfg.dephicationVVars()[2].Retired);
+
+  const std::vector<DephicationIncoming> &Incomings =
+      Cfg.dephicationIncomings();
+  assert(Incomings.size() == 2);
+  assert(Incomings[1].IncomingBlock == CopyIncoming2);
+  assert(Incomings[1].MergeBlock == CopyMerge2);
+  assert(Incomings[1].EdgeBlock == CopyEdge2);
+  assert(Incomings[1].SourceIncomingBlock == CopyIncoming1);
+  assert(Incomings[1].SourceMergeBlock == CopyMerge1);
+  assert(Incomings[1].SourceEdgeBlock == CopyEdge1);
+  assert(Incomings[1].SourceTarget == CopyVVar1);
+  assert(Incomings[1].Target == CopyVVar2);
+
+  DephicationEdgeContext CopyEdgeContext = Cfg.dephicationEdgeContext(CopyEdge2);
+  assert(CopyEdgeContext.Incomings.size() == 1);
+  assert(CopyEdgeContext.VVarCopies.size() == 1);
+  assert(CopyEdgeContext.VVarCopies.begin()->first == CopyVVar1);
+  assert(CopyEdgeContext.VVarCopies.begin()->second == CopyVVar2);
+
+  DephicationEdgeContext CopyMergeContext =
+      Cfg.dephicationBlockContext(CopyMerge2);
+  assert(CopyMergeContext.VVars.size() == 1);
+  assert(CopyMergeContext.VVars.front().Id == CopyVVar2);
+  assert(CopyMergeContext.VVarCopies.size() == 1);
+  assert(CopyMergeContext.VVarCopies.begin()->first == VVar);
+  assert(CopyMergeContext.VVarCopies.begin()->second == CopyVVar2);
+
+  bool SawCopiedIncoming = false;
+  bool SawCopiedMerge = false;
+  Cfg.setPayloadMaterializeHook(
+      [&](const PayloadMaterializeContext &Context,
+          PayloadMaterializeKind Kind, PayloadRef Payload,
+          std::size_t) -> std::optional<PayloadRef> {
+        if (Context.CopyBlock == CopyEdge2 &&
+            Kind == PayloadMaterializeKind::DephicationAssignment) {
+          assert(Context.CurrentDephicationIncoming.has_value());
+          assert(Context.CurrentDephicationIncoming->SourceTarget == CopyVVar1);
+          assert(Context.CurrentDephicationIncoming->Target == CopyVVar2);
+          assert(Context.DephicationVVarCopies.size() == 1);
+          assert(Context.DephicationVVarCopies.begin()->first == CopyVVar1);
+          assert(Context.DephicationVVarCopies.begin()->second == CopyVVar2);
+          SawCopiedIncoming = true;
+          return PayloadRef{Payload.Id + 1000};
+        }
+
+        if (Context.CopyBlock == CopyMerge2 &&
+            Kind == PayloadMaterializeKind::Statement) {
+          assert(Context.DephicationVVars.size() == 1);
+          assert(Context.DephicationVVars.front().Id == CopyVVar2);
+          assert(Context.DephicationVVarCopies.size() == 1);
+          assert(Context.DephicationVVarCopies.begin()->first == VVar);
+          assert(Context.DephicationVVarCopies.begin()->second == CopyVVar2);
+          SawCopiedMerge = true;
+          return PayloadRef{Payload.Id + 2000};
+        }
+
+        return Payload;
+      });
+
+  assert(Cfg.materializeBlockBody(CopyEdge2));
+  assert(Cfg.materializeBlockBody(CopyMerge2));
+  assert(SawCopiedIncoming);
+  assert(SawCopiedMerge);
+  assert(Cfg.dephicationIncomings()[1].Assignment.Id == 1040);
+  assert(hasSinglePayload(Cfg.getBlock(CopyMerge2)->Statements, 2041));
+}
+
 void testStructuredCFGRedirectDephicationEdgeRematerializesAssignment() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(1, {4}));
@@ -11723,6 +11847,7 @@ int main() {
   testStructuredCFGQueriesCopiedDephicationEdgeWithoutCopiedMerge();
   testStructuredCFGMaterializeCopiedMergeReportsDephicationVVarCopy();
   testStructuredCFGDuplicateCopiedDephicationEdgeKeepsIdentityChain();
+  testStructuredCFGDuplicateCopiedDephicationEdgeAfterOriginalRemoval();
   testStructuredCFGRedirectDephicationEdgeRematerializesAssignment();
   testStructuredCFGRedirectDephicationEdgeFailureRollsBack();
   testStructuredCFGRemoveCopiedDephicationMergeRetiresVVar();
