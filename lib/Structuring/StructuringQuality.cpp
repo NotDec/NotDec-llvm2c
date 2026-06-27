@@ -58,8 +58,10 @@ void collectQuality(const StructuredTree &Tree, NodeId Id,
 }
 
 unsigned totalLoops(const ControlFlowStructureCounter &Counter) {
-  return Counter.WhileLoops + Counter.DoWhileLoops + Counter.ForLoops +
-         Counter.InfiniteLoops;
+  // Angr's relative-quality check only compares LoopNode sorts: for, while,
+  // and do-while. Keep NotDec's infinite-loop count out of this trade check so
+  // SAILR pass acceptance stays aligned with the upstream heuristic.
+  return Counter.WhileLoops + Counter.DoWhileLoops + Counter.ForLoops;
 }
 
 unsigned totalGotos(const ControlFlowStructureCounter &Counter) {

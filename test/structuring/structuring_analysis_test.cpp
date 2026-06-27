@@ -7583,6 +7583,16 @@ void testRelativeQualityRejectsMoreGotoTargets() {
   assert(!improvesRelativeStructuringQuality(Initial, Current));
 }
 
+void testRelativeQualityIgnoresInfiniteLoopsForAngrParity() {
+  ControlFlowStructureCounter Initial;
+  Initial.ForLoops = 1;
+
+  ControlFlowStructureCounter Current;
+  Current.InfiniteLoops = 1;
+
+  assert(improvesRelativeStructuringQuality(Initial, Current));
+}
+
 void testStructuringOptimizationPassAcceptsImprovedGraph() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -10441,6 +10451,7 @@ int main() {
   testControlFlowStructureCounterCollectsSharedQuality();
   testRelativeQualityRejectsBackwardGotoTrade();
   testRelativeQualityRejectsMoreGotoTargets();
+  testRelativeQualityIgnoresInfiniteLoopsForAngrParity();
   testStructuringOptimizationPassAcceptsImprovedGraph();
   testStructuringOptimizationPassRejectsNewGotos();
   testStructuringOptimizationPassEnforcesStrictlyLessGotos();
