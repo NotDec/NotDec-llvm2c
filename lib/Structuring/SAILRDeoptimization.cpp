@@ -438,28 +438,6 @@ bool collectDiamondReturnRegion(const StructuredCFG &Graph, BlockId Terminal,
   return true;
 }
 
-void prependFallthroughPrefix(const StructuredCFG &Graph,
-                              ReturnRegion &Region) {
-  // Diamond collection starts at the branch head. Pull simple fallthrough
-  // wrappers into the same return region so external predecessors stay visible.
-  while (Region.Head != InvalidBlockId) {
-    std::vector<BlockId> Preds = predecessorsOf(Graph, Region.Head);
-    if (Preds.size() != 1 || containsBlock(Region.Blocks, Preds.front())) {
-      break;
-    }
-
-    const CFGBlock *PredBlock = Graph.getBlock(Preds.front());
-    if (PredBlock == nullptr ||
-        PredBlock->Terminator != TerminatorKind::Fallthrough ||
-        PredBlock->Successors != std::vector<BlockId>{Region.Head}) {
-      break;
-    }
-
-    Region.Head = PredBlock->Id;
-    Region.Blocks.insert(Region.Blocks.begin(), PredBlock->Id);
-  }
-}
-
 bool prependBranchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
                                BlockId Pred, std::set<BlockId> &Seen) {
   const CFGBlock *PredBlock = Graph.getBlock(Pred);
@@ -543,16 +521,23 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
 
   if (AllowComplexReturnRegion) {
     if (collectDiamondReturnRegion(Graph, ReturnBlock, Region)) {
-      prependFallthroughPrefix(Graph, Region);
-      return Region;
+      // The prepend loop below stores blocks tail-to-head until the final
+      // reverse. Convert the diamond result so simple wrappers above the
+      // diamond can be absorbed by the same code path.
+      std::reverse(Region.Blocks.begin(), Region.Blocks.end());
     }
   }
 
-  Region.Head = ReturnBlock;
-  Region.Blocks.push_back(ReturnBlock);
-
   std::set<BlockId> Seen;
-  Seen.insert(ReturnBlock);
+  for (BlockId Id : Region.Blocks) {
+    Seen.insert(Id);
+  }
+  if (Region.Head == InvalidBlockId) {
+    Region.Head = ReturnBlock;
+    Region.Blocks.push_back(ReturnBlock);
+    Seen.insert(ReturnBlock);
+  }
+
   while (true) {
     std::vector<BlockId> Preds = predecessorsOf(Graph, Region.Head);
     if (Preds.size() != 1) {
