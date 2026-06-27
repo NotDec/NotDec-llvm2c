@@ -397,6 +397,38 @@ shared:
         "absent": ["phi", "reg2mem"],
     },
     {
+        "name": "sailr_unreachable_tail_region",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %tail
+
+case2:
+  br label %tail
+
+default:
+  ret i32 0
+
+tail:
+  %sum = add i32 %a, 1
+  br label %trap
+
+trap:
+  unreachable
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "a + 1;",
+                     "return 0;"],
+        "absent": ["goto tail", "goto trap", "phi", "reg2mem"],
+        "counts": {"a + 1;": 2},
+    },
+    {
         "name": "sailr_prefixed_diamond_return_region",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a, i32 %b) {
