@@ -2976,13 +2976,15 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
           bool HasUnknownKind =
               Kinds == nullptr ||
               Kinds->count(StructuredGotoEdgeKind::Unknown) != 0;
-          if (HasCaseKind && !HasUnknownKind) {
-            CasePreds.push_back(Pred);
-          } else if (HasDefaultKind && !HasUnknownKind) {
-            NonCasePreds.push_back(Pred);
-          } else {
+          if (HasUnknownKind || (!HasCaseKind && !HasDefaultKind)) {
             HasAmbiguousSwitchPred = true;
             break;
+          }
+          if (HasCaseKind) {
+            CasePreds.push_back(Pred);
+          }
+          if (HasDefaultKind) {
+            NonCasePreds.push_back(Pred);
           }
           continue;
         }

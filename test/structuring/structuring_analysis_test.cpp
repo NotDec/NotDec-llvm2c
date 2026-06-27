@@ -3803,6 +3803,61 @@ void testCrossJumpReverterUsesSwitchDefaultGotoKind() {
   assert(hasSinglePayload(CopyHead->Statements, 71));
 }
 
+void testCrossJumpReverterSplitsSingleSwitchCaseDefaultBothEdges() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({81});
+  Cfg.addBlock(std::move(Target));
+
+  CFGBlock Tail = block(2, {4});
+  Tail.Statements.push_back({82});
+  Cfg.addBlock(std::move(Tail));
+
+  Cfg.addBlock(block(4, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({
+      StructuredGoto{0, 1, 20, StructuredGotoEdgeKind::SwitchCase},
+      StructuredGoto{0, 1, 21, StructuredGotoEdgeKind::SwitchDefault},
+  });
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) == nullptr);
+  assert(Cfg.getBlock(2) == nullptr);
+  assert(Cfg.getBlock(4) == nullptr);
+
+  const CFGBlock *SwitchBlock = Cfg.getBlock(0);
+  assert(SwitchBlock != nullptr);
+  assert(SwitchBlock->Successors.size() == 2);
+  assert(SwitchBlock->Cases.size() == 1);
+  assert(SwitchBlock->Successors.front() != 1);
+  assert(SwitchBlock->Successors[1] != 1);
+  assert(SwitchBlock->Cases.front().Target == SwitchBlock->Successors[1]);
+  assert(SwitchBlock->Successors.front() != SwitchBlock->Cases.front().Target);
+
+  const CFGBlock *DefaultCopy = Cfg.getBlock(SwitchBlock->Successors.front());
+  const CFGBlock *CaseCopy = Cfg.getBlock(SwitchBlock->Cases.front().Target);
+  assert(DefaultCopy != nullptr && CaseCopy != nullptr);
+  assert(DefaultCopy->SourceBlock == 1);
+  assert(CaseCopy->SourceBlock == 1);
+  assert(hasSinglePayload(DefaultCopy->Statements, 81));
+  assert(hasSinglePayload(CaseCopy->Statements, 81));
+
+  const CFGBlock *DefaultTail = Cfg.getBlock(DefaultCopy->Successors.front());
+  const CFGBlock *CaseTail = Cfg.getBlock(CaseCopy->Successors.front());
+  assert(DefaultTail != nullptr && CaseTail != nullptr);
+  assert(DefaultTail->SourceBlock == 2);
+  assert(CaseTail->SourceBlock == 2);
+  assert(hasSinglePayload(DefaultTail->Statements, 82));
+  assert(hasSinglePayload(CaseTail->Statements, 82));
+}
+
 void testDuplicationReverterMergesExactDuplicateBlocks() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -12394,6 +12449,7 @@ int main() {
   testCrossJumpReverterRedirectsSwitchCasesOnly();
   testCrossJumpReverterUsesSwitchCaseGotoKind();
   testCrossJumpReverterUsesSwitchDefaultGotoKind();
+  testCrossJumpReverterSplitsSingleSwitchCaseDefaultBothEdges();
   testReturnDuplicatorLowDuplicatesGotoReturnTarget();
   testReturnDuplicatorLowCopiesReturnEndNodeWithDephicationVVars();
   testReturnDuplicatorLowDeletesOriginalReturnEndNodeWithDephicationVVars();
