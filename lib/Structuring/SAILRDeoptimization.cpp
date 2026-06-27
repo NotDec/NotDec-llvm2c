@@ -2102,6 +2102,79 @@ bool blockUsesNonSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
                    Target) != Block->Successors.end();
 }
 
+std::set<StructuredGotoEdgeKind>
+gotoEdgeKindsFor(const GotoManager &Gotos, BlockId Source, BlockId Target) {
+  std::set<StructuredGotoEdgeKind> Kinds;
+  for (const StructuredGoto &Goto : Gotos.gotosInBlock(Source)) {
+    if (Goto.Target == Target) {
+      Kinds.insert(Goto.EdgeKind);
+    }
+  }
+  return Kinds;
+}
+
+bool copyRegionForNonCasePredecessors(StructuredCFG &Graph,
+                                      const ReturnRegion &Region,
+                                      const std::vector<BlockId> &Preds,
+                                      std::vector<BlockId> &OutCopies) {
+  StructuredCFG Snapshot = Graph;
+  std::optional<DuplicatedRegion> CopyRegion =
+      Graph.duplicateRegion(Region.Blocks);
+  if (!CopyRegion.has_value()) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
+                                   Preds)) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  BlockId CopyHead = CopyRegion->copyOf(Region.Head);
+  if (CopyHead == InvalidBlockId ||
+      !redirectNonSwitchCaseEdges(Graph, Region.Head, CopyHead, Preds)) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    OutCopies.push_back(Copy);
+  }
+  return true;
+}
+
+bool copyRegionForSwitchCases(StructuredCFG &Graph,
+                              const ReturnRegion &Region,
+                              const std::vector<BlockId> &SwitchPreds,
+                              std::vector<BlockId> &OutCopies) {
+  StructuredCFG Snapshot = Graph;
+  std::optional<DuplicatedRegion> CopyRegion =
+      Graph.duplicateRegion(Region.Blocks);
+  if (!CopyRegion.has_value()) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  if (!materializeDuplicatedRegion(Graph, *CopyRegion, Region.Head,
+                                   SwitchPreds)) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  BlockId CopyHead = CopyRegion->copyOf(Region.Head);
+  if (CopyHead == InvalidBlockId ||
+      !redirectSwitchCases(Graph, Region.Head, CopyHead, SwitchPreds)) {
+    Graph = std::move(Snapshot);
+    return false;
+  }
+
+  for (const auto &[_, Copy] : CopyRegion->Blocks) {
+    OutCopies.push_back(Copy);
+  }
+  return true;
+}
+
 std::size_t statementCountInRegion(const StructuredCFG &Graph,
                                    const LinearRegion &Region) {
   std::size_t Count = 0;
@@ -2678,7 +2751,63 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
     std::vector<BlockId> UpdatedPreds;
     bool Failed = false;
     for (const std::vector<BlockId> &Component : PredComponents) {
-      if (!copyRegionForPredecessors(Candidate, Region, Component, Copies)) {
+      std::vector<BlockId> GenericPreds;
+      std::vector<BlockId> CasePreds;
+      std::vector<BlockId> NonCasePreds;
+      bool ComponentFailed = false;
+      for (BlockId Pred : Component) {
+        const CFGBlock *PredBlock = Candidate.getBlock(Pred);
+        bool UsesCaseEdge =
+            blockUsesSwitchCaseEdge(Candidate, Pred, Region.Head);
+        bool UsesNonCaseEdge =
+            PredBlock != nullptr &&
+            nonCaseSuccessorReachesBlock(*PredBlock, Region.Head);
+        if (PredBlock != nullptr &&
+            PredBlock->Terminator == TerminatorKind::Switch &&
+            UsesCaseEdge && UsesNonCaseEdge) {
+          std::set<StructuredGotoEdgeKind> Kinds =
+              gotoEdgeKindsFor(Current.Gotos, Pred, Region.Head);
+          bool HasUnknown =
+              Kinds.empty() ||
+              Kinds.count(StructuredGotoEdgeKind::Unknown) != 0;
+          bool HasCase =
+              Kinds.count(StructuredGotoEdgeKind::SwitchCase) != 0;
+          bool HasDefault =
+              Kinds.count(StructuredGotoEdgeKind::SwitchDefault) != 0;
+          if (HasUnknown || (!HasCase && !HasDefault)) {
+            ComponentFailed = true;
+            break;
+          }
+          if (HasCase) {
+            CasePreds.push_back(Pred);
+          }
+          if (HasDefault) {
+            NonCasePreds.push_back(Pred);
+          }
+          continue;
+        }
+        GenericPreds.push_back(Pred);
+      }
+
+      if (ComponentFailed) {
+        Failed = true;
+        break;
+      }
+
+      if (!GenericPreds.empty() &&
+          !copyRegionForPredecessors(Candidate, Region, GenericPreds,
+                                     Copies)) {
+        Failed = true;
+        break;
+      }
+      if (!CasePreds.empty() &&
+          !copyRegionForSwitchCases(Candidate, Region, CasePreds, Copies)) {
+        Failed = true;
+        break;
+      }
+      if (!NonCasePreds.empty() &&
+          !copyRegionForNonCasePredecessors(Candidate, Region, NonCasePreds,
+                                            Copies)) {
         Failed = true;
         break;
       }
@@ -2690,8 +2819,11 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
       continue;
     }
 
-    if (DeleteOriginal && UpdatedPreds.size() == CurrentPreds.size() &&
-        sameBlockSet(CurrentPreds, UpdatedPreds)) {
+    std::sort(UpdatedPreds.begin(), UpdatedPreds.end());
+    UpdatedPreds.erase(std::unique(UpdatedPreds.begin(), UpdatedPreds.end()),
+                       UpdatedPreds.end());
+
+    if (DeleteOriginal && predecessorsOf(Candidate, Region.Head).empty()) {
       if (!Candidate.removeBlocks(Region.Blocks)) {
         return false;
       }

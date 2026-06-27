@@ -5220,6 +5220,107 @@ void testReturnDuplicatorLowUsesSwitchCaseGotoSource() {
   assert(CopyBranch->Terminator == TerminatorKind::Branch);
 }
 
+void testReturnDuplicatorLowSplitsSwitchCaseDefaultOverlapCaseOnly() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+  Cfg.addBlock(block(2, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({15});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{
+          0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchCase}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *OtherPred = Cfg.getBlock(2);
+  const CFGBlock *Original = Cfg.getBlock(1);
+  assert(Switch != nullptr && OtherPred != nullptr && Original != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target != 1);
+  assert(OtherPred->Successors == std::vector<BlockId>{1});
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch->Cases.front().Target);
+  assert(Copy != nullptr);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(Copy->Statements, 15));
+}
+
+void testReturnDuplicatorLowSplitsSwitchCaseDefaultOverlapDefaultOnly() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+  Cfg.addBlock(block(2, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({16});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{
+          0, 1, InvalidNodeId, StructuredGotoEdgeKind::SwitchDefault}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *OtherPred = Cfg.getBlock(2);
+  const CFGBlock *Original = Cfg.getBlock(1);
+  assert(Switch != nullptr && OtherPred != nullptr && Original != nullptr);
+  assert(Switch->Successors.front() != 1);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target == 1);
+  assert(OtherPred->Successors == std::vector<BlockId>{1});
+
+  const CFGBlock *Copy = Cfg.getBlock(Switch->Successors.front());
+  assert(Copy != nullptr);
+  assert(Copy->SourceBlock == 1);
+  assert(Copy->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(Copy->Statements, 16));
+}
+
+void testReturnDuplicatorLowSkipsAmbiguousSwitchCaseDefaultOverlap() {
+  StructuredCFG Cfg;
+
+  Cfg.addBlock(switchBlock(0, {1, 1}));
+  Cfg.addBlock(block(2, {1}));
+
+  CFGBlock Ret = block(1, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({17});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  const CFGBlock *OtherPred = Cfg.getBlock(2);
+  const CFGBlock *Original = Cfg.getBlock(1);
+  assert(Switch != nullptr && OtherPred != nullptr && Original != nullptr);
+  assert(Switch->Successors.front() == 1);
+  assert(Switch->Cases.size() == 1);
+  assert(Switch->Cases.front().Target == 1);
+  assert(OtherPred->Successors == std::vector<BlockId>{1});
+  assert(hasSinglePayload(Original->Statements, 17));
+}
+
 void testReturnDuplicatorLowNormalizesCopiedGotoTargets() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -12032,6 +12133,9 @@ int main() {
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowUsesSwitchCaseGotoSource();
+  testReturnDuplicatorLowSplitsSwitchCaseDefaultOverlapCaseOnly();
+  testReturnDuplicatorLowSplitsSwitchCaseDefaultOverlapDefaultOnly();
+  testReturnDuplicatorLowSkipsAmbiguousSwitchCaseDefaultOverlap();
   testReturnDuplicatorLowNormalizesCopiedGotoTargets();
   testReturnDuplicatorLowKeepsCopiedGotoTargetsWhenEdgeKindChanges();
   testReturnDuplicatorLowAcceptsCopiedSwitchCaseReturnRegion();
