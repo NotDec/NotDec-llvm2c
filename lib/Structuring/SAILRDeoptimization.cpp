@@ -438,6 +438,28 @@ bool collectDiamondReturnRegion(const StructuredCFG &Graph, BlockId Terminal,
   return true;
 }
 
+void prependFallthroughPrefix(const StructuredCFG &Graph,
+                              ReturnRegion &Region) {
+  // Diamond collection starts at the branch head. Pull simple fallthrough
+  // wrappers into the same return region so external predecessors stay visible.
+  while (Region.Head != InvalidBlockId) {
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Region.Head);
+    if (Preds.size() != 1 || containsBlock(Region.Blocks, Preds.front())) {
+      break;
+    }
+
+    const CFGBlock *PredBlock = Graph.getBlock(Preds.front());
+    if (PredBlock == nullptr ||
+        PredBlock->Terminator != TerminatorKind::Fallthrough ||
+        PredBlock->Successors != std::vector<BlockId>{Region.Head}) {
+      break;
+    }
+
+    Region.Head = PredBlock->Id;
+    Region.Blocks.insert(Region.Blocks.begin(), PredBlock->Id);
+  }
+}
+
 bool prependBranchReturnRegion(const StructuredCFG &Graph, ReturnRegion &Region,
                                BlockId Pred, std::set<BlockId> &Seen) {
   const CFGBlock *PredBlock = Graph.getBlock(Pred);
@@ -521,6 +543,7 @@ ReturnRegion findLinearReturnRegion(const StructuredCFG &Graph,
 
   if (AllowComplexReturnRegion) {
     if (collectDiamondReturnRegion(Graph, ReturnBlock, Region)) {
+      prependFallthroughPrefix(Graph, Region);
       return Region;
     }
   }
