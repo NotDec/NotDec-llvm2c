@@ -7239,6 +7239,42 @@ void testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched() {
   assert(Goto->SyntheticTarget == 1);
 }
 
+void testSwitchReusedEntryRewriterSplitsCaseDefaultOverlap() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {20, 10}));
+  Cfg.addBlock(switchBlock(2, {10, 10}));
+  Cfg.addBlock(block(10, {30}));
+  Cfg.addBlock(block(20, {}));
+  Cfg.addBlock(block(30, {}));
+
+  TestSwitchReusedEntryRewriter Pass(
+      SwitchReusedEntryRewriter::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *Switch0 = Cfg.getBlock(0);
+  const CFGBlock *Switch2 = Cfg.getBlock(2);
+  assert(Switch0 != nullptr && Switch2 != nullptr);
+  assert(Switch0->Successors.front() == 20);
+  assert(Switch0->Cases.front().Target == 10);
+  assert(Switch2->Successors.front() == 10);
+  assert(Switch2->Cases.front().Target != 10);
+  assert(Switch2->Successors[1] == Switch2->Cases.front().Target);
+
+  const CFGBlock *Goto = Cfg.getBlock(Switch2->Cases.front().Target);
+  assert(Goto != nullptr);
+  assert(Goto->Origin == CFGBlockOrigin::Synthetic);
+  assert(Goto->CopyKind == CFGBlockCopyKind::SyntheticGoto);
+  assert(Goto->Successors.empty());
+  assert(Goto->SyntheticSource == 2);
+  assert(Goto->SyntheticTarget == 10);
+
+  const CFGBlock *Entry = Cfg.getBlock(10);
+  assert(Entry != nullptr);
+  assert(Entry->Successors == std::vector<BlockId>{30});
+}
+
 void testSwitchReusedEntryRewriterRequiresRealCaseEdge() {
   StructuredCFG Cfg;
   CFGBlock Switch0 = switchBlock(0, {2, 1});
@@ -10783,6 +10819,7 @@ int main() {
   testSwitchReusedEntryRewriterPreservesReusedEntryTail();
   testSwitchReusedEntryRewriterKeepsLowestSwitchIdEntry();
   testSwitchReusedEntryRewriterKeepsDefaultSuccessorUntouched();
+  testSwitchReusedEntryRewriterSplitsCaseDefaultOverlap();
   testSwitchReusedEntryRewriterRequiresRealCaseEdge();
   testSwitchReusedEntryRewriterSkipsDefaultOnlyTargets();
   testSwitchReusedEntryRewriterSkipsEntryOverReuseLimit();
