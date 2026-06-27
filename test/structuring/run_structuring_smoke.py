@@ -1274,6 +1274,110 @@ def run_sailr_dephication_copied_switch_contrast_case(
     return failures
 
 
+def run_sailr_dephication_copied_return_tail_contrast_case(
+    notdec_llvm2c: Path, work_dir: Path) -> list[str]:
+    case = next(c for c in CASES if c["name"] ==
+                "sailr_angr_dephication_copied_return_tail")
+    input_path = work_dir / "sailr_dephication_copied_return_tail_contrast.ll"
+    input_path.write_text(case["ir"].strip() + "\n")
+
+    failures = []
+    outputs = {}
+    for mode in ("legacy", "angr"):
+        output_path = work_dir / (
+            f"sailr_dephication_copied_return_tail_contrast.{mode}.c")
+        proc = subprocess.run(
+            [
+                str(notdec_llvm2c),
+                str(input_path),
+                "-o",
+                str(output_path),
+                "--algo=structured-sailr",
+                f"--sailr-dephication-mode={mode}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode != 0:
+            failures.append(f"{mode}: command failed\n{proc.stdout}")
+            continue
+        outputs[mode] = output_path.read_text()
+
+    legacy_output = outputs.get("legacy", "")
+    angr_output = outputs.get("angr", "")
+    if "p_reg2mem" not in legacy_output:
+        failures.append("legacy: missing reg2mem copied return tail output")
+    if "int p_copy" in legacy_output or "p_copy1" in legacy_output:
+        failures.append("legacy: unexpected copied vvar declaration")
+
+    if "int p_copy" not in angr_output and "int p_copy1" not in angr_output:
+        failures.append("angr: missing copied vvar declaration")
+    if "p_copy1 = a;" not in angr_output:
+        failures.append("angr: missing copied return tail assignment")
+    if "r = p_copy1 + 1;" not in angr_output:
+        failures.append("angr: missing copied return tail payload")
+    if "return r;" not in angr_output:
+        failures.append("angr: missing copied return tail return")
+    if "p_reg2mem" in angr_output:
+        failures.append("angr: reg2mem fallback leaked into output")
+
+    return failures
+
+
+def run_sailr_dephication_switch_return_contrast_case(
+    notdec_llvm2c: Path, work_dir: Path) -> list[str]:
+    case = next(c for c in CASES if c["name"] ==
+                "sailr_angr_dephication_switch_return_region")
+    input_path = work_dir / "sailr_dephication_switch_return_contrast.ll"
+    input_path.write_text(case["ir"].strip() + "\n")
+
+    failures = []
+    outputs = {}
+    for mode in ("legacy", "angr"):
+        output_path = work_dir / (
+            f"sailr_dephication_switch_return_contrast.{mode}.c")
+        proc = subprocess.run(
+            [
+                str(notdec_llvm2c),
+                str(input_path),
+                "-o",
+                str(output_path),
+                "--algo=structured-sailr",
+                f"--sailr-dephication-mode={mode}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode != 0:
+            failures.append(f"{mode}: command failed\n{proc.stdout}")
+            continue
+        outputs[mode] = output_path.read_text()
+
+    legacy_output = outputs.get("legacy", "")
+    angr_output = outputs.get("angr", "")
+    if "p_reg2mem" not in legacy_output:
+        failures.append("legacy: missing reg2mem switch return output")
+    if "return *(int *)&p_reg2mem + 1;" not in legacy_output:
+        failures.append("legacy: missing reg2mem switch return payload")
+    if "int p;" in legacy_output:
+        failures.append("legacy: unexpected shared dephication declaration")
+
+    if "int p;" not in angr_output:
+        failures.append("angr: missing shared dephication declaration")
+    if "p = a;" not in angr_output or "p = b;" not in angr_output:
+        failures.append("angr: missing switch return assignments")
+    if "p = x;" not in angr_output:
+        failures.append("angr: missing switch case assignment")
+    if "return p + 1;" not in angr_output:
+        failures.append("angr: missing switch return payload")
+    if "p_reg2mem" in angr_output:
+        failures.append("angr: reg2mem fallback leaked into output")
+
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notdec-llvm2c", required=True, type=Path)
@@ -1291,6 +1395,12 @@ def main() -> int:
             run_sailr_dephication_mode_contrast_case(notdec_llvm2c, work_dir))
         all_failures.extend(
             run_sailr_dephication_copied_switch_contrast_case(
+                notdec_llvm2c, work_dir))
+        all_failures.extend(
+            run_sailr_dephication_copied_return_tail_contrast_case(
+                notdec_llvm2c, work_dir))
+        all_failures.extend(
+            run_sailr_dephication_switch_return_contrast_case(
                 notdec_llvm2c, work_dir))
 
     if all_failures:
