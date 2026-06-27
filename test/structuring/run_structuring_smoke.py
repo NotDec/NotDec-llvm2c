@@ -397,6 +397,45 @@ shared:
         "absent": ["phi", "reg2mem"],
     },
     {
+        "name": "sailr_prefixed_diamond_return_region",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %prefix
+
+case2:
+  br label %prefix
+
+default:
+  ret i32 0
+
+prefix:
+  %sum = add i32 %a, 1
+  %cond = icmp eq i32 %sum, %b
+  br i1 %cond, label %left, label %right
+
+left:
+  br label %ret
+
+right:
+  br label %ret
+
+ret:
+  ret i32 7
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "a + 1 == b;",
+                     "return 7;"],
+        "absent": ["goto prefix", "goto ret", "phi", "reg2mem"],
+        "counts": {"return 7;": 2},
+    },
+    {
         "name": "phi_demote_before_structuring",
         "ir": r"""
 define i32 @main(i32 %x) {
