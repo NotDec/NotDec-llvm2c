@@ -41,7 +41,8 @@ CASES = [
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "selected-targets-native/lighttpd/executable/module-all.ll"
         ),
-        "expected_failure": "lighttpd module-all currently aborts in llvm2c with null QualType",
+        "expected_failure": "lighttpd module-all currently does not finish within the migration timeout",
+        "timeout": 90,
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
@@ -616,7 +617,8 @@ shared:
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "selected-targets-native/lighttpd/executable/module-all.ll"
         ),
-        "expected_failure": "lighttpd module-all currently aborts in llvm2c with null QualType",
+        "expected_failure": "lighttpd module-all currently does not finish within the migration timeout",
+        "timeout": 90,
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
@@ -675,18 +677,28 @@ def run_case(
         return "skip", failures, {}, classify_failures("skip", failures)
 
     output_path = work_dir / f"{case['name']}.c"
-    proc = subprocess.run(
-        [
-            str(notdec_llvm2c),
-            "--algo=structured-sailr",
-            str(input_path),
-            "-o",
-            str(output_path),
-        ] + case.get("args", []),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                str(notdec_llvm2c),
+                "--algo=structured-sailr",
+                str(input_path),
+                "-o",
+                str(output_path),
+            ] + case.get("args", []),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=case.get("timeout"),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        failures = [
+            f"{case['name']}: command timed out after {case['timeout']}s\n{output}"
+        ]
+        return "fail", failures, {}, "timeout"
     if proc.returncode != 0:
         failures = [f"{case['name']}: command failed\n{proc.stdout}"]
         return "fail", failures, {}, classify_failures("fail", failures)

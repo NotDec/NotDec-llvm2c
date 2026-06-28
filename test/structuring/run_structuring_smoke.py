@@ -510,6 +510,16 @@ entry:
         "absent": ["poison"],
     },
     {
+        "name": "wide_negative_integer_literal",
+        "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/wide_negative_integer_literal.ll"),
+        "contains": ["unsigned _BitInt(512)", "return (int)(x &"],
+    },
+    {
+        "name": "wide_integer_load",
+        "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/wide_integer_load.ll"),
+        "contains": ["_BitInt(512)", "return (int)*("],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {

@@ -1076,9 +1076,16 @@ void StmtPrinter::VisitIntegerLiteral(IntegerLiteral *Node) {
   bool isSigned = Node->getType()->isSignedIntegerType();
   OS << llvm::toString(Node->getValue(), 10, isSigned);
 
-  // Emit suffixes.  Integer literals are always a builtin integer type.
+  // Decompiler-generated wide integer literals may use _BitInt(N), which has no
+  // C integer suffix to print here.
+  const auto *BT = Node->getType()->getAs<BuiltinType>();
+  if (BT == nullptr) {
+    return;
+  }
 
-  switch (Node->getType()->castAs<BuiltinType>()->getKind()) {
+  // Emit suffixes.  Source integer literals are normally builtin integer types.
+
+  switch (BT->getKind()) {
   default:
     llvm_unreachable("Unexpected type for integer literal!");
   case BuiltinType::SChar:

@@ -614,7 +614,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   if (Ty.isNull()) {
     llvm::errs() << "Warning: Cannot find type for load inst: " << I << "\n";
     assert(Size && "aggregate load should have a type by now");
-    Ty = Ctx.getIntTypeForBitwidth(*Size, true);
+    Ty = getTypeBuilder().visitType(*LoadTy);
   }
 
   assert(!Ty->isVoidType());
@@ -3016,9 +3016,12 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     // if value is negative, create signed literal then cast.
     if (Val.getBitWidth() > 8 && Val.isNegative() &&
         Ty->isUnsignedIntegerType()) {
+      auto SignedTy = Ctx.getIntTypeForBitwidth(Val.getBitWidth(), true);
+      if (SignedTy.isNull()) {
+        SignedTy = Ctx.getBitIntType(false, Val.getBitWidth());
+      }
       clang::Expr *Ret = clang::IntegerLiteral::Create(
-          Ctx, Val, Ctx.getIntTypeForBitwidth(Val.getBitWidth(), true),
-          clang::SourceLocation());
+          Ctx, Val, SignedTy, clang::SourceLocation());
       Ret = createCStyleCastExpr(Ctx, Ty, clang::VK_PRValue, clang::CK_BitCast,
                                  Ret);
       return Ret;
