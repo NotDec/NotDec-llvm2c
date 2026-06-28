@@ -902,6 +902,73 @@ inner_case2:
                    "return 9;": 2, "return 10;": 2},
     },
     {
+        "name": "sailr_switch_switch_return_tail",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %outer_default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %inner_switch
+
+case2:
+  br label %inner_switch
+
+outer_default:
+  ret i32 0
+
+inner_switch:
+  switch i32 %a, label %plain_tail [
+    i32 10, label %nested_switch
+    i32 11, label %case_tail
+  ]
+
+plain_tail:
+  %plain = add i32 %a, 1
+  br label %plain_ret
+
+plain_ret:
+  ret i32 7
+
+case_tail:
+  %case_add = add i32 %b, 1
+  br label %case_ret
+
+case_ret:
+  ret i32 8
+
+nested_switch:
+  switch i32 %b, label %nested_default [
+    i32 20, label %nested_case
+    i32 21, label %nested_case2
+  ]
+
+nested_default:
+  ret i32 9
+
+nested_case:
+  ret i32 10
+
+nested_case2:
+  ret i32 11
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "switch (a)",
+                     "case 10:", "case 11:", "switch (b)", "case 20:",
+                     "case 21:", "return 7;", "return 8;", "return 9;",
+                     "return 10;", "return 11;"],
+        "absent": ["goto inner_switch", "goto plain_tail", "goto plain_ret",
+                   "goto case_tail", "goto case_ret", "goto nested_switch",
+                   "goto nested_default", "goto nested_case",
+                   "goto nested_case2", "phi", "reg2mem"],
+        "counts": {"switch (a)": 2, "switch (b)": 2, "return 7;": 2,
+                   "return 8;": 2, "return 9;": 2, "return 10;": 2,
+                   "return 11;": 2},
+    },
+    {
         "name": "sailr_switch_diamond_return_tail",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a, i32 %b) {
