@@ -87,6 +87,33 @@ default:
         "absent": ["switch (x)", "case -1:", "case 7:"],
     },
     {
+        "name": "lowered_switch_continuous_no_hint_proxy",
+        "angr_test": "test_reverting_switch_lowering_continuous_guard",
+        "semantic": "LoweredSwitchSimplifier continuous-case safety proxy",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cmp7 = icmp eq i32 %x, 7
+  br i1 %cmp7, label %case7, label %check8
+
+case7:
+  ret i32 7
+
+check8:
+  %cmp8 = icmp eq i32 %x, 8
+  br i1 %cmp8, label %case8, label %default
+
+case8:
+  ret i32 8
+
+default:
+  ret i32 0
+}
+""",
+        "contains": ["return 7;", "return 8;", "return 0;"],
+        "absent": ["switch (x)", "case 7:", "case 8:"],
+    },
+    {
         "name": "branch_return_region_proxy",
         "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
         "semantic": "ReturnDuplicatorLow branch return region proxy",
