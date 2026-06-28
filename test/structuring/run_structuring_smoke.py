@@ -425,6 +425,38 @@ entry:
         "absent": ["void *p +", "extractvalue"],
     },
     {
+        "name": "aggregate_store_type",
+        "ir": r"""
+declare { i64, i64 } @pair(i64, i64)
+
+define void @f(ptr %p, i64 %a, i64 %b) {
+entry:
+  %v = call { i64, i64 } @pair(i64 %a, i64 %b)
+  store { i64, i64 } %v, ptr %p
+  ret void
+}
+""",
+        "contains": ["*(struct (unnamed) *)p = pair(a, b);"],
+        "absent": ["Cannot find type for store inst", "extractvalue"],
+    },
+    {
+        "name": "aggregate_load_type",
+        "ir": r"""
+define void @f(ptr %p, ptr %q) {
+entry:
+  %v = load { i64, i64 }, ptr %p
+  store { i64, i64 } %v, ptr %q
+  ret void
+}
+""",
+        "contains": ["*(struct (unnamed) *)q = *(struct (unnamed) *)p;"],
+        "absent": [
+            "Cannot find type for load inst",
+            "Cannot find type for store inst",
+            "extractvalue",
+        ],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {

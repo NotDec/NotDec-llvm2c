@@ -497,10 +497,18 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   clang::Expr *Ptr1 = Ptr;
   // assign最终的类型。
   QualType Ty;
-  auto StoreSize = getLLVMTypeSize(I.getValueOperand()->getType(),
-                                   getTypeBuilder().getPointerSizeInBits());
+  llvm::Type *StoreTy = I.getValueOperand()->getType();
+  std::optional<unsigned> StoreSize;
 
-  if (StoreSize == 1) {
+  // Aggregate store has no scalar bitwidth, so keep the recovered record type.
+  if (StoreTy->isAggregateType()) {
+    Ty = getTypeBuilder().visitType(*StoreTy);
+  } else {
+    StoreSize =
+        getLLVMTypeSize(StoreTy, getTypeBuilder().getPointerSizeInBits());
+  }
+
+  if (StoreSize && *StoreSize == 1) {
     Ty = getBoolTy(Ctx);
   }
 
@@ -518,7 +526,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
         continue;
       }
       auto TS = expectedToOptional(getTypeBuilder().getTypeSize(Pte));
-      if (TS && *TS == StoreSize) {
+      if (StoreSize && TS && *TS == *StoreSize) {
         Ty = Pte;
         Ptr1 = V;
         break;
@@ -530,7 +538,7 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
     if (!Val1->getType()->isArrayType()) {
       auto TS =
           expectedToOptional(getTypeBuilder().getTypeSize(Val1->getType()));
-      if (TS && *TS == StoreSize) {
+      if (StoreSize && TS && *TS == *StoreSize) {
         Ty = Val1->getType();
       }
     }
@@ -539,7 +547,8 @@ void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
   // use simple int if the type is not found.
   if (Ty.isNull()) {
     llvm::errs() << "Warning: Cannot find type for store inst: " << I << "\n";
-    Ty = Ctx.getIntTypeForBitwidth(StoreSize, true);
+    assert(StoreSize && "aggregate store should have a type by now");
+    Ty = Ctx.getIntTypeForBitwidth(*StoreSize, true);
   }
 
   Ty = toLValueType(Ctx, Ty);
@@ -567,9 +576,17 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
   clang::Expr *Ptr1 = Ptr;
   // load type
   QualType Ty;
-  auto Size = getLLVMTypeSize(I.getType(), getTypeBuilder().getPointerSizeInBits());
+  llvm::Type *LoadTy = I.getType();
+  std::optional<unsigned> Size;
 
-  if (Size == 1) {
+  // Aggregate load has no scalar bitwidth, so keep the recovered record type.
+  if (LoadTy->isAggregateType()) {
+    Ty = getTypeBuilder().visitType(*LoadTy);
+  } else {
+    Size = getLLVMTypeSize(LoadTy, getTypeBuilder().getPointerSizeInBits());
+  }
+
+  if (Size && *Size == 1) {
     Ty = getBoolTy(Ctx);
   }
 
@@ -586,7 +603,7 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
         continue;
       }
       auto TS = expectedToOptional(getTypeBuilder().getTypeSize(Pte));
-      if (TS && *TS == Size) {
+      if (Size && TS && *TS == *Size) {
         Ty = Pte;
         Ptr1 = V;
         break;
@@ -596,7 +613,8 @@ void CFGBuilder::visitLoadInst(llvm::LoadInst &I) {
 
   if (Ty.isNull()) {
     llvm::errs() << "Warning: Cannot find type for load inst: " << I << "\n";
-    Ty = Ctx.getIntTypeForBitwidth(Size, true);
+    assert(Size && "aggregate load should have a type by now");
+    Ty = Ctx.getIntTypeForBitwidth(*Size, true);
   }
 
   assert(!Ty->isVoidType());
