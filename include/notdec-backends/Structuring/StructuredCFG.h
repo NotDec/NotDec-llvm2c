@@ -91,6 +91,10 @@ enum class PayloadMaterializeResult {
 enum class ConditionCompareKind {
   Equal,
   NotEqual,
+  GreaterThan,
+  GreaterEqual,
+  LessThan,
+  LessEqual,
 };
 
 // Minimal shared condition semantics for lowered-switch recovery. Payloads
@@ -99,9 +103,13 @@ enum class ConditionCompareKind {
 struct ConditionCompare {
   PayloadRef ComparedValue;
   PayloadRef ConstantValue;
+  // Index of the branch successor reached when the comparison is true.
+  std::size_t TrueTargetIndex = 0;
   // Index of the branch successor that represents the "equal" outcome.
   // For `ne`, this is the false successor, so lowered-switch recovery can keep
   // using one field instead of guessing branch polarity from payload text.
+  // Range comparisons do not have an equal outcome and leave this equal to the
+  // true successor index.
   std::size_t EqualTargetIndex = 0;
   ConditionCompareKind Kind = ConditionCompareKind::Equal;
 };

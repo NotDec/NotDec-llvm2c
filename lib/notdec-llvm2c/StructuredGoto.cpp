@@ -203,15 +203,59 @@ private:
     return st::PayloadRef{Payloads.size() - 1};
   }
 
+  std::optional<st::ConditionCompareKind>
+  conditionCompareKindFromBinaryOperator(clang::BinaryOperatorKind Opcode) {
+    switch (Opcode) {
+    case clang::BO_EQ:
+      return st::ConditionCompareKind::Equal;
+    case clang::BO_NE:
+      return st::ConditionCompareKind::NotEqual;
+    case clang::BO_GT:
+      return st::ConditionCompareKind::GreaterThan;
+    case clang::BO_GE:
+      return st::ConditionCompareKind::GreaterEqual;
+    case clang::BO_LT:
+      return st::ConditionCompareKind::LessThan;
+    case clang::BO_LE:
+      return st::ConditionCompareKind::LessEqual;
+    default:
+      return std::nullopt;
+    }
+  }
+
+  st::ConditionCompareKind
+  swappedConditionCompareKind(st::ConditionCompareKind Kind) {
+    switch (Kind) {
+    case st::ConditionCompareKind::GreaterThan:
+      return st::ConditionCompareKind::LessThan;
+    case st::ConditionCompareKind::GreaterEqual:
+      return st::ConditionCompareKind::LessEqual;
+    case st::ConditionCompareKind::LessThan:
+      return st::ConditionCompareKind::GreaterThan;
+    case st::ConditionCompareKind::LessEqual:
+      return st::ConditionCompareKind::GreaterEqual;
+    case st::ConditionCompareKind::Equal:
+    case st::ConditionCompareKind::NotEqual:
+      return Kind;
+    }
+    return Kind;
+  }
+
   std::optional<st::ConditionCompare>
   conditionCompareFromBranchCondition(clang::Stmt *Stmt) {
     auto *Expr = llvm::dyn_cast_or_null<clang::Expr>(Stmt);
     auto *BO =
         llvm::dyn_cast_or_null<clang::BinaryOperator>(getNoCast(Expr));
-    if (BO == nullptr ||
-        (BO->getOpcode() != clang::BO_EQ && BO->getOpcode() != clang::BO_NE)) {
+    if (BO == nullptr) {
       return std::nullopt;
     }
+
+    std::optional<st::ConditionCompareKind> InitialKind =
+        conditionCompareKindFromBinaryOperator(BO->getOpcode());
+    if (!InitialKind.has_value()) {
+      return std::nullopt;
+    }
+    st::ConditionCompareKind Kind = *InitialKind;
 
     clang::Expr *Compared = BO->getLHS();
     auto *Constant =
@@ -220,21 +264,22 @@ private:
       Constant =
           llvm::dyn_cast_or_null<clang::IntegerLiteral>(getNoCast(BO->getLHS()));
       Compared = BO->getRHS();
+      Kind = swappedConditionCompareKind(Kind);
     }
     if (Constant == nullptr) {
       return std::nullopt;
     }
 
-    st::ConditionCompareKind Kind =
-        BO->getOpcode() == clang::BO_EQ
-            ? st::ConditionCompareKind::Equal
-            : st::ConditionCompareKind::NotEqual;
+    // Keep the true edge aligned with this builder's successor order. Later
+    // passes should not need to infer polarity from payload text.
+    std::size_t TrueTargetIndex = 0;
     return st::ConditionCompare{
         .ComparedValue = addConditionComparedPayload(Compared),
         .ConstantValue = addConditionIntegerPayload(Constant),
-        .EqualTargetIndex = Kind == st::ConditionCompareKind::Equal
-                                ? std::size_t{0}
-                                : std::size_t{1},
+        .TrueTargetIndex = TrueTargetIndex,
+        .EqualTargetIndex = Kind == st::ConditionCompareKind::NotEqual
+                                ? std::size_t{1}
+                                : TrueTargetIndex,
         .Kind = Kind};
   }
 

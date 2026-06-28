@@ -63,6 +63,47 @@ PayloadRef cachedSwitchCase(LLVMFunctionCFGBuilder::PayloadProvider &Provider,
   return Payload;
 }
 
+std::optional<ConditionCompareKind>
+conditionCompareKindFromICmp(llvm::CmpInst::Predicate Predicate) {
+  switch (Predicate) {
+  case llvm::CmpInst::ICMP_EQ:
+    return ConditionCompareKind::Equal;
+  case llvm::CmpInst::ICMP_NE:
+    return ConditionCompareKind::NotEqual;
+  case llvm::CmpInst::ICMP_UGT:
+  case llvm::CmpInst::ICMP_SGT:
+    return ConditionCompareKind::GreaterThan;
+  case llvm::CmpInst::ICMP_UGE:
+  case llvm::CmpInst::ICMP_SGE:
+    return ConditionCompareKind::GreaterEqual;
+  case llvm::CmpInst::ICMP_ULT:
+  case llvm::CmpInst::ICMP_SLT:
+    return ConditionCompareKind::LessThan;
+  case llvm::CmpInst::ICMP_ULE:
+  case llvm::CmpInst::ICMP_SLE:
+    return ConditionCompareKind::LessEqual;
+  default:
+    return std::nullopt;
+  }
+}
+
+ConditionCompareKind swappedConditionCompareKind(ConditionCompareKind Kind) {
+  switch (Kind) {
+  case ConditionCompareKind::GreaterThan:
+    return ConditionCompareKind::LessThan;
+  case ConditionCompareKind::GreaterEqual:
+    return ConditionCompareKind::LessEqual;
+  case ConditionCompareKind::LessThan:
+    return ConditionCompareKind::GreaterThan;
+  case ConditionCompareKind::LessEqual:
+    return ConditionCompareKind::GreaterEqual;
+  case ConditionCompareKind::Equal:
+  case ConditionCompareKind::NotEqual:
+    return Kind;
+  }
+  return Kind;
+}
+
 std::optional<ConditionCompare>
 conditionCompareFromICmp(const llvm::Value &V,
                          LLVMFunctionCFGBuilder::PayloadProvider &Provider,
@@ -72,17 +113,12 @@ conditionCompareFromICmp(const llvm::Value &V,
     return std::nullopt;
   }
 
-  ConditionCompareKind Kind;
-  switch (ICmp->getPredicate()) {
-  case llvm::CmpInst::ICMP_EQ:
-    Kind = ConditionCompareKind::Equal;
-    break;
-  case llvm::CmpInst::ICMP_NE:
-    Kind = ConditionCompareKind::NotEqual;
-    break;
-  default:
+  std::optional<ConditionCompareKind> InitialKind =
+      conditionCompareKindFromICmp(ICmp->getPredicate());
+  if (!InitialKind.has_value()) {
     return std::nullopt;
   }
+  ConditionCompareKind Kind = *InitialKind;
 
   const llvm::Value *Compared = ICmp->getOperand(0);
   const llvm::ConstantInt *Constant =
@@ -90,16 +126,24 @@ conditionCompareFromICmp(const llvm::Value &V,
   if (Constant == nullptr) {
     Constant = llvm::dyn_cast<llvm::ConstantInt>(ICmp->getOperand(0));
     Compared = ICmp->getOperand(1);
+    Kind = swappedConditionCompareKind(Kind);
   }
   if (Constant == nullptr) {
     return std::nullopt;
   }
 
+  // LLVM's BasicBlock successor iteration currently matches the existing
+  // shared-CFG convention used by this builder: index 1 is the condition-true
+  // edge. Keep that local here so range metadata follows the same convention as
+  // the older eq/ne metadata.
+  std::size_t TrueTargetIndex = 1;
   return ConditionCompare{
       .ComparedValue = cachedCondition(Provider, Cache, *Compared, "switch"),
       .ConstantValue = cachedSwitchCase(Provider, Cache, *Constant),
-      .EqualTargetIndex =
-          Kind == ConditionCompareKind::Equal ? std::size_t{1} : std::size_t{0},
+      .TrueTargetIndex = TrueTargetIndex,
+      .EqualTargetIndex = Kind == ConditionCompareKind::NotEqual
+                              ? std::size_t{0}
+                              : TrueTargetIndex,
       .Kind = Kind};
 }
 

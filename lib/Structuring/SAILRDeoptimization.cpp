@@ -1723,7 +1723,12 @@ matchedConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
   if (!Compare.has_value()) {
     return std::nullopt;
   }
-  if (Compare->EqualTargetIndex >= Block.Successors.size()) {
+  if (Compare->Kind != ConditionCompareKind::Equal &&
+      Compare->Kind != ConditionCompareKind::NotEqual) {
+    return std::nullopt;
+  }
+  if (Compare->TrueTargetIndex >= Block.Successors.size() ||
+      Compare->EqualTargetIndex >= Block.Successors.size()) {
     return std::nullopt;
   }
   if (ComparedValue.isValid() &&
