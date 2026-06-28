@@ -270,16 +270,17 @@ private:
       return std::nullopt;
     }
 
+    bool HasIntegerValue = Constant->getValue().getBitWidth() <= 64;
     // Keep the true edge aligned with this builder's successor order. Later
     // passes should not need to infer polarity from payload text.
     std::size_t TrueTargetIndex = 0;
     return st::ConditionCompare{
         .ComparedValue = addConditionComparedPayload(Compared),
         .ConstantValue = addConditionIntegerPayload(Constant),
-        .HasIntegerValue = true,
+        .HasIntegerValue = HasIntegerValue,
         .SignedPredicate = true,
-        .SignedIntegerValue = Constant->getValue().getSExtValue(),
-        .UnsignedIntegerValue = Constant->getValue().getZExtValue(),
+        .SignedIntegerValue = HasIntegerValue ? Constant->getValue().getSExtValue() : 0,
+        .UnsignedIntegerValue = HasIntegerValue ? Constant->getValue().getZExtValue() : 0,
         .TrueTargetIndex = TrueTargetIndex,
         .EqualTargetIndex = Kind == st::ConditionCompareKind::NotEqual
                                 ? std::size_t{1}

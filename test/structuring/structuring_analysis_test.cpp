@@ -1808,6 +1808,7 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   llvm::LLVMContext Context;
   llvm::Module Module("range-condition-compare-test", Context);
   llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  llvm::Type *I128Ty = llvm::Type::getIntNTy(Context, 128);
   auto *FnTy =
       llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
   auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
@@ -1846,9 +1847,31 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   Builder.SetInsertPoint(Else);
   Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
 
+  llvm::FunctionType *WideFnTy =
+      llvm::FunctionType::get(I32Ty, {I128Ty}, /*isVarArg=*/false);
+  llvm::Function *WideF = llvm::Function::Create(
+      WideFnTy, llvm::GlobalValue::ExternalLinkage, "wide", Module);
+  llvm::Argument *WideX = WideF->getArg(0);
+  WideX->setName("wide_x");
+  llvm::BasicBlock *WideEntry =
+      llvm::BasicBlock::Create(Context, "wide_entry", WideF);
+  llvm::BasicBlock *WideThen =
+      llvm::BasicBlock::Create(Context, "wide_then", WideF);
+  llvm::BasicBlock *WideElse =
+      llvm::BasicBlock::Create(Context, "wide_else", WideF);
+  Builder.SetInsertPoint(WideEntry);
+  llvm::Value *WideCmp = Builder.CreateICmpSGT(
+      WideX, llvm::ConstantInt::get(I128Ty, 7), "wide_cmp");
+  Builder.CreateCondBr(WideCmp, WideThen, WideElse);
+  Builder.SetInsertPoint(WideThen);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 1));
+  Builder.SetInsertPoint(WideElse);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
   std::vector<std::string> Payloads;
   StringPayloadProvider Provider(Payloads);
   StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+  StructuredCFG WideCfg = LLVMFunctionCFGBuilder::build(*WideF, Provider);
 
   const CFGBlock *EntryBlock = Cfg.getBlock(0);
   const CFGBlock *CheckBlock = Cfg.getBlock(2);
@@ -1866,6 +1889,15 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   assert(Compare->SignedPredicate);
   assert(Compare->SignedIntegerValue == 7);
   assert(Compare->UnsignedIntegerValue == 7);
+
+  const CFGBlock *WideBlock = WideCfg.getBlock(0);
+  assert(WideBlock != nullptr);
+  Compare = WideCfg.conditionCompare(WideBlock->Condition);
+  assert(Compare.has_value());
+  assert(Compare->Kind == ConditionCompareKind::GreaterThan);
+  assert(!Compare->HasIntegerValue);
+  assert(Compare->SignedIntegerValue == 0);
+  assert(Compare->UnsignedIntegerValue == 0);
 
   Compare = Cfg.conditionCompare(CheckBlock->Condition);
   assert(Compare.has_value());
