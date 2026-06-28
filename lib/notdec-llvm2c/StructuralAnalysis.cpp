@@ -105,6 +105,63 @@ static std::string sharedValueName(llvm::Value &Val) {
   return "incoming";
 }
 
+// LLVM overflow intrinsics return {value, overflow}. Keep the value half as
+// normal arithmetic, and model the overflow flag with a fake helper call. Other
+// aggregate returns still need dedicated handling.
+static std::optional<llvm::Instruction::BinaryOps>
+overflowIntrinsicBinaryOp(llvm::Intrinsic::ID ID) {
+  switch (ID) {
+  case llvm::Intrinsic::sadd_with_overflow:
+  case llvm::Intrinsic::uadd_with_overflow:
+    return llvm::Instruction::Add;
+  case llvm::Intrinsic::ssub_with_overflow:
+  case llvm::Intrinsic::usub_with_overflow:
+    return llvm::Instruction::Sub;
+  case llvm::Intrinsic::smul_with_overflow:
+  case llvm::Intrinsic::umul_with_overflow:
+    return llvm::Instruction::Mul;
+  default:
+    return std::nullopt;
+  }
+}
+
+static bool isHandledOverflowIntrinsic(const llvm::Function &F) {
+  return overflowIntrinsicBinaryOp(F.getIntrinsicID()).has_value();
+}
+
+static llvm::StringRef
+overflowIntrinsicHelperPrefix(llvm::Intrinsic::ID ID) {
+  switch (ID) {
+  case llvm::Intrinsic::sadd_with_overflow:
+    return "llvm_sadd_is_overflow_i";
+  case llvm::Intrinsic::uadd_with_overflow:
+    return "llvm_uadd_is_overflow_i";
+  case llvm::Intrinsic::ssub_with_overflow:
+    return "llvm_ssub_is_overflow_i";
+  case llvm::Intrinsic::usub_with_overflow:
+    return "llvm_usub_is_overflow_i";
+  case llvm::Intrinsic::smul_with_overflow:
+    return "llvm_smul_is_overflow_i";
+  case llvm::Intrinsic::umul_with_overflow:
+    return "llvm_umul_is_overflow_i";
+  default:
+    return "";
+  }
+}
+
+static std::optional<std::string>
+overflowHelperTypeSuffix(llvm::StringRef FName) {
+  for (llvm::StringRef Prefix :
+       {"llvm_sadd_is_overflow_", "llvm_uadd_is_overflow_",
+        "llvm_ssub_is_overflow_", "llvm_usub_is_overflow_",
+        "llvm_smul_is_overflow_", "llvm_umul_is_overflow_"}) {
+    if (FName.starts_with(Prefix)) {
+      return FName.drop_front(Prefix.size()).str();
+    }
+  }
+  return std::nullopt;
+}
+
 bool canIgnore(llvm::Instruction::CastOps OpCode) {
   switch (OpCode) {
   case llvm::Instruction::PtrToInt:
@@ -892,8 +949,8 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
         Target->getName().starts_with("llvm.assume")) {
       return;
     }
-    if (Target->getName().starts_with("llvm.umul.with.overflow")) {
-      // handle it at the intrinsic function.
+    if (isHandledOverflowIntrinsic(*Target)) {
+      // The extractvalue users below turn the value/overflow parts into C.
       return;
     }
   }
@@ -1018,29 +1075,30 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
 void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
   if (auto Call = llvm::dyn_cast<llvm::CallInst>(I.getAggregateOperand())) {
     if (auto Target = Call->getCalledFunction()) {
-      if (Target->getName().starts_with("llvm.umul.with.overflow")) {
+      if (std::optional<llvm::Instruction::BinaryOps> Op =
+              overflowIntrinsicBinaryOp(Target->getIntrinsicID())) {
         assert(I.getNumIndices() == 1);
         auto Ind = *I.idx_begin();
         auto Op0 = Call->getArgOperand(0);
         auto Op1 = Call->getArgOperand(1);
         if (Ind == 0) {
-          // create unsigned multiply
-          auto binop = handleBinary(
-              Ctx, EB, FCtx.getTypeBuilder(), llvm::Instruction::Mul, *Call,
-              Op0, Op1,
-              nullptr, // &FCtx.getSAContext().getHighTypes().StructInfos
-              getTypeBuilder().getType(&I));
+          auto binop = handleBinary(Ctx, EB, FCtx.getTypeBuilder(), *Op, *Call,
+                                    Op0, Op1,
+                                    nullptr, // &FCtx.getSAContext().getHighTypes().StructInfos
+                                    getTypeBuilder().getType(&I));
           addExprOrStmt(I, *binop);
           return;
         } else if (Ind == 1) {
-          // create call to fake library function llvm_umul_is_overflow_ty()
+          // create call to fake library function llvm_*_is_overflow_ty()
           auto BitWidth = Target->getArg(0)->getType()->getIntegerBitWidth();
-          auto FD = FCtx.getSAContext().getIntrinsic("llvm_umul_is_overflow_i" +
-                                                     std::to_string(BitWidth));
+          std::string HelperName =
+              overflowIntrinsicHelperPrefix(Target->getIntrinsicID()).str() +
+              std::to_string(BitWidth);
+          auto FD = FCtx.getSAContext().getIntrinsic(HelperName);
           auto Ty = Ctx.getIntTypeForBitwidth(BitWidth, 1);
           auto Arg0 = EB.visitValue(Op0, Call, 0);
           Arg0 = getTypeBuilder().checkCast(Arg0, Ty);
-          auto Arg1 = EB.visitValue(Op0, Call, 1);
+          auto Arg1 = EB.visitValue(Op1, Call, 1);
           Arg1 = getTypeBuilder().checkCast(Arg1, Ty);
           clang::Expr *CallArgsStorage[] = {Arg0, Arg1};
           llvm::ArrayRef<clang::Expr *> CallArgs(CallArgsStorage);
@@ -1903,7 +1961,7 @@ static unsigned getIntBitWidth(std::string suffix) {
     bitwidth = 64;
   } else {
     assert(false &&
-           "unsupported bitwidth for llvm_umul_is_overflow_ intrinsic");
+           "unsupported bitwidth for llvm_*_is_overflow_ intrinsic");
   }
   return bitwidth;
 }
@@ -1946,10 +2004,10 @@ clang::FunctionDecl *SAContext::getIntrinsic(std::string FName) {
 
     FD = createFunctionDecl(TUD, "alloca", Names, ParamTys, RetTy);
     TUD->addDecl(FD);
-  } else if (startswith(FName, "llvm_umul_is_overflow_")) {
+  } else if (std::optional<std::string> suffix =
+                 overflowHelperTypeSuffix(FName)) {
     // support i8 i16 i32 i64 suffix
-    std::string suffix = FName.substr(strlen("llvm_umul_is_overflow_"));
-    unsigned bitwidth = getIntBitWidth(suffix);
+    unsigned bitwidth = getIntBitWidth(*suffix);
 
     // Get integer type for the given bitwidth (signed)
     QualType IntTy =
@@ -2128,7 +2186,7 @@ void SAContext::createDecls() {
         F.getName().starts_with("llvm.assume")) {
       continue;
     }
-    if (F.getName().starts_with("llvm.umul.with.overflow")) {
+    if (isHandledOverflowIntrinsic(F)) {
       // handle it at the extractvalue inst.
       continue;
     }

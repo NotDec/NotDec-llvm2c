@@ -351,6 +351,50 @@ cont:
         "absent": ["goto ret", "goto cont"],
     },
     {
+        "name": "llvm_overflow_intrinsics_extractvalue",
+        "ir": r"""
+declare { i32, i1 } @llvm.sadd.with.overflow.i32(i32, i32)
+declare { i32, i1 } @llvm.uadd.with.overflow.i32(i32, i32)
+declare { i32, i1 } @llvm.ssub.with.overflow.i32(i32, i32)
+declare { i32, i1 } @llvm.umul.with.overflow.i32(i32, i32)
+
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %sadd = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %a, i32 %b)
+  %sadd_v = extractvalue { i32, i1 } %sadd, 0
+  %sadd_o = extractvalue { i32, i1 } %sadd, 1
+  %uadd = call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 %sadd_v, i32 %b)
+  %uadd_v = extractvalue { i32, i1 } %uadd, 0
+  %uadd_o = extractvalue { i32, i1 } %uadd, 1
+  %ssub = call { i32, i1 } @llvm.ssub.with.overflow.i32(i32 %uadd_v, i32 %a)
+  %ssub_v = extractvalue { i32, i1 } %ssub, 0
+  %ssub_o = extractvalue { i32, i1 } %ssub, 1
+  %umul = call { i32, i1 } @llvm.umul.with.overflow.i32(i32 %ssub_v, i32 %b)
+  %umul_v = extractvalue { i32, i1 } %umul, 0
+  %umul_o = extractvalue { i32, i1 } %umul, 1
+  %o01 = or i1 %sadd_o, %uadd_o
+  %o23 = or i1 %ssub_o, %umul_o
+  %overflow = or i1 %o01, %o23
+  br i1 %overflow, label %bad, label %done
+
+bad:
+  ret i32 -1
+
+done:
+  ret i32 %umul_v
+}
+""",
+        "contains": [
+            "llvm_sadd_is_overflow_i32",
+            "llvm_uadd_is_overflow_i32",
+            "llvm_ssub_is_overflow_i32",
+            "llvm_umul_is_overflow_i32",
+            "return -1;",
+            "return umul_v;",
+        ],
+        "absent": ["llvm.sadd.with.overflow", "extractvalue"],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {
