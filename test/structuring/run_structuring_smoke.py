@@ -192,6 +192,31 @@ default:
         "absent": ["switch (x)", "case 7:", "case 9:"],
     },
     {
+        "name": "lowered_if_chain_all_ones_sentinel",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cmp_neg1 = icmp eq i32 %x, -1
+  br i1 %cmp_neg1, label %case_neg1, label %check7
+
+case_neg1:
+  ret i32 -1
+
+check7:
+  %cmp7 = icmp eq i32 %x, 7
+  br i1 %cmp7, label %case7, label %default
+
+case7:
+  ret i32 7
+
+default:
+  ret i32 0
+}
+""",
+        "contains": ["return -1;", "return 7;", "return 0;"],
+        "absent": ["switch (x)", "case -1:", "case 7:"],
+    },
+    {
         "name": "fmt_deduplication_like",
         "ir": r"""
 declare void @xdectoumax()
