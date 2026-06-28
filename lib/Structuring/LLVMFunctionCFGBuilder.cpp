@@ -21,6 +21,11 @@ struct PendingPhiAssignment {
   std::string IncomingName;
 };
 
+struct PayloadCache {
+  std::map<const llvm::Value *, PayloadRef> Conditions;
+  std::map<const llvm::ConstantInt *, PayloadRef> SwitchCases;
+};
+
 std::string valueName(const llvm::Value &V, llvm::StringRef Prefix) {
   if (V.hasName()) {
     return V.getName().str();
@@ -35,9 +40,33 @@ std::string valueName(const llvm::Value &V, llvm::StringRef Prefix) {
   return Prefix.str();
 }
 
+PayloadRef cachedCondition(LLVMFunctionCFGBuilder::PayloadProvider &Provider,
+                           PayloadCache &Cache, const llvm::Value &V,
+                           llvm::StringRef FallbackName) {
+  auto It = Cache.Conditions.find(&V);
+  if (It != Cache.Conditions.end()) {
+    return It->second;
+  }
+  PayloadRef Payload = Provider.getCondition(V, FallbackName);
+  Cache.Conditions.emplace(&V, Payload);
+  return Payload;
+}
+
+PayloadRef cachedSwitchCase(LLVMFunctionCFGBuilder::PayloadProvider &Provider,
+                            PayloadCache &Cache, const llvm::ConstantInt &V) {
+  auto It = Cache.SwitchCases.find(&V);
+  if (It != Cache.SwitchCases.end()) {
+    return It->second;
+  }
+  PayloadRef Payload = Provider.getSwitchCase(V);
+  Cache.SwitchCases.emplace(&V, Payload);
+  return Payload;
+}
+
 std::optional<ConditionCompare>
 conditionCompareFromICmp(const llvm::Value &V,
-                         LLVMFunctionCFGBuilder::PayloadProvider &Provider) {
+                         LLVMFunctionCFGBuilder::PayloadProvider &Provider,
+                         PayloadCache &Cache) {
   const auto *ICmp = llvm::dyn_cast<llvm::ICmpInst>(&V);
   if (ICmp == nullptr) {
     return std::nullopt;
@@ -67,8 +96,10 @@ conditionCompareFromICmp(const llvm::Value &V,
   }
 
   return ConditionCompare{
-      .ComparedValue = Provider.getCondition(*Compared, "switch"),
-      .ConstantValue = Provider.getSwitchCase(*Constant),
+      .ComparedValue = cachedCondition(Provider, Cache, *Compared, "switch"),
+      .ConstantValue = cachedSwitchCase(Provider, Cache, *Constant),
+      .EqualTargetIndex =
+          Kind == ConditionCompareKind::Equal ? std::size_t{1} : std::size_t{0},
       .Kind = Kind};
 }
 
@@ -78,6 +109,7 @@ StructuredCFG
 LLVMFunctionCFGBuilder::build(const llvm::Function &F,
                               LLVMFunctionCFGBuilder::PayloadProvider &Provider) {
   StructuredCFG Cfg;
+  PayloadCache Cache;
   std::map<const llvm::BasicBlock *, BlockId> BlockIds;
 
   for (const llvm::BasicBlock &BB : F) {
@@ -94,9 +126,11 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
     if (const auto *Br = llvm::dyn_cast_or_null<llvm::BranchInst>(Term)) {
       if (Br->isConditional()) {
         Block.Terminator = TerminatorKind::Branch;
-        Block.Condition = Provider.getCondition(*Br->getCondition(), "cond");
+        Block.Condition =
+            cachedCondition(Provider, Cache, *Br->getCondition(), "cond");
         if (std::optional<ConditionCompare> Compare =
-                conditionCompareFromICmp(*Br->getCondition(), Provider)) {
+                conditionCompareFromICmp(*Br->getCondition(), Provider,
+                                         Cache)) {
           Cfg.setConditionCompare(Block.Condition, *Compare);
         }
       } else {
@@ -107,10 +141,12 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
       }
     } else if (const auto *Sw = llvm::dyn_cast_or_null<llvm::SwitchInst>(Term)) {
       Block.Terminator = TerminatorKind::Switch;
-      Block.Condition = Provider.getCondition(*Sw->getCondition(), "switch");
+      Block.Condition =
+          cachedCondition(Provider, Cache, *Sw->getCondition(), "switch");
       for (auto Case : Sw->cases()) {
         SwitchCase OutCase;
-        OutCase.Value = Provider.getSwitchCase(*Case.getCaseValue());
+        OutCase.Value =
+            cachedSwitchCase(Provider, Cache, *Case.getCaseValue());
         OutCase.Target = BlockIds[Case.getCaseSuccessor()];
         Block.Cases.push_back(OutCase);
       }

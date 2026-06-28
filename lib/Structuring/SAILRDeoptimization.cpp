@@ -4,6 +4,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -168,6 +169,22 @@ struct ReturnRegion {
 struct LinearRegion {
   BlockId Head = InvalidBlockId;
   std::vector<BlockId> Blocks;
+};
+
+// A lowered switch chain is still a branch chain in the shared CFG. Keep the
+// collected shape small and explicit so the rewrite does not guess renderer
+// payload text.
+struct LoweredSwitchIfCase {
+  PayloadRef Value;
+  BlockId Target = InvalidBlockId;
+};
+
+struct LoweredSwitchIfChain {
+  BlockId Head = InvalidBlockId;
+  PayloadRef ComparedValue;
+  BlockId DefaultTarget = InvalidBlockId;
+  std::vector<LoweredSwitchIfCase> Cases;
+  std::vector<BlockId> RemovedBlocks;
 };
 
 constexpr std::size_t MaxLinearRegionMergeBlocks = 12;
@@ -1679,6 +1696,154 @@ bool replaceDefaultSwitchSuccessor(StructuredCFG &Graph, BlockId SwitchId,
   return true;
 }
 
+std::optional<ConditionCompare>
+equalConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
+                      PayloadRef ComparedValue) {
+  if (Block.Terminator != TerminatorKind::Branch ||
+      Block.Successors.size() != 2) {
+    return std::nullopt;
+  }
+
+  std::optional<ConditionCompare> Compare =
+      Graph.conditionCompare(Block.Condition);
+  if (!Compare.has_value() || Compare->Kind != ConditionCompareKind::Equal) {
+    return std::nullopt;
+  }
+  if (Compare->EqualTargetIndex >= Block.Successors.size()) {
+    return std::nullopt;
+  }
+  if (ComparedValue.isValid() &&
+      !samePayload(Graph, Compare->ComparedValue, ComparedValue)) {
+    return std::nullopt;
+  }
+  return Compare;
+}
+
+bool canConsumeLoweredSwitchIfNode(const StructuredCFG &Graph,
+                                   BlockId Node, BlockId ExpectedPred,
+                                   PayloadRef ComparedValue) {
+  const CFGBlock *Block = Graph.getBlock(Node);
+  if (Block == nullptr || !Block->Statements.empty() ||
+      !equalConditionCompare(Graph, *Block, ComparedValue).has_value()) {
+    return false;
+  }
+
+  std::vector<BlockId> Preds = predecessorsOf(Graph, Node);
+  return Preds.size() == 1 && Preds.front() == ExpectedPred;
+}
+
+std::optional<LoweredSwitchIfChain>
+collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
+  if (!Graph.dephicationVVars().empty() ||
+      !Graph.dephicationIncomings().empty()) {
+    return std::nullopt;
+  }
+
+  const CFGBlock *Head = Graph.getBlock(HeadId);
+  if (Head == nullptr) {
+    return std::nullopt;
+  }
+
+  std::optional<ConditionCompare> FirstCompare =
+      equalConditionCompare(Graph, *Head, {});
+  if (!FirstCompare.has_value()) {
+    return std::nullopt;
+  }
+
+  LoweredSwitchIfChain Chain;
+  Chain.Head = HeadId;
+  Chain.ComparedValue = FirstCompare->ComparedValue;
+
+  std::set<BlockId> ChainBlocks;
+  std::set<PayloadId> CaseValues;
+  BlockId CurrentId = HeadId;
+  ChainBlocks.insert(CurrentId);
+
+  while (true) {
+    const CFGBlock *Current = Graph.getBlock(CurrentId);
+    if (Current == nullptr) {
+      return std::nullopt;
+    }
+
+    std::optional<ConditionCompare> Compare =
+        equalConditionCompare(Graph, *Current, Chain.ComparedValue);
+    if (!Compare.has_value()) {
+      return std::nullopt;
+    }
+
+    PayloadId CaseValueOrigin = Graph.payloadOrigin(Compare->ConstantValue.Id);
+    if (!CaseValues.insert(CaseValueOrigin).second) {
+      return std::nullopt;
+    }
+
+    std::size_t CaseIndex = Compare->EqualTargetIndex;
+    std::size_t NextIndex = CaseIndex == 0 ? 1 : 0;
+    BlockId CaseTarget = Current->Successors[CaseIndex];
+    BlockId Next = Current->Successors[NextIndex];
+    if (ChainBlocks.count(CaseTarget) != 0) {
+      return std::nullopt;
+    }
+    Chain.Cases.push_back({Compare->ConstantValue, CaseTarget});
+
+    if (ChainBlocks.count(Next) != 0) {
+      return std::nullopt;
+    }
+
+    if (!canConsumeLoweredSwitchIfNode(Graph, Next, CurrentId,
+                                      Chain.ComparedValue)) {
+      Chain.DefaultTarget = Next;
+      break;
+    }
+
+    Chain.RemovedBlocks.push_back(Next);
+    ChainBlocks.insert(Next);
+    CurrentId = Next;
+  }
+
+  if (Chain.Cases.size() < 2 ||
+      Chain.DefaultTarget == InvalidBlockId) {
+    return std::nullopt;
+  }
+
+  std::set<BlockId> Removed(Chain.RemovedBlocks.begin(),
+                            Chain.RemovedBlocks.end());
+  if (Removed.count(Chain.DefaultTarget) != 0) {
+    return std::nullopt;
+  }
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    if (Removed.count(Case.Target) != 0) {
+      return std::nullopt;
+    }
+  }
+  return Chain;
+}
+
+bool rewriteLoweredSwitchIfChain(StructuredCFG &Graph,
+                                 const LoweredSwitchIfChain &Chain) {
+  StructuredCFG Candidate = Graph;
+  CFGBlock *Head = Candidate.getBlock(Chain.Head);
+  if (Head == nullptr) {
+    return false;
+  }
+
+  Head->Terminator = TerminatorKind::Switch;
+  Head->Condition = Chain.ComparedValue;
+  Head->Successors.clear();
+  Head->Successors.push_back(Chain.DefaultTarget);
+  Head->Cases.clear();
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    Head->Successors.push_back(Case.Target);
+    Head->Cases.push_back({Case.Value, Case.Target});
+  }
+
+  if (!Candidate.removeBlocks(Chain.RemovedBlocks)) {
+    return false;
+  }
+
+  Graph = std::move(Candidate);
+  return true;
+}
+
 bool reachesBlock(const StructuredCFG &Graph, BlockId Start, BlockId Target) {
   std::set<BlockId> Seen;
   std::vector<BlockId> Worklist = {Start};
@@ -2387,13 +2552,32 @@ bool LoweredSwitchSimplifier::runOnGraph(
     StructuredCFG &Graph, const StructuringEvaluation &Current) {
   (void)Current;
 
+  bool Changed = false;
+  std::vector<BlockId> BranchIds;
+  BranchIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    if (Block.Terminator == TerminatorKind::Branch) {
+      BranchIds.push_back(Block.Id);
+    }
+  }
+
+  for (BlockId BranchId : BranchIds) {
+    std::optional<LoweredSwitchIfChain> Chain =
+        collectLoweredSwitchIfChain(Graph, BranchId);
+    if (!Chain.has_value()) {
+      continue;
+    }
+    if (rewriteLoweredSwitchIfChain(Graph, *Chain)) {
+      Changed = true;
+    }
+  }
+
   std::vector<BlockId> TargetIds;
   TargetIds.reserve(Graph.blocks().size());
   for (const CFGBlock &Block : Graph.blocks()) {
     TargetIds.push_back(Block.Id);
   }
 
-  bool Changed = false;
   for (BlockId TargetId : TargetIds) {
     const CFGBlock *Target = Graph.getBlock(TargetId);
     if (Target == nullptr) {

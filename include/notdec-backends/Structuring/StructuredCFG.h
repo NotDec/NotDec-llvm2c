@@ -89,6 +89,7 @@ enum class ConditionCompareKind {
 struct ConditionCompare {
   PayloadRef ComparedValue;
   PayloadRef ConstantValue;
+  std::size_t EqualTargetIndex = 0;
   ConditionCompareKind Kind = ConditionCompareKind::Equal;
 };
 

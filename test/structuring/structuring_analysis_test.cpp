@@ -9778,6 +9778,107 @@ void testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape() {
   assert(hasSinglePayload(Cfg.getBlock(13)->Statements, 43));
 }
 
+void testLoweredSwitchSimplifierBuildsSwitchFromIfChain() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-if-chain-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Check9 = llvm::BasicBlock::Create(Context, "check9", F);
+  llvm::BasicBlock *Case9 = llvm::BasicBlock::Create(Context, "case9", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Check9);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Check9);
+  llvm::Value *Cmp9 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 9), "cmp9");
+  Builder.CreateCondBr(Cmp9, Case9, Default);
+  Builder.SetInsertPoint(Case9);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 9));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  const CFGBlock *InitialEntry = Cfg.getBlock(0);
+  const CFGBlock *InitialCheck9 = Cfg.getBlock(2);
+  assert(InitialEntry != nullptr && InitialCheck9 != nullptr);
+  assert(Cfg.conditionCompare(InitialEntry->Condition).has_value());
+  assert(Cfg.conditionCompare(InitialCheck9->Condition).has_value());
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Terminator == TerminatorKind::Switch);
+  assert(Payloads[Switch->Condition.Id] == "x");
+  assert(Switch->Successors == std::vector<BlockId>({4, 1, 3}));
+  assert(Switch->Cases.size() == 2);
+  assert(Payloads[Switch->Cases[0].Value.Id] == "7");
+  assert(Switch->Cases[0].Target == 1);
+  assert(Payloads[Switch->Cases[1].Value.Id] == "9");
+  assert(Switch->Cases[1].Target == 3);
+}
+
+void testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue() {
+  StructuredCFG Cfg;
+
+  CFGBlock Head = branchBlock(0, {10, 1});
+  Head.Condition = {100};
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Next = branchBlock(1, {11, 20});
+  Next.Condition = {101};
+  Cfg.addBlock(std::move(Next));
+
+  Cfg.addBlock(block(10, {}));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(20, {}));
+
+  Cfg.setConditionCompare({100}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {300},
+                                      .EqualTargetIndex = 1,
+                                      .Kind = ConditionCompareKind::Equal});
+  Cfg.setConditionCompare({101}, ConditionCompare{
+                                      .ComparedValue = {201},
+                                      .ConstantValue = {301},
+                                      .EqualTargetIndex = 1,
+                                      .Kind = ConditionCompareKind::Equal});
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  const CFGBlock *HeadAfter = Cfg.getBlock(0);
+  assert(HeadAfter != nullptr);
+  assert(HeadAfter->Terminator == TerminatorKind::Branch);
+  assert(HeadAfter->Successors == std::vector<BlockId>({10, 1}));
+}
+
 void testControlFlowStructureCounterCollectsSharedQuality() {
   StructuredTree Tree;
 
@@ -12799,6 +12900,8 @@ int main() {
   testLoweredSwitchSimplifierKeepsDefaultWhenCaseTargetIsReused();
   testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse();
   testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape();
+  testLoweredSwitchSimplifierBuildsSwitchFromIfChain();
+  testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault();
   testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders();

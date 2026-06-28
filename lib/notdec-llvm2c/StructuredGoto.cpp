@@ -104,6 +104,8 @@ class StructuredGotoAdapter {
   std::map<st::VVarId, clang::VarDecl *> DephicationVarDecls;
   std::map<clang::VarDecl *, clang::DeclStmt *> CopiedDephicationDecls;
   std::map<st::BlockId, clang::LabelStmt *> Labels;
+  std::map<clang::ValueDecl *, st::PayloadRef> ConditionDeclPayloads;
+  std::map<std::string, st::PayloadRef> ConditionIntegerPayloads;
   std::set<st::BlockId> TargetedLabels;
 
 public:
@@ -138,6 +140,37 @@ private:
     }
     Payloads.push_back(Stmt);
     return {Payloads.size() - 1};
+  }
+
+  st::PayloadRef addConditionComparedPayload(clang::Expr *Expr) {
+    auto *DeclRef =
+        llvm::dyn_cast_or_null<clang::DeclRefExpr>(getNoCast(Expr));
+    if (DeclRef == nullptr) {
+      return addPayload(Expr);
+    }
+
+    clang::ValueDecl *Decl = DeclRef->getDecl();
+    auto It = ConditionDeclPayloads.find(Decl);
+    if (It != ConditionDeclPayloads.end()) {
+      return It->second;
+    }
+
+    st::PayloadRef Payload = addPayload(Expr);
+    ConditionDeclPayloads.emplace(Decl, Payload);
+    return Payload;
+  }
+
+  st::PayloadRef addConditionIntegerPayload(clang::IntegerLiteral *Literal) {
+    std::string Key = llvm::toString(Literal->getValue(), 10,
+                                    /*isSigned=*/false);
+    auto It = ConditionIntegerPayloads.find(Key);
+    if (It != ConditionIntegerPayloads.end()) {
+      return It->second;
+    }
+
+    st::PayloadRef Payload = addPayload(Literal);
+    ConditionIntegerPayloads.emplace(std::move(Key), Payload);
+    return Payload;
   }
 
   clang::Stmt *getPayload(st::PayloadRef Ref) const {
@@ -197,8 +230,11 @@ private:
             ? st::ConditionCompareKind::Equal
             : st::ConditionCompareKind::NotEqual;
     return st::ConditionCompare{
-        .ComparedValue = addPayload(Compared),
-        .ConstantValue = addPayload(Constant),
+        .ComparedValue = addConditionComparedPayload(Compared),
+        .ConstantValue = addConditionIntegerPayload(Constant),
+        .EqualTargetIndex = Kind == st::ConditionCompareKind::Equal
+                                ? std::size_t{0}
+                                : std::size_t{1},
         .Kind = Kind};
   }
 
