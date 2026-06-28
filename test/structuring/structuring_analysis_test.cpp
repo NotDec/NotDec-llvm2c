@@ -4730,6 +4730,34 @@ void testDuplicationReverterKeepsPayloadDivergentDuplicateBranches() {
   assert(hasSinglePayload(Cfg.getBlock(2)->Statements, 102));
 }
 
+void testDuplicationReverterKeepsDivergentBranchPayloadsWithGotoHint() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {3});
+  ThenBlock.Statements.push_back({111});
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {3});
+  ElseBlock.Statements.push_back({112});
+  Cfg.addBlock(std::move(ElseBlock));
+
+  Cfg.addBlock(block(3, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>({1, 2}));
+  assert(hasSinglePayload(Cfg.getBlock(1)->Statements, 111));
+  assert(hasSinglePayload(Cfg.getBlock(2)->Statements, 112));
+}
+
 void testDuplicationReverterExtractsGotoRelatedCommonStatementTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -14425,6 +14453,7 @@ int main() {
   testDuplicationReverterKeepsCopiedGotoTargetsWhenEdgeKindChanges();
   testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
+  testDuplicationReverterKeepsDivergentBranchPayloadsWithGotoHint();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference();
   testDuplicationReverterKeepsCommonStatementTailWithoutGotoHint();
   testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear();
