@@ -10223,6 +10223,65 @@ void testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain() {
   assert(Switch->Cases[1].Target == 4);
 }
 
+void testLoweredSwitchSimplifierSkipsAllOnesSentinelIfChain() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-all-ones-sentinel-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *CaseNeg1 =
+      llvm::BasicBlock::Create(Context, "case_neg1", F);
+  llvm::BasicBlock *Check7 = llvm::BasicBlock::Create(Context, "check7", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *CmpNeg1 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, -1), "cmp_neg1");
+  Builder.CreateCondBr(CmpNeg1, CaseNeg1, Check7);
+  Builder.SetInsertPoint(CaseNeg1);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, -1));
+  Builder.SetInsertPoint(Check7);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Default);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  const CFGBlock *InitialEntry = Cfg.getBlock(0);
+  const CFGBlock *InitialCheck7 = Cfg.getBlock(2);
+  assert(InitialEntry != nullptr && InitialCheck7 != nullptr);
+  std::optional<ConditionCompare> Compare =
+      Cfg.conditionCompare(InitialEntry->Condition);
+  assert(Compare.has_value());
+  assert(Compare->HasIntegerValue);
+  assert(Compare->UnsignedIntegerValue == 0xffff'ffffULL);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *EntryBlock = Cfg.getBlock(0);
+  const CFGBlock *Check7Block = Cfg.getBlock(2);
+  assert(EntryBlock != nullptr && Check7Block != nullptr);
+  assert(EntryBlock->Terminator == TerminatorKind::Branch);
+  assert(Check7Block->Terminator == TerminatorKind::Branch);
+}
+
 void testLoweredSwitchSimplifierSkipsContinuousIfChainWithoutSwitchHint() {
   llvm::LLVMContext Context;
   llvm::Module Module("lowered-switch-continuous-skip-test", Context);
@@ -13935,6 +13994,7 @@ int main() {
   testLoweredSwitchSimplifierBuildsSwitchFromIfChain();
   testSAILRStructurerKeepsLoweredSwitchDefaultTarget();
   testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain();
+  testLoweredSwitchSimplifierSkipsAllOnesSentinelIfChain();
   testLoweredSwitchSimplifierSkipsContinuousIfChainWithoutSwitchHint();
   testLoweredSwitchSimplifierAcceptsContinuousIfChainWithSwitchHint();
   testLoweredSwitchSimplifierBuildsSwitchFromRangeGuardedIfChain();

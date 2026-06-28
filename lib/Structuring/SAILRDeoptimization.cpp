@@ -1,6 +1,7 @@
 #include "notdec-backends/Structuring/SAILRDeoptimization.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
@@ -190,6 +191,9 @@ struct LoweredSwitchIfChain {
 
 constexpr std::size_t MaxLinearRegionMergeBlocks = 12;
 constexpr std::size_t MaxLoweredSwitchContinuousCases = 6;
+constexpr std::uint64_t LoweredSwitchI32AllOnesSentinel = 0xffff'ffffULL;
+constexpr std::uint64_t LoweredSwitchI64AllOnesSentinel =
+    0xffff'ffff'ffff'ffffULL;
 
 bool collectJoinedDiamondReturnRegion(const StructuredCFG &Graph,
                                       BlockId Terminal,
@@ -2012,6 +2016,21 @@ loweredSwitchIntegerCaseValues(const LoweredSwitchIfChain &Chain) {
   return Values;
 }
 
+bool hasAllOnesSwitchSentinelCase(const LoweredSwitchIfChain &Chain) {
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    if (!Case.Compare.has_value() || !Case.Compare->HasIntegerValue) {
+      continue;
+    }
+
+    std::uint64_t Value = Case.Compare->UnsignedIntegerValue;
+    if (Value == LoweredSwitchI32AllOnesSentinel ||
+        Value == LoweredSwitchI64AllOnesSentinel) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::size_t maxContinuousCaseRun(const std::vector<std::int64_t> &Values) {
   if (Values.empty()) {
     return 0;
@@ -2034,6 +2053,10 @@ bool loweredSwitchChainPassesAngrHeuristics(const LoweredSwitchIfChain &Chain,
                                             bool HadExistingSwitch) {
   // Match Angr's low false-positive filters using only shared CFG metadata.
   // If integer values are unavailable, keep the earlier conservative behavior.
+  if (hasAllOnesSwitchSentinelCase(Chain)) {
+    return false;
+  }
+
   std::optional<std::vector<std::int64_t>> CaseValues =
       loweredSwitchIntegerCaseValues(Chain);
   if (!CaseValues.has_value()) {
