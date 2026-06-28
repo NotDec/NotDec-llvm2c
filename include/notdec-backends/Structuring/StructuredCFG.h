@@ -66,6 +66,16 @@ struct SwitchCase {
   BlockId Target = InvalidBlockId;
 };
 
+// Shared switch edge identity. The CFG keeps the block graph shape in
+// Successors/Cases, while this helper lets deoptimization passes tell whether a
+// target is only a default edge, only a case edge, both, or unknown.
+enum class SwitchEdgeKind {
+  Unknown,
+  DefaultOnly,
+  CaseOnly,
+  DefaultAndCase,
+};
+
 enum class PayloadMaterializeKind {
   Statement,
   Condition,
@@ -89,6 +99,9 @@ enum class ConditionCompareKind {
 struct ConditionCompare {
   PayloadRef ComparedValue;
   PayloadRef ConstantValue;
+  // Index of the branch successor that represents the "equal" outcome.
+  // For `ne`, this is the false successor, so lowered-switch recovery can keep
+  // using one field instead of guessing branch polarity from payload text.
   std::size_t EqualTargetIndex = 0;
   ConditionCompareKind Kind = ConditionCompareKind::Equal;
 };
@@ -280,6 +293,7 @@ public:
   bool hasEdge(BlockId From, BlockId To) const;
   std::vector<BlockId> successorsOf(BlockId From) const;
   std::vector<BlockId> predecessorsOf(BlockId Target) const;
+  SwitchEdgeKind switchEdgeKind(BlockId From, BlockId Target) const;
   bool replaceEdge(BlockId From, BlockId OldTarget, BlockId NewTarget);
   bool redirectPredecessors(BlockId OldTarget, BlockId NewTarget,
                             const std::vector<BlockId> &Preds);

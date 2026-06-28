@@ -2336,6 +2336,21 @@ void testStructuredCFGSuccessorsOfDeduplicatesCaseTargets() {
   assert(Cfg.successorsOf(0) == std::vector<BlockId>({9, 2}));
 }
 
+void testStructuredCFGClassifiesSwitchEdges() {
+  StructuredCFG Cfg;
+
+  CFGBlock Switch = switchBlock(0, {9, 2});
+  Switch.Cases.push_back({{}, 9});
+  Cfg.addBlock(std::move(Switch));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(9, {}));
+
+  assert(Cfg.switchEdgeKind(0, 9) == SwitchEdgeKind::DefaultAndCase);
+  assert(Cfg.switchEdgeKind(0, 2) == SwitchEdgeKind::CaseOnly);
+  assert(Cfg.switchEdgeKind(0, 7) == SwitchEdgeKind::Unknown);
+  assert(Cfg.switchEdgeKind(2, 9) == SwitchEdgeKind::Unknown);
+}
+
 void testStructuredCFGDuplicateRegionRewritesInternalEdges() {
   StructuredCFG Cfg;
 
@@ -9840,6 +9855,70 @@ void testLoweredSwitchSimplifierBuildsSwitchFromIfChain() {
   assert(Switch->Cases[1].Target == 3);
 }
 
+void testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-ne-if-chain-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Check9 = llvm::BasicBlock::Create(Context, "check9", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+  llvm::BasicBlock *Case9 = llvm::BasicBlock::Create(Context, "case9", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpNE(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Check9, Case7);
+  Builder.SetInsertPoint(Check9);
+  llvm::Value *Cmp9 =
+      Builder.CreateICmpNE(X, llvm::ConstantInt::get(I32Ty, 9), "cmp9");
+  Builder.CreateCondBr(Cmp9, Default, Case9);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Case9);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 9));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  const CFGBlock *InitialEntry = Cfg.getBlock(0);
+  const CFGBlock *InitialCheck9 = Cfg.getBlock(1);
+  assert(InitialEntry != nullptr && InitialCheck9 != nullptr);
+  std::optional<ConditionCompare> Compare =
+      Cfg.conditionCompare(InitialEntry->Condition);
+  assert(Compare.has_value());
+  assert(Compare->Kind == ConditionCompareKind::NotEqual);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) == nullptr);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Terminator == TerminatorKind::Switch);
+  assert(Payloads[Switch->Condition.Id] == "x");
+  assert(Switch->Successors == std::vector<BlockId>({3, 2, 4}));
+  assert(Switch->Cases.size() == 2);
+  assert(Payloads[Switch->Cases[0].Value.Id] == "7");
+  assert(Switch->Cases[0].Target == 2);
+  assert(Payloads[Switch->Cases[1].Value.Id] == "9");
+  assert(Switch->Cases[1].Target == 4);
+}
+
 void testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue() {
   StructuredCFG Cfg;
 
@@ -12788,6 +12867,7 @@ int main() {
   testStructuredCFGFindsCaseOnlyPredecessors();
   testStructuredCFGSuccessorsOfIncludesCaseTargets();
   testStructuredCFGSuccessorsOfDeduplicatesCaseTargets();
+  testStructuredCFGClassifiesSwitchEdges();
   testStructuredCFGDuplicateRegionRewritesInternalEdges();
   testStructuredCFGDuplicateRegionKeepsSyntheticForwarderIdentity();
   testStructuredCFGDuplicateSyntheticForwarderReportsTargets();
@@ -12901,6 +12981,7 @@ int main() {
   testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse();
   testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape();
   testLoweredSwitchSimplifierBuildsSwitchFromIfChain();
+  testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain();
   testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault();

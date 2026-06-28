@@ -1571,6 +1571,20 @@ bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   return false;
 }
 
+bool hasSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
+                       BlockId Target) {
+  SwitchEdgeKind Kind = Graph.switchEdgeKind(Pred, Target);
+  return Kind == SwitchEdgeKind::CaseOnly ||
+         Kind == SwitchEdgeKind::DefaultAndCase;
+}
+
+bool hasSwitchDefaultEdge(const StructuredCFG &Graph, BlockId Pred,
+                          BlockId Target) {
+  SwitchEdgeKind Kind = Graph.switchEdgeKind(Pred, Target);
+  return Kind == SwitchEdgeKind::DefaultOnly ||
+         Kind == SwitchEdgeKind::DefaultAndCase;
+}
+
 bool switchCaseEdgeReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (!switchCaseReachesBlock(Block, Target)) {
     return false;
@@ -1697,8 +1711,8 @@ bool replaceDefaultSwitchSuccessor(StructuredCFG &Graph, BlockId SwitchId,
 }
 
 std::optional<ConditionCompare>
-equalConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
-                      PayloadRef ComparedValue) {
+matchedConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
+                        PayloadRef ComparedValue) {
   if (Block.Terminator != TerminatorKind::Branch ||
       Block.Successors.size() != 2) {
     return std::nullopt;
@@ -1706,7 +1720,7 @@ equalConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
 
   std::optional<ConditionCompare> Compare =
       Graph.conditionCompare(Block.Condition);
-  if (!Compare.has_value() || Compare->Kind != ConditionCompareKind::Equal) {
+  if (!Compare.has_value()) {
     return std::nullopt;
   }
   if (Compare->EqualTargetIndex >= Block.Successors.size()) {
@@ -1724,7 +1738,7 @@ bool canConsumeLoweredSwitchIfNode(const StructuredCFG &Graph,
                                    PayloadRef ComparedValue) {
   const CFGBlock *Block = Graph.getBlock(Node);
   if (Block == nullptr || !Block->Statements.empty() ||
-      !equalConditionCompare(Graph, *Block, ComparedValue).has_value()) {
+      !matchedConditionCompare(Graph, *Block, ComparedValue).has_value()) {
     return false;
   }
 
@@ -1745,7 +1759,7 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
   }
 
   std::optional<ConditionCompare> FirstCompare =
-      equalConditionCompare(Graph, *Head, {});
+      matchedConditionCompare(Graph, *Head, {});
   if (!FirstCompare.has_value()) {
     return std::nullopt;
   }
@@ -1766,13 +1780,8 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
     }
 
     std::optional<ConditionCompare> Compare =
-        equalConditionCompare(Graph, *Current, Chain.ComparedValue);
+        matchedConditionCompare(Graph, *Current, Chain.ComparedValue);
     if (!Compare.has_value()) {
-      return std::nullopt;
-    }
-
-    PayloadId CaseValueOrigin = Graph.payloadOrigin(Compare->ConstantValue.Id);
-    if (!CaseValues.insert(CaseValueOrigin).second) {
       return std::nullopt;
     }
 
@@ -1784,6 +1793,10 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
       return std::nullopt;
     }
     Chain.Cases.push_back({Compare->ConstantValue, CaseTarget});
+    PayloadId CaseValueOrigin = Graph.payloadOrigin(Compare->ConstantValue.Id);
+    if (!CaseValues.insert(CaseValueOrigin).second) {
+      return std::nullopt;
+    }
 
     if (ChainBlocks.count(Next) != 0) {
       return std::nullopt;
@@ -2300,14 +2313,7 @@ bool copyLinearRegionForSwitchCases(StructuredCFG &Graph,
 
 bool blockUsesSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
                              BlockId Target) {
-  const CFGBlock *Block = Graph.getBlock(Pred);
-  if (Block == nullptr || Block->Terminator != TerminatorKind::Switch) {
-    return false;
-  }
-  return std::any_of(Block->Cases.begin(), Block->Cases.end(),
-                     [Target](const SwitchCase &Case) {
-                       return Case.Target == Target;
-                     });
+  return hasSwitchCaseEdge(Graph, Pred, Target);
 }
 
 bool blockUsesNonSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
@@ -2315,6 +2321,9 @@ bool blockUsesNonSwitchCaseEdge(const StructuredCFG &Graph, BlockId Pred,
   const CFGBlock *Block = Graph.getBlock(Pred);
   if (Block == nullptr) {
     return false;
+  }
+  if (Block->Terminator == TerminatorKind::Switch) {
+    return hasSwitchDefaultEdge(Graph, Pred, Target);
   }
   return std::find(Block->Successors.begin(), Block->Successors.end(),
                    Target) != Block->Successors.end();
@@ -2338,8 +2347,8 @@ bool hasCaseDefaultOverlapPredecessor(const StructuredCFG &Graph,
     const CFGBlock *PredBlock = Graph.getBlock(Pred);
     if (PredBlock != nullptr &&
         PredBlock->Terminator == TerminatorKind::Switch &&
-        blockUsesSwitchCaseEdge(Graph, Pred, Target) &&
-        nonCaseSuccessorReachesBlock(*PredBlock, Target)) {
+        Graph.switchEdgeKind(Pred, Target) ==
+            SwitchEdgeKind::DefaultAndCase) {
       return true;
     }
   }

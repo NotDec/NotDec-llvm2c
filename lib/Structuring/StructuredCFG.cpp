@@ -14,6 +14,26 @@ bool hasTarget(const CFGBlock &Block, BlockId Target) {
                       }) != Block.Cases.end();
 }
 
+SwitchEdgeKind switchEdgeKindForBlock(const CFGBlock &Block, BlockId Target) {
+  bool HasDefault =
+      !Block.Successors.empty() && Block.Successors.front() == Target;
+  bool HasCase = std::find_if(Block.Cases.begin(), Block.Cases.end(),
+                              [Target](const SwitchCase &Case) {
+                                return Case.Target == Target;
+                              }) != Block.Cases.end();
+
+  if (HasDefault && HasCase) {
+    return SwitchEdgeKind::DefaultAndCase;
+  }
+  if (HasDefault) {
+    return SwitchEdgeKind::DefaultOnly;
+  }
+  if (HasCase) {
+    return SwitchEdgeKind::CaseOnly;
+  }
+  return SwitchEdgeKind::Unknown;
+}
+
 void replaceTarget(CFGBlock &Block, BlockId OldTarget, BlockId NewTarget) {
   for (BlockId &Succ : Block.Successors) {
     if (Succ == OldTarget) {
@@ -592,6 +612,15 @@ std::vector<BlockId> StructuredCFG::predecessorsOf(BlockId Target) const {
     }
   }
   return Preds;
+}
+
+SwitchEdgeKind StructuredCFG::switchEdgeKind(BlockId From,
+                                             BlockId Target) const {
+  const CFGBlock *Block = getBlock(From);
+  if (Block == nullptr || Block->Terminator != TerminatorKind::Switch) {
+    return SwitchEdgeKind::Unknown;
+  }
+  return switchEdgeKindForBlock(*Block, Target);
 }
 
 std::optional<DuplicatedRegion>
