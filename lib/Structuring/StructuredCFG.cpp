@@ -287,11 +287,32 @@ PayloadId StructuredCFG::payloadOrigin(PayloadId Id) const {
   return It->second;
 }
 
+std::optional<ConditionCompare>
+StructuredCFG::conditionCompare(PayloadRef Condition) const {
+  if (!Condition.isValid()) {
+    return std::nullopt;
+  }
+  auto It = ConditionCompares.find(payloadOrigin(Condition.Id));
+  if (It == ConditionCompares.end()) {
+    return std::nullopt;
+  }
+  return It->second;
+}
+
 void StructuredCFG::setPayloadOrigin(PayloadId Id, PayloadId SourceId) {
   if (Id == InvalidPayloadId || SourceId == InvalidPayloadId) {
     return;
   }
   PayloadOrigins[Id] = payloadOrigin(SourceId);
+}
+
+void StructuredCFG::setConditionCompare(PayloadRef Condition,
+                                        ConditionCompare Compare) {
+  if (!Condition.isValid() || !Compare.ComparedValue.isValid() ||
+      !Compare.ConstantValue.isValid()) {
+    return;
+  }
+  ConditionCompares[payloadOrigin(Condition.Id)] = Compare;
 }
 
 BlockId StructuredCFG::bodyBlock(BlockId Id) const {

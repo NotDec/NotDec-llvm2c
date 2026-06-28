@@ -1,6 +1,7 @@
 #include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,6 +35,43 @@ std::string valueName(const llvm::Value &V, llvm::StringRef Prefix) {
   return Prefix.str();
 }
 
+std::optional<ConditionCompare>
+conditionCompareFromICmp(const llvm::Value &V,
+                         LLVMFunctionCFGBuilder::PayloadProvider &Provider) {
+  const auto *ICmp = llvm::dyn_cast<llvm::ICmpInst>(&V);
+  if (ICmp == nullptr) {
+    return std::nullopt;
+  }
+
+  ConditionCompareKind Kind;
+  switch (ICmp->getPredicate()) {
+  case llvm::CmpInst::ICMP_EQ:
+    Kind = ConditionCompareKind::Equal;
+    break;
+  case llvm::CmpInst::ICMP_NE:
+    Kind = ConditionCompareKind::NotEqual;
+    break;
+  default:
+    return std::nullopt;
+  }
+
+  const llvm::Value *Compared = ICmp->getOperand(0);
+  const llvm::ConstantInt *Constant =
+      llvm::dyn_cast<llvm::ConstantInt>(ICmp->getOperand(1));
+  if (Constant == nullptr) {
+    Constant = llvm::dyn_cast<llvm::ConstantInt>(ICmp->getOperand(0));
+    Compared = ICmp->getOperand(1);
+  }
+  if (Constant == nullptr) {
+    return std::nullopt;
+  }
+
+  return ConditionCompare{
+      .ComparedValue = Provider.getCondition(*Compared, "switch"),
+      .ConstantValue = Provider.getSwitchCase(*Constant),
+      .Kind = Kind};
+}
+
 } // namespace
 
 StructuredCFG
@@ -57,6 +95,10 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
       if (Br->isConditional()) {
         Block.Terminator = TerminatorKind::Branch;
         Block.Condition = Provider.getCondition(*Br->getCondition(), "cond");
+        if (std::optional<ConditionCompare> Compare =
+                conditionCompareFromICmp(*Br->getCondition(), Provider)) {
+          Cfg.setConditionCompare(Block.Condition, *Compare);
+        }
       } else {
         Block.Terminator = TerminatorKind::Fallthrough;
       }

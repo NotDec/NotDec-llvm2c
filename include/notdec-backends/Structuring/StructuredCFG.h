@@ -78,6 +78,20 @@ enum class PayloadMaterializeResult {
   Aborted,
 };
 
+enum class ConditionCompareKind {
+  Equal,
+  NotEqual,
+};
+
+// Minimal shared condition semantics for lowered-switch recovery. Payloads
+// still own rendering, but passes can now tell that a branch condition compares
+// one switch candidate value with a constant case value.
+struct ConditionCompare {
+  PayloadRef ComparedValue;
+  PayloadRef ConstantValue;
+  ConditionCompareKind Kind = ConditionCompareKind::Equal;
+};
+
 // Angr-style dephication needs a shared variable identity before any renderer
 // sees the body. This table records the Phi destination as a vvar and keeps
 // incoming assignments tied to CFG edge blocks, so later copy/materialize passes
@@ -231,6 +245,8 @@ public:
     return DephicationIncomings;
   }
   PayloadId payloadOrigin(PayloadId Id) const;
+  std::optional<ConditionCompare>
+  conditionCompare(PayloadRef Condition) const;
   DephicationEdgeContext dephicationEdgeContext(BlockId EdgeBlock) const;
   DephicationEdgeContext dephicationBlockContext(BlockId Block) const;
 
@@ -249,6 +265,8 @@ public:
   bool hasPredecessorRewritePayloadMaterializeHook() const;
   bool hasGroupedPredecessorRewritePayloadMaterializeHook() const;
   void setPayloadOrigin(PayloadId Id, PayloadId SourceId);
+  void setConditionCompare(PayloadRef Condition,
+                           ConditionCompare Compare);
   BlockId bodyBlock(BlockId Id) const;
   const CFGBlock *getBodyBlock(BlockId Id) const;
   bool materializeBlockBody(BlockId Id);
@@ -310,6 +328,7 @@ private:
   bool MaterializeHookSupportsPredecessorRewrite = false;
   bool MaterializeHookSupportsGroupedPredecessorRewrite = false;
   std::unordered_map<PayloadId, PayloadId> PayloadOrigins;
+  std::unordered_map<PayloadId, ConditionCompare> ConditionCompares;
 };
 
 enum class StructuredNodeKind {

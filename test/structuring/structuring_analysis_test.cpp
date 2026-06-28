@@ -1751,6 +1751,55 @@ void testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads() {
   assert(Incomings[3].IncomingName == "d");
 }
 
+void testLLVMFunctionCFGBuilderRecordsConditionCompare() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("condition-compare-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Then = llvm::BasicBlock::Create(Context, "then", F);
+  llvm::BasicBlock *Else = llvm::BasicBlock::Create(Context, "else", F);
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Cmp =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp");
+  Builder.CreateCondBr(Cmp, Then, Else);
+  Builder.SetInsertPoint(Then);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 1));
+  Builder.SetInsertPoint(Else);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  const CFGBlock *EntryBlock = Cfg.getBlock(0);
+  assert(EntryBlock != nullptr);
+  assert(EntryBlock->Terminator == TerminatorKind::Branch);
+  std::optional<ConditionCompare> Compare =
+      Cfg.conditionCompare(EntryBlock->Condition);
+  assert(Compare.has_value());
+  assert(Compare->Kind == ConditionCompareKind::Equal);
+  assert(Payloads[Compare->ComparedValue.Id] == "x");
+  assert(Payloads[Compare->ConstantValue.Id] == "7");
+
+  BlockId CopyId = Cfg.duplicateBlock(0, EntryBlock->Successors);
+  assert(CopyId != InvalidBlockId);
+  assert(Cfg.materializeBlockBody(CopyId));
+  const CFGBlock *Copy = Cfg.getBlock(CopyId);
+  assert(Copy != nullptr);
+  Compare = Cfg.conditionCompare(Copy->Condition);
+  assert(Compare.has_value());
+  assert(Compare->Kind == ConditionCompareKind::Equal);
+  assert(Payloads[Compare->ComparedValue.Id] == "x");
+  assert(Payloads[Compare->ConstantValue.Id] == "7");
+}
+
 void testSolidityBodyBuilderReadsSharedPhiAssignments() {
   llvm::LLVMContext Context;
   llvm::Module Module("solidity-shared-phi-test", Context);
@@ -12609,6 +12658,7 @@ int main() {
   testSolidityBodyBuilderRendersSyntheticForwarder();
   testSolidityBodyBuilderConsumesStructuredSyntheticGoto();
   testLLVMFunctionCFGBuilderMaterializesPhiEdgePayloads();
+  testLLVMFunctionCFGBuilderRecordsConditionCompare();
   testSolidityBodyBuilderReadsSharedPhiAssignments();
   testSolidityBodyBuilderReadsCopiedSharedPhiAssignments();
   testSolidityBodyBuilderRewritesCopiedDephicationVVars();

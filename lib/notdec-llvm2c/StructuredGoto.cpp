@@ -170,6 +170,38 @@ private:
     return st::PayloadRef{Payloads.size() - 1};
   }
 
+  std::optional<st::ConditionCompare>
+  conditionCompareFromBranchCondition(clang::Stmt *Stmt) {
+    auto *Expr = llvm::dyn_cast_or_null<clang::Expr>(Stmt);
+    auto *BO =
+        llvm::dyn_cast_or_null<clang::BinaryOperator>(getNoCast(Expr));
+    if (BO == nullptr ||
+        (BO->getOpcode() != clang::BO_EQ && BO->getOpcode() != clang::BO_NE)) {
+      return std::nullopt;
+    }
+
+    clang::Expr *Compared = BO->getLHS();
+    auto *Constant =
+        llvm::dyn_cast_or_null<clang::IntegerLiteral>(getNoCast(BO->getRHS()));
+    if (Constant == nullptr) {
+      Constant =
+          llvm::dyn_cast_or_null<clang::IntegerLiteral>(getNoCast(BO->getLHS()));
+      Compared = BO->getRHS();
+    }
+    if (Constant == nullptr) {
+      return std::nullopt;
+    }
+
+    st::ConditionCompareKind Kind =
+        BO->getOpcode() == clang::BO_EQ
+            ? st::ConditionCompareKind::Equal
+            : st::ConditionCompareKind::NotEqual;
+    return st::ConditionCompare{
+        .ComparedValue = addPayload(Compared),
+        .ConstantValue = addPayload(Constant),
+        .Kind = Kind};
+  }
+
   std::map<clang::ValueDecl *, clang::ValueDecl *>
   dephicationDeclReplacements(
       const st::PayloadMaterializeContext &Context) {
@@ -360,6 +392,11 @@ private:
       } else if (Block->succ_size() == 2) {
         NewBlock.Terminator = st::TerminatorKind::Branch;
         NewBlock.Condition = addPayload(Block->getTerminatorStmt());
+        if (std::optional<st::ConditionCompare> Compare =
+                conditionCompareFromBranchCondition(
+                    Block->getTerminatorStmt())) {
+          Ret.setConditionCompare(NewBlock.Condition, *Compare);
+        }
       } else if (Block->succ_size() > 2) {
         NewBlock.Terminator = st::TerminatorKind::Switch;
         auto &Term = std::get<SwitchTerminator>(Block->getTerminator());
