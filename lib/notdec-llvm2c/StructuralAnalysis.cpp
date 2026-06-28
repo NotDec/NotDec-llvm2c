@@ -2555,6 +2555,70 @@ clang::Expr *ExprBuilder::createCompoundLiteralExpr(llvm::Value *Val,
   return ret;
 }
 
+clang::Expr *ExprBuilder::visitInsertValueInst(llvm::InsertValueInst &I) {
+  // Native summaries commonly build aggregate returns as a linear insertvalue
+  // chain over undef. Keep this as a single-level record literal builder; nested
+  // aggregate construction still needs a separate, explicit lowering rule.
+  auto *StructTy = llvm::dyn_cast<llvm::StructType>(I.getType());
+  if (StructTy == nullptr) {
+    return nullptr;
+  }
+
+  clang::QualType StructQTy = TB.visitStructType(*StructTy);
+  auto *RecordTy = StructQTy->getAs<clang::RecordType>();
+  if (RecordTy == nullptr) {
+    return nullptr;
+  }
+
+  llvm::SmallVector<clang::FieldDecl *, 8> Fields;
+  for (auto *Field : RecordTy->getDecl()->fields()) {
+    Fields.push_back(Field);
+  }
+  if (Fields.size() != StructTy->getNumElements()) {
+    return nullptr;
+  }
+
+  llvm::SmallVector<clang::Expr *, 8> Inits(Fields.size(), nullptr);
+  llvm::SmallVector<bool, 8> HasInit(Fields.size(), false);
+  llvm::Value *Cur = &I;
+  while (auto *Insert = llvm::dyn_cast<llvm::InsertValueInst>(Cur)) {
+    if (Insert->getNumIndices() != 1) {
+      return nullptr;
+    }
+    unsigned Index = *Insert->idx_begin();
+    if (Index >= Inits.size()) {
+      return nullptr;
+    }
+    if (!HasInit[Index]) {
+      clang::QualType FieldTy = Fields[Index]->getType();
+      Inits[Index] =
+          visitValue(Insert->getInsertedValueOperand(), Insert, 1, FieldTy);
+      if (Inits[Index] == nullptr) {
+        return nullptr;
+      }
+      HasInit[Index] = true;
+    }
+    Cur = Insert->getAggregateOperand();
+  }
+
+  bool AllFieldsSet = llvm::all_of(HasInit, [](bool Set) { return Set; });
+  if (!AllFieldsSet && !llvm::isa<llvm::UndefValue>(Cur)) {
+    return nullptr;
+  }
+
+  for (unsigned Index = 0; Index < Inits.size(); ++Index) {
+    if (Inits[Index] == nullptr) {
+      Inits[Index] = getUndef(Fields[Index]->getType());
+    }
+  }
+
+  auto *Init = new (Ctx) clang::InitListExpr(
+      Ctx, clang::SourceLocation(), Inits, clang::SourceLocation());
+  return new (Ctx) clang::CompoundLiteralExpr(
+      clang::SourceLocation(), Ctx.getTrivialTypeSourceInfo(StructQTy),
+      StructQTy, clang::VK_LValue, Init, false);
+}
+
 clang::Expr *ExprBuilder::visitValue(llvm::Value *Val, llvm::User *User,
                                      long OpInd, clang::QualType Ty) {
   // if (Ty.isNull()) {

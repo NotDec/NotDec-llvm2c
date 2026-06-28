@@ -473,6 +473,19 @@ entry:
         "absent": ["insertvalue", "extractvalue"],
     },
     {
+        "name": "insertvalue_aggregate_return",
+        "ir": r"""
+define { i64, i64 } @f(i64 %a, i64 %b) {
+entry:
+  %s0 = insertvalue { i64, i64 } poison, i64 %a, 0
+  %s1 = insertvalue { i64, i64 } %s0, i64 %b, 1
+  ret { i64, i64 } %s1
+}
+""",
+        "contains": ["return (struct (unnamed)){a, b};"],
+        "absent": ["insertvalue", "return;"],
+    },
+    {
         "name": "aggregate_load_extractvalue",
         "ir": r"""
 define i64 @f(ptr %p) {

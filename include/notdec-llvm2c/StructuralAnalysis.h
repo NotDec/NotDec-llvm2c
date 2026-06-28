@@ -324,6 +324,7 @@ public:
     llvm::errs() << "ExprBuilder: unhandled instruction: " << I << "\n";
     return nullptr;
   }
+  clang::Expr *visitInsertValueInst(llvm::InsertValueInst &I);
   // The main interface to convert a llvm::Value to Expr.
   clang::Expr *visitValue(llvm::Value *Val, llvm::User *User, long OpInd,
                           clang::QualType Ty = clang::QualType());
@@ -721,6 +722,9 @@ public:
   void visitSelectInst(llvm::SelectInst &I);
   void visitSwitchInst(llvm::SwitchInst &I);
   void visitExtractValueInst(llvm::ExtractValueInst &I);
+  void visitInsertValueInst(llvm::InsertValueInst &I) {
+    // Pure aggregate SSA construction is materialized by ExprBuilder at use.
+  }
   void visitFreezeInst(llvm::FreezeInst &I);
 
   CFGBuilder(SAFuncContext &FCtx, std::vector<clang::Stmt *> &VarDecls)
