@@ -10784,6 +10784,55 @@ void testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue() {
   assert(HeadAfter->Successors == std::vector<BlockId>({10, 1}));
 }
 
+void testLoweredSwitchSimplifierSkipsDuplicateIntegerCaseValue() {
+  StructuredCFG Cfg;
+
+  CFGBlock Head = branchBlock(0, {10, 1});
+  Head.Condition = {100};
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Next = branchBlock(1, {11, 20});
+  Next.Condition = {101};
+  Cfg.addBlock(std::move(Next));
+
+  Cfg.addBlock(block(10, {}));
+  Cfg.addBlock(block(11, {}));
+  Cfg.addBlock(block(20, {}));
+
+  Cfg.setConditionCompare({100}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {300},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 7,
+                                      .UnsignedIntegerValue = 7,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::Equal});
+  Cfg.setConditionCompare({101}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {301},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 7,
+                                      .UnsignedIntegerValue = 7,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::Equal});
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1) != nullptr);
+  const CFGBlock *HeadAfter = Cfg.getBlock(0);
+  assert(HeadAfter != nullptr);
+  assert(HeadAfter->Terminator == TerminatorKind::Branch);
+  assert(HeadAfter->Successors == std::vector<BlockId>({10, 1}));
+}
+
 void testLoweredSwitchSimplifierSkipsIfChainWithSharedCaseTarget() {
   StructuredCFG Cfg;
 
@@ -14151,6 +14200,7 @@ int main() {
   testLoweredSwitchSimplifierMergesCopiedRangeGuardDefault();
   testLoweredSwitchSimplifierSkipsSharedCopiedRangeGuardDefault();
   testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue();
+  testLoweredSwitchSimplifierSkipsDuplicateIntegerCaseValue();
   testLoweredSwitchSimplifierSkipsIfChainWithSharedCaseTarget();
   testLoweredSwitchSimplifierSkipsDefaultThatReachesIfChain();
   testLoweredSwitchSimplifierSkipsRangeGuardWithSharedDefaultTarget();

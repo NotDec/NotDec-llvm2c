@@ -2118,6 +2118,9 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
   Chain.ComparedValue = FirstCompare->ComparedValue;
 
   std::set<BlockId> ChainBlocks;
+  // Prefer the parsed integer value when it exists. Different payload ids can
+  // still render the same case value, and Angr rejects those duplicate cases.
+  std::set<std::uint64_t> IntegerCaseValues;
   std::set<PayloadId> CaseValues;
   BlockId CurrentId = HeadId;
   ChainBlocks.insert(CurrentId);
@@ -2141,11 +2144,17 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
     if (ChainBlocks.count(CaseTarget) != 0) {
       return std::nullopt;
     }
-    Chain.Cases.push_back({Compare->ConstantValue, Compare, CaseTarget});
-    PayloadId CaseValueOrigin = Graph.payloadOrigin(Compare->ConstantValue.Id);
-    if (!CaseValues.insert(CaseValueOrigin).second) {
-      return std::nullopt;
+    if (Compare->HasIntegerValue) {
+      if (!IntegerCaseValues.insert(Compare->UnsignedIntegerValue).second) {
+        return std::nullopt;
+      }
+    } else {
+      PayloadId CaseValueOrigin = Graph.payloadOrigin(Compare->ConstantValue.Id);
+      if (!CaseValues.insert(CaseValueOrigin).second) {
+        return std::nullopt;
+      }
     }
+    Chain.Cases.push_back({Compare->ConstantValue, Compare, CaseTarget});
 
     if (ChainBlocks.count(Next) != 0) {
       return std::nullopt;
