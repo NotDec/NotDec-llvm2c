@@ -634,7 +634,26 @@ def output_metrics(output: str) -> dict:
     }
 
 
-def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> tuple[str, list[str], dict]:
+def classify_failures(status: str, failures: list[str]) -> str:
+    if status == "pass":
+        return "pass"
+    if status == "skip":
+        return "missing-input"
+    if any("command failed" in failure for failure in failures):
+        return "runner-failure"
+    if any("unexpected 'goto " in failure for failure in failures):
+        return "unexpected-goto"
+    if any(
+        "missing 'switch (" in failure or "missing 'case " in failure
+        for failure in failures
+    ):
+        return "missing-structure"
+    return "output-mismatch"
+
+
+def run_case(
+    notdec_llvm2c: Path, work_dir: Path, case: dict
+) -> tuple[str, list[str], dict, str]:
     input_path = case.get("input")
     if input_path is None:
         input_path = work_dir / f"{case['name']}.ll"
@@ -642,7 +661,8 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> tuple[str, list
     elif not input_path.is_absolute():
         input_path = REPO_ROOT / input_path
     if not input_path.exists():
-        return "skip", [f"{case['name']}: missing input file {input_path}"], {}
+        failures = [f"{case['name']}: missing input file {input_path}"]
+        return "skip", failures, {}, classify_failures("skip", failures)
 
     output_path = work_dir / f"{case['name']}.c"
     proc = subprocess.run(
@@ -658,9 +678,11 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> tuple[str, list
         stderr=subprocess.STDOUT,
     )
     if proc.returncode != 0:
-        return "fail", [f"{case['name']}: command failed\n{proc.stdout}"], {}
+        failures = [f"{case['name']}: command failed\n{proc.stdout}"]
+        return "fail", failures, {}, classify_failures("fail", failures)
     if not output_path.exists():
-        return "fail", [f"{case['name']}: missing output file\n{proc.stdout}"], {}
+        failures = [f"{case['name']}: missing output file\n{proc.stdout}"]
+        return "fail", failures, {}, classify_failures("fail", failures)
 
     output = output_path.read_text()
     failures = []
@@ -679,7 +701,8 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> tuple[str, list
             failures.append(
                 f"{header}: expected {expected} x {needle!r}, got {actual}"
             )
-    return ("fail" if failures else "pass"), failures, output_metrics(output)
+    status = "fail" if failures else "pass"
+    return status, failures, output_metrics(output), classify_failures(status, failures)
 
 
 def write_report(path: Path, rows: list[dict]) -> None:
@@ -689,6 +712,7 @@ def write_report(path: Path, rows: list[dict]) -> None:
         "angr_test",
         "semantic",
         "status",
+        "classification",
         "switch_count",
         "case_count",
         "goto_count",
@@ -712,17 +736,19 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="notdec-sailr-bench2-") as tmp:
         work_dir = Path(tmp)
         for case in CASES:
-            status, case_failures, metrics = run_case(
+            status, case_failures, metrics, classification = run_case(
                 args.notdec_llvm2c, work_dir, case
             )
             if case.get("expected_failure"):
                 if status == "fail":
                     status = "xfail"
+                    classification = "expected-" + classification
                     case_failures.append(
                         "expected failure: " + case["expected_failure"]
                     )
                 elif status == "pass":
                     status = "xpass"
+                    classification = "unexpected-pass"
                     case_failures.append(
                         "unexpected pass: " + case["expected_failure"]
                     )
@@ -734,6 +760,7 @@ def main() -> int:
                 "angr_test": case["angr_test"],
                 "semantic": case["semantic"],
                 "status": status,
+                "classification": classification,
                 "switch_count": metrics.get("switch_count", ""),
                 "case_count": metrics.get("case_count", ""),
                 "goto_count": metrics.get("goto_count", ""),
