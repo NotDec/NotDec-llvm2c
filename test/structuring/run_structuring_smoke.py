@@ -395,6 +395,23 @@ done:
         "absent": ["llvm.sadd.with.overflow", "extractvalue"],
     },
     {
+        "name": "aggregate_return_extractvalue",
+        "ir": r"""
+declare { i64, i64 } @pair(i64, i64)
+
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %p = call { i64, i64 } @pair(i64 %a, i64 %b)
+  %x = extractvalue { i64, i64 } %p, 0
+  %y = extractvalue { i64, i64 } %p, 1
+  %sum = add i64 %x, %y
+  ret i64 %sum
+}
+""",
+        "contains": ["p = pair(a, b);", "return p.field_0 + p.field_1;"],
+        "absent": ["extractvalue"],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {

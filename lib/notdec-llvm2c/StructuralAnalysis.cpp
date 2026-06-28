@@ -162,6 +162,21 @@ overflowHelperTypeSuffix(llvm::StringRef FName) {
   return std::nullopt;
 }
 
+static clang::FieldDecl *fieldAtIndex(llvm::StructType &StructTy,
+                                      clang::QualType StructQTy,
+                                      unsigned Index) {
+  auto *RecordTy = StructQTy->getAs<clang::RecordType>();
+  if (RecordTy == nullptr || Index >= StructTy.getNumElements()) {
+    return nullptr;
+  }
+  auto Field = RecordTy->getDecl()->field_begin();
+  std::advance(Field, Index);
+  if (Field == RecordTy->getDecl()->field_end()) {
+    return nullptr;
+  }
+  return *Field;
+}
+
 bool canIgnore(llvm::Instruction::CastOps OpCode) {
   switch (OpCode) {
   case llvm::Instruction::PtrToInt:
@@ -1072,6 +1087,57 @@ void CFGBuilder::visitCallInst(llvm::CallInst &I) {
   addExprOrStmt(I, *Call);
 }
 
+// Lower the common native-lifting shape "%x = extractvalue (call {..}), N".
+// Other aggregate producers, such as insertvalue chains, still need their own
+// lowering because they already encode per-field construction.
+clang::Expr *materializeAggregateCallField(clang::ASTContext &Ctx,
+                                           SAFuncContext &FCtx,
+                                           CFGBlock &Blk,
+                                           llvm::CallInst &Call,
+                                           llvm::ExtractValueInst &Extract,
+                                           unsigned Index) {
+  auto *StructTy = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  if (StructTy == nullptr) {
+    return nullptr;
+  }
+  clang::QualType StructQTy = FCtx.getTypeBuilder().visitStructType(*StructTy);
+  clang::FieldDecl *Field = fieldAtIndex(*StructTy, StructQTy, Index);
+  if (Field == nullptr) {
+    return nullptr;
+  }
+
+  clang::Expr *Base = nullptr;
+  if (FCtx.isExpr(&Call)) {
+    Base = FCtx.getExpr(&Call);
+  } else {
+    Base = ExprBuilder(FCtx).visitValue(&Call, &Extract, 0);
+  }
+  if (Base == nullptr) {
+    return nullptr;
+  }
+
+  if (llvm::isa<clang::CallExpr>(Base)) {
+    auto II = FCtx.getIdentifierInfo(FCtx.getValueNamer().getTempName(Call));
+    auto *VD = clang::VarDecl::Create(
+        Ctx, FCtx.getFunctionDecl(), clang::SourceLocation(),
+        clang::SourceLocation(), II, StructQTy, nullptr, clang::SC_None);
+    auto *Decl = new (Ctx)
+        clang::DeclStmt(clang::DeclGroupRef(VD), clang::SourceLocation(),
+                        clang::SourceLocation());
+    FCtx.getCFG().getEntry().prependStmt(Decl);
+
+    auto *Assign = createBinaryOperator(
+        Ctx, makeDeclRefExpr(VD), Base, clang::BO_Assign, StructQTy,
+        clang::VK_PRValue);
+    FCtx.addStmt(Blk, *Assign, Call);
+
+    Base = makeDeclRefExpr(VD);
+    FCtx.addMapping(&Call, *Base);
+  }
+
+  return createMemberExpr(Ctx, Base, Field);
+}
+
 void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
   if (auto Call = llvm::dyn_cast<llvm::CallInst>(I.getAggregateOperand())) {
     if (auto Target = Call->getCalledFunction()) {
@@ -1111,6 +1177,15 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
         } else {
           assert(false);
         }
+      }
+    }
+    if (I.getNumIndices() == 1) {
+      unsigned Index = *I.idx_begin();
+      if (clang::Expr *Field =
+              materializeAggregateCallField(Ctx, FCtx, *Blk, *Call, I,
+                                            Index)) {
+        addExprOrStmt(I, *Field);
+        return;
       }
     }
   }
