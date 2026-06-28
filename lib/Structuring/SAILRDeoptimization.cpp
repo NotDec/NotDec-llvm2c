@@ -1950,6 +1950,29 @@ bool loweredSwitchTargetsOnlyReachedFromChain(
   return true;
 }
 
+bool loweredSwitchDefaultReachesChain(const StructuredCFG &Graph,
+                                      const LoweredSwitchIfChain &Chain) {
+  std::set<BlockId> ChainBlocks = {Chain.Head};
+  ChainBlocks.insert(Chain.RemovedBlocks.begin(), Chain.RemovedBlocks.end());
+
+  std::set<BlockId> Seen;
+  std::vector<BlockId> Worklist = {Chain.DefaultTarget};
+  while (!Worklist.empty()) {
+    BlockId Current = Worklist.back();
+    Worklist.pop_back();
+    if (!Seen.insert(Current).second) {
+      continue;
+    }
+    if (ChainBlocks.count(Current) != 0) {
+      return true;
+    }
+    for (BlockId Succ : Graph.successorsOf(Current)) {
+      Worklist.push_back(Succ);
+    }
+  }
+  return false;
+}
+
 bool graphHasSwitchTerminator(const StructuredCFG &Graph) {
   for (const CFGBlock &Block : Graph.blocks()) {
     if (Block.Terminator == TerminatorKind::Switch) {
@@ -2128,6 +2151,9 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
       !loweredSwitchTargetsOnlyReachedFromChain(Graph, Chain)) {
     return std::nullopt;
   }
+  if (loweredSwitchDefaultReachesChain(Graph, Chain)) {
+    return std::nullopt;
+  }
   return Chain;
 }
 
@@ -2193,7 +2219,8 @@ collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
   std::optional<LoweredSwitchIfChain> Chain =
       collectRangeGuardedLoweredSwitchIfChainFrom(Graph, HeadId, {});
   if (!Chain.has_value() ||
-      !loweredSwitchTargetsOnlyReachedFromChain(Graph, *Chain)) {
+      !loweredSwitchTargetsOnlyReachedFromChain(Graph, *Chain) ||
+      loweredSwitchDefaultReachesChain(Graph, *Chain)) {
     return std::nullopt;
   }
   return Chain;
