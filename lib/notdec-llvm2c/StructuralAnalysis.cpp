@@ -1164,6 +1164,51 @@ clang::Expr *materializeAggregateCallField(clang::ASTContext &Ctx,
   return createMemberExpr(Ctx, Base, Field);
 }
 
+// Lower "%x = extractvalue aggregate_expr, N" when the aggregate is already
+// available as a C record expression, for example an aggregate load.
+static clang::Expr *materializeAggregateExprField(clang::ASTContext &Ctx,
+                                                  SAFuncContext &FCtx,
+                                                  ExprBuilder &EB,
+                                                  llvm::Value *Aggregate,
+                                                  llvm::ExtractValueInst &Extract,
+                                                  unsigned Index) {
+  auto *StructTy = llvm::dyn_cast<llvm::StructType>(Aggregate->getType());
+  if (StructTy == nullptr) {
+    return nullptr;
+  }
+  clang::QualType StructQTy = FCtx.getTypeBuilder().visitStructType(*StructTy);
+  clang::FieldDecl *Field = fieldAtIndex(*StructTy, StructQTy, Index);
+  if (Field == nullptr) {
+    return nullptr;
+  }
+
+  clang::Expr *Base = EB.visitValue(Aggregate, &Extract, 0, StructQTy);
+  if (Base == nullptr) {
+    return nullptr;
+  }
+  return createMemberExpr(Ctx, Base, Field);
+}
+
+// Handle the common SSA form "%x = extractvalue (insertvalue chain), N" by
+// forwarding to the most recent inserted operand for field N. This intentionally
+// stays single-level; nested aggregate construction needs separate handling.
+static llvm::Value *
+findInsertValueField(llvm::Value *Aggregate,
+                     llvm::ArrayRef<unsigned> ExtractIndices) {
+  if (ExtractIndices.size() != 1) {
+    return nullptr;
+  }
+  unsigned WantedIndex = ExtractIndices.front();
+  llvm::Value *Cur = Aggregate;
+  while (auto *Insert = llvm::dyn_cast<llvm::InsertValueInst>(Cur)) {
+    if (Insert->getNumIndices() == 1 && *Insert->idx_begin() == WantedIndex) {
+      return Insert->getInsertedValueOperand();
+    }
+    Cur = Insert->getAggregateOperand();
+  }
+  return nullptr;
+}
+
 void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
   if (auto Call = llvm::dyn_cast<llvm::CallInst>(I.getAggregateOperand())) {
     if (auto Target = Call->getCalledFunction()) {
@@ -1213,6 +1258,22 @@ void CFGBuilder::visitExtractValueInst(llvm::ExtractValueInst &I) {
         addExprOrStmt(I, *Field);
         return;
       }
+    }
+  }
+  if (llvm::Value *Inserted =
+          findInsertValueField(I.getAggregateOperand(), I.getIndices())) {
+    auto Ty = getTypeBuilder().getType(&I);
+    if (clang::Expr *Field = EB.visitValue(Inserted, &I, 0, Ty)) {
+      addExprOrStmt(I, *Field);
+      return;
+    }
+  }
+  if (I.getNumIndices() == 1) {
+    unsigned Index = *I.idx_begin();
+    if (clang::Expr *Field = materializeAggregateExprField(
+            Ctx, FCtx, EB, I.getAggregateOperand(), I, Index)) {
+      addExprOrStmt(I, *Field);
+      return;
     }
   }
   assert(false && "Unhandled ExtractValueInst!");

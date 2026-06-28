@@ -457,6 +457,35 @@ entry:
         ],
     },
     {
+        "name": "insertvalue_extractvalue_forward",
+        "ir": r"""
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %s0 = insertvalue { i64, i64 } undef, i64 %a, 0
+  %s1 = insertvalue { i64, i64 } %s0, i64 %b, 1
+  %x = extractvalue { i64, i64 } %s1, 0
+  %y = extractvalue { i64, i64 } %s1, 1
+  %sum = add i64 %x, %y
+  ret i64 %sum
+}
+""",
+        "contains": ["return a + b;"],
+        "absent": ["insertvalue", "extractvalue"],
+    },
+    {
+        "name": "aggregate_load_extractvalue",
+        "ir": r"""
+define i64 @f(ptr %p) {
+entry:
+  %v = load { i64, i64 }, ptr %p
+  %x = extractvalue { i64, i64 } %v, 1
+  ret i64 %x
+}
+""",
+        "contains": ["return ((struct (unnamed) *)p)->field_1;"],
+        "absent": ["extractvalue"],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {
