@@ -189,6 +189,7 @@ struct LoweredSwitchIfChain {
 };
 
 constexpr std::size_t MaxLinearRegionMergeBlocks = 12;
+constexpr std::size_t MaxLoweredSwitchContinuousCases = 6;
 
 bool collectJoinedDiamondReturnRegion(const StructuredCFG &Graph,
                                       BlockId Terminal,
@@ -1949,6 +1950,93 @@ bool loweredSwitchTargetsOnlyReachedFromChain(
   return true;
 }
 
+bool graphHasSwitchTerminator(const StructuredCFG &Graph) {
+  for (const CFGBlock &Block : Graph.blocks()) {
+    if (Block.Terminator == TerminatorKind::Switch) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<std::int64_t>
+signedCaseValue(const LoweredSwitchIfCase &Case) {
+  if (!Case.Compare.has_value() || !Case.Compare->HasIntegerValue) {
+    return std::nullopt;
+  }
+  if (Case.Compare->SignedPredicate) {
+    return Case.Compare->SignedIntegerValue;
+  }
+  if (Case.Compare->UnsignedIntegerValue >
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<std::int64_t>(Case.Compare->UnsignedIntegerValue);
+}
+
+std::optional<std::vector<std::int64_t>>
+loweredSwitchIntegerCaseValues(const LoweredSwitchIfChain &Chain) {
+  std::vector<std::int64_t> Values;
+  Values.reserve(Chain.Cases.size());
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    std::optional<std::int64_t> Value = signedCaseValue(Case);
+    if (!Value.has_value()) {
+      return std::nullopt;
+    }
+    Values.push_back(*Value);
+  }
+  std::sort(Values.begin(), Values.end());
+  return Values;
+}
+
+std::size_t maxContinuousCaseRun(const std::vector<std::int64_t> &Values) {
+  if (Values.empty()) {
+    return 0;
+  }
+
+  std::size_t MaxRun = 1;
+  std::size_t CurrentRun = 1;
+  for (std::size_t I = 1; I < Values.size(); ++I) {
+    if (Values[I] == Values[I - 1] + 1) {
+      ++CurrentRun;
+    } else {
+      MaxRun = std::max(MaxRun, CurrentRun);
+      CurrentRun = 1;
+    }
+  }
+  return std::max(MaxRun, CurrentRun);
+}
+
+bool loweredSwitchChainPassesAngrHeuristics(const LoweredSwitchIfChain &Chain,
+                                            bool HadExistingSwitch) {
+  // Match Angr's low false-positive filters using only shared CFG metadata.
+  // If integer values are unavailable, keep the earlier conservative behavior.
+  std::optional<std::vector<std::int64_t>> CaseValues =
+      loweredSwitchIntegerCaseValues(Chain);
+  if (!CaseValues.has_value()) {
+    return true;
+  }
+
+  std::size_t MaxRun = maxContinuousCaseRun(*CaseValues);
+  if (MaxRun >= MaxLoweredSwitchContinuousCases) {
+    return false;
+  }
+
+  bool AllContinuous = MaxRun == Chain.Cases.size();
+  if (AllContinuous && !HadExistingSwitch) {
+    return false;
+  }
+
+  std::set<BlockId> DistinctTargets;
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    DistinctTargets.insert(Case.Target);
+  }
+  if (DistinctTargets.size() < 2 && !HadExistingSwitch) {
+    return false;
+  }
+  return true;
+}
+
 std::optional<LoweredSwitchIfChain>
 collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
                             bool AllowRangeGuardedHead = false) {
@@ -2868,6 +2956,7 @@ bool LoweredSwitchSimplifier::runOnGraph(
   (void)Current;
 
   bool Changed = false;
+  bool HadExistingSwitch = graphHasSwitchTerminator(Graph);
   std::vector<BlockId> BranchIds;
   BranchIds.reserve(Graph.blocks().size());
   for (const CFGBlock &Block : Graph.blocks()) {
@@ -2883,6 +2972,9 @@ bool LoweredSwitchSimplifier::runOnGraph(
       Chain = collectLoweredSwitchIfChain(Graph, BranchId);
     }
     if (!Chain.has_value()) {
+      continue;
+    }
+    if (!loweredSwitchChainPassesAngrHeuristics(*Chain, HadExistingSwitch)) {
       continue;
     }
     if (rewriteLoweredSwitchIfChain(Graph, *Chain)) {

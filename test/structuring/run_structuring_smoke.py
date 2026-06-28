@@ -141,6 +141,32 @@ exit:
         "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
     },
     {
+        "name": "lowered_if_chain_switch",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cmp7 = icmp eq i32 %x, 7
+  br i1 %cmp7, label %case7, label %check9
+
+case7:
+  ret i32 7
+
+check9:
+  %cmp9 = icmp eq i32 %x, 9
+  br i1 %cmp9, label %case9, label %default
+
+case9:
+  ret i32 9
+
+default:
+  ret i32 0
+}
+""",
+        "contains": ["switch (x)", "case 7:", "case 9:", "return 7;",
+                      "return 9;", "return 0;"],
+        "absent": ["goto check9", "goto case7", "goto case9"],
+    },
+    {
         "name": "fmt_deduplication_like",
         "ir": r"""
 declare void @xdectoumax()

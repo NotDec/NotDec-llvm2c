@@ -397,6 +397,10 @@ struct StructuredNode {
   NodeId Else = InvalidNodeId;
   NodeId Body = InvalidNodeId;
   NodeId Default = InvalidNodeId;
+  // Structured switch nodes may be created from a rewritten CFG candidate.
+  // Keep the default edge target in the tree so renderers do not have to guess
+  // it from the original shared CFG block.
+  BlockId DefaultTarget = InvalidBlockId;
 
   std::vector<SwitchCase> Cases;
   std::vector<StructuredSwitchCase> StructuredCases;

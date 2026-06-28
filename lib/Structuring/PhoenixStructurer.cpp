@@ -573,6 +573,7 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     SwitchNode.Condition = Tail->Condition;
 
     GraphNodeId DefaultId = Targets.front();
+    SwitchNode.DefaultTarget = Tail->Successors.front();
     SwitchNode.Default = buildSwitchCaseBody(
         Cfg, DefaultId == FollowId ? nullptr : Graph.getNode(DefaultId), Tree);
     for (const SwitchCase &Case : Tail->Cases) {
@@ -1483,6 +1484,7 @@ NodeId buildVirtualizedSwitchSource(const CFGBlock &Tail,
 
   bool Matched = false;
   if (!Tail.Successors.empty() && Tail.Successors[0] == Edge.ToBlock) {
+    SwitchNode.DefaultTarget = Tail.Successors[0];
     SwitchNode.Default = Tree.addNode(makeControlTransfer(
         Edge.ToBlock, Edge.Kind == VirtualEdgeKind::Goto
                           ? classifyNaturalLoopExit(Cfg, R, Edge.ToBlock)
@@ -1893,6 +1895,7 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     SwitchNode.Condition = Tail->Condition;
     SwitchNode.Cases = Tail->Cases;
     if (!Tail->Successors.empty()) {
+      SwitchNode.DefaultTarget = Tail->Successors[0];
       SwitchNode.Default = Tree.addNode(
           makeControlTransfer(Tail->Successors[0],
                               classifyNaturalLoopExit(

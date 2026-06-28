@@ -51,7 +51,9 @@ struct SwitchBodyKey {
 };
 
 struct SwitchBodyLabel {
-  clang::SwitchCase *Label = nullptr;
+  // A switch body may have several case/default labels. Keep only the last
+  // label here; new labels are chained after it, and the body is attached last.
+  clang::SwitchCase *LastLabel = nullptr;
   st::NodeId Body = st::InvalidNodeId;
 };
 
@@ -702,22 +704,16 @@ private:
         Ctx, nullptr, nullptr, Cond, clang::SourceLocation(),
         clang::SourceLocation());
     std::vector<clang::Stmt *> Cases;
-    std::map<SwitchBodyKey, SwitchBodyLabel> LastLabelForBody;
+    std::vector<SwitchBodyLabel> BodyLabels;
+    std::map<SwitchBodyKey, std::size_t> BodyLabelIndex;
     const st::CFGBlock *Block = getSharedBlock(Node.Block);
-    st::BlockId DefaultTarget = Block->Successors.empty()
-                                    ? st::InvalidBlockId
-                                    : Block->Successors.front();
-    bool HasCaseDefaultOverlap = false;
-    for (const auto &Case : Node.StructuredCases) {
-      if (Case.Target != st::InvalidBlockId && Case.Target == DefaultTarget) {
-        HasCaseDefaultOverlap = true;
-        break;
-      }
+    st::BlockId DefaultTarget = Node.DefaultTarget;
+    if (DefaultTarget == st::InvalidBlockId && !Block->Successors.empty()) {
+      DefaultTarget = Block->Successors.front();
     }
 
     auto BodyKey = [&](st::NodeId Body, st::BlockId Target) {
-      if (HasCaseDefaultOverlap && Target != st::InvalidBlockId &&
-          Target == DefaultTarget) {
+      if (Target != st::InvalidBlockId && Target == DefaultTarget) {
         return SwitchBodyKey{st::StructuredNodeKind::Goto, Target,
                              st::InvalidNodeId};
       }
@@ -729,18 +725,22 @@ private:
                                  st::BlockId Target,
                                  clang::SwitchCase *Label) {
       SwitchBodyKey Key = BodyKey(Body, Target);
-      auto It = LastLabelForBody.find(Key);
-      if (It != LastLabelForBody.end()) {
-        if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(It->second.Label)) {
+      auto It = BodyLabelIndex.find(Key);
+      if (It != BodyLabelIndex.end()) {
+        SwitchBodyLabel &BodyLabel = BodyLabels[It->second];
+        if (auto *CaseLabel =
+                llvm::dyn_cast<clang::CaseStmt>(BodyLabel.LastLabel)) {
           CaseLabel->setSubStmt(Label);
         } else {
-          llvm::cast<clang::DefaultStmt>(It->second.Label)->setSubStmt(Label);
+          llvm::cast<clang::DefaultStmt>(BodyLabel.LastLabel)->setSubStmt(Label);
         }
+        BodyLabel.LastLabel = Label;
       } else {
+        BodyLabelIndex.emplace(Key, BodyLabels.size());
+        BodyLabels.push_back({Label, Body});
         Cases.push_back(Label);
       }
       Switch->addSwitchCase(Label);
-      LastLabelForBody[Key] = {Label, Body};
     };
 
     for (const auto &Case : Node.StructuredCases) {
@@ -757,12 +757,11 @@ private:
       AppendSwitchLabel(Node.Default, DefaultTarget, Default);
     }
 
-    for (const auto &[Key, BodyLabel] : LastLabelForBody) {
-      (void)Key;
-      if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(BodyLabel.Label)) {
+    for (const SwitchBodyLabel &BodyLabel : BodyLabels) {
+      if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(BodyLabel.LastLabel)) {
         CaseLabel->setSubStmt(renderCompound(Tree, BodyLabel.Body));
       } else {
-        llvm::cast<clang::DefaultStmt>(BodyLabel.Label)->setSubStmt(
+        llvm::cast<clang::DefaultStmt>(BodyLabel.LastLabel)->setSubStmt(
             renderCompound(Tree, BodyLabel.Body));
       }
     }

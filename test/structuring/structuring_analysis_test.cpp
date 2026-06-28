@@ -182,6 +182,38 @@ bool treeContainsGotoTarget(const StructuredTree &Tree, NodeId Id,
          treeContainsGotoTarget(Tree, Node->Default, Target);
 }
 
+const StructuredNode *findFirstNodeKind(const StructuredTree &Tree, NodeId Id,
+                                        StructuredNodeKind Kind) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return nullptr;
+  }
+  if (Node->Kind == Kind) {
+    return Node;
+  }
+  for (NodeId Child : Node->Children) {
+    if (const StructuredNode *Found = findFirstNodeKind(Tree, Child, Kind)) {
+      return Found;
+    }
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    if (const StructuredNode *Found =
+            findFirstNodeKind(Tree, Case.Body, Kind)) {
+      return Found;
+    }
+  }
+  if (const StructuredNode *Found = findFirstNodeKind(Tree, Node->Then, Kind)) {
+    return Found;
+  }
+  if (const StructuredNode *Found = findFirstNodeKind(Tree, Node->Else, Kind)) {
+    return Found;
+  }
+  if (const StructuredNode *Found = findFirstNodeKind(Tree, Node->Body, Kind)) {
+    return Found;
+  }
+  return findFirstNodeKind(Tree, Node->Default, Kind);
+}
+
 class RecordingRegionStructurer : public RegionStructurer {
 public:
   bool supportsChildRegions() const override { return true; }
@@ -10078,6 +10110,55 @@ void testLoweredSwitchSimplifierBuildsSwitchFromIfChain() {
   assert(Switch->Cases[1].Target == 3);
 }
 
+void testSAILRStructurerKeepsLoweredSwitchDefaultTarget() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-default-target-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Check9 = llvm::BasicBlock::Create(Context, "check9", F);
+  llvm::BasicBlock *Case9 = llvm::BasicBlock::Create(Context, "case9", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Check9);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Check9);
+  llvm::Value *Cmp9 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 9), "cmp9");
+  Builder.CreateCondBr(Cmp9, Case9, Default);
+  Builder.SetInsertPoint(Case9);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 9));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  SAILRStructurer Structurer;
+  StructuredTree Tree = Structurer.structure(Cfg);
+
+  const StructuredNode *Switch =
+      findFirstNodeKind(Tree, Tree.root(), StructuredNodeKind::Switch);
+  assert(Switch != nullptr);
+  assert(Switch->Block == 0);
+  assert(Switch->DefaultTarget == 4);
+  assert(Switch->StructuredCases.size() == 2);
+  assert(Switch->StructuredCases[0].Target == 1);
+  assert(Switch->StructuredCases[1].Target == 3);
+}
+
 void testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain() {
   llvm::LLVMContext Context;
   llvm::Module Module("lowered-switch-ne-if-chain-test", Context);
@@ -10140,6 +10221,125 @@ void testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain() {
   assert(Switch->Cases[0].Target == 2);
   assert(Payloads[Switch->Cases[1].Value.Id] == "9");
   assert(Switch->Cases[1].Target == 4);
+}
+
+void testLoweredSwitchSimplifierSkipsContinuousIfChainWithoutSwitchHint() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-continuous-skip-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Check8 = llvm::BasicBlock::Create(Context, "check8", F);
+  llvm::BasicBlock *Case8 = llvm::BasicBlock::Create(Context, "case8", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Check8);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Check8);
+  llvm::Value *Cmp8 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 8), "cmp8");
+  Builder.CreateCondBr(Cmp8, Case8, Default);
+  Builder.SetInsertPoint(Case8);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 8));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *EntryBlock = Cfg.getBlock(0);
+  const CFGBlock *Check8Block = Cfg.getBlock(2);
+  assert(EntryBlock != nullptr && Check8Block != nullptr);
+  assert(EntryBlock->Terminator == TerminatorKind::Branch);
+  assert(Check8Block->Terminator == TerminatorKind::Branch);
+}
+
+void testLoweredSwitchSimplifierAcceptsContinuousIfChainWithSwitchHint() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-continuous-hint-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Check8 = llvm::BasicBlock::Create(Context, "check8", F);
+  llvm::BasicBlock *Case8 = llvm::BasicBlock::Create(Context, "case8", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+  llvm::BasicBlock *Hint = llvm::BasicBlock::Create(Context, "hint", F);
+  llvm::BasicBlock *HintCase = llvm::BasicBlock::Create(Context, "hint_case", F);
+  llvm::BasicBlock *HintDefault =
+      llvm::BasicBlock::Create(Context, "hint_default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Check8);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Check8);
+  llvm::Value *Cmp8 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 8), "cmp8");
+  Builder.CreateCondBr(Cmp8, Case8, Default);
+  Builder.SetInsertPoint(Case8);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 8));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+  Builder.SetInsertPoint(Hint);
+  llvm::SwitchInst *Sw =
+      Builder.CreateSwitch(X, HintDefault, /*NumCases=*/1);
+  auto *HintValue =
+      llvm::cast<llvm::ConstantInt>(llvm::ConstantInt::get(I32Ty, 42));
+  Sw->addCase(HintValue, HintCase);
+  Builder.SetInsertPoint(HintCase);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 42));
+  Builder.SetInsertPoint(HintDefault);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, -1));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Terminator == TerminatorKind::Switch);
+  assert(Payloads[Switch->Condition.Id] == "x");
+  assert(Switch->Successors == std::vector<BlockId>({4, 1, 3}));
+  assert(Switch->Cases.size() == 2);
+  assert(Payloads[Switch->Cases[0].Value.Id] == "7");
+  assert(Switch->Cases[0].Target == 1);
+  assert(Payloads[Switch->Cases[1].Value.Id] == "8");
+  assert(Switch->Cases[1].Target == 3);
 }
 
 void testLoweredSwitchSimplifierBuildsSwitchFromRangeGuardedIfChain() {
@@ -13692,7 +13892,10 @@ int main() {
   testLoweredSwitchSimplifierSplitsSingleCaseDefaultReuse();
   testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape();
   testLoweredSwitchSimplifierBuildsSwitchFromIfChain();
+  testSAILRStructurerKeepsLoweredSwitchDefaultTarget();
   testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain();
+  testLoweredSwitchSimplifierSkipsContinuousIfChainWithoutSwitchHint();
+  testLoweredSwitchSimplifierAcceptsContinuousIfChainWithSwitchHint();
   testLoweredSwitchSimplifierBuildsSwitchFromRangeGuardedIfChain();
   testLoweredSwitchSimplifierBuildsSwitchFromNestedRangeGuardedIfChain();
   testLoweredSwitchSimplifierSkipsInnerChainWhenRangeGuardDefaultDiffers();

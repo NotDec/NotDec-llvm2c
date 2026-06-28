@@ -94,6 +94,7 @@ NodeId GotoStructurer::structureRegion(const StructuredCFG &Cfg,
       SwitchNode.Condition = Block.Condition;
       SwitchNode.Cases = Block.Cases;
       if (!Block.Successors.empty()) {
+        SwitchNode.DefaultTarget = Block.Successors[0];
         SwitchNode.Default = Tree.addNode(makeGoto(Block.Successors[0]));
       }
       for (const auto &Case : Block.Cases) {
