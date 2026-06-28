@@ -167,6 +167,31 @@ default:
         "absent": ["goto check9", "goto case7", "goto case9"],
     },
     {
+        "name": "lowered_if_chain_default_cycle",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cmp7 = icmp eq i32 %x, 7
+  br i1 %cmp7, label %case7, label %check9
+
+case7:
+  ret i32 7
+
+check9:
+  %cmp9 = icmp eq i32 %x, 9
+  br i1 %cmp9, label %case9, label %default
+
+case9:
+  ret i32 9
+
+default:
+  br label %check9
+}
+""",
+        "contains": ["return 7;", "return 9;"],
+        "absent": ["switch (x)", "case 7:", "case 9:"],
+    },
+    {
         "name": "fmt_deduplication_like",
         "ir": r"""
 declare void @xdectoumax()
