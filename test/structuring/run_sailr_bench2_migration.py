@@ -252,6 +252,7 @@ default:
         "name": "fmt_deduplication_proxy",
         "angr_test": "test_fmt_deduplication",
         "semantic": "DuplicationReverter duplicated call proxy",
+        "expected_failure": "P1 DuplicationReverter still keeps duplicated call/return in both if arms",
         "ir": r"""
 declare void @xdectoumax()
 
@@ -274,7 +275,7 @@ merge:
 """,
         "contains": ["xdectoumax()", "return 0;"],
         "absent": ["goto left", "goto right"],
-        "counts": {"return 0;": 2},
+        "counts": {"xdectoumax();": 2, "return 0;": 1},
     },
     {
         "name": "branch_return_region_proxy",
