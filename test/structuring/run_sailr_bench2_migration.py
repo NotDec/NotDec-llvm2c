@@ -278,6 +278,42 @@ merge:
         "counts": {"xdectoumax();": 2, "return 0;": 1},
     },
     {
+        "name": "branch_common_tail_pipeline_proxy",
+        "angr_test": "test_fmt_deduplication",
+        "semantic": "DuplicationReverter branch common-tail pipeline proxy",
+        "expected_failure": "P1 branch common-tail extraction is covered at pass level, but the full pipeline does not yet produce the required goto hint for this shape",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %then, label %else
+
+then:
+  call void @a()
+  call void @c()
+  br label %merge
+
+else:
+  call void @b()
+  call void @c()
+  br label %merge
+
+merge:
+  %again = icmp eq i32 %y, 0
+  br i1 %again, label %then, label %exit
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["a();", "b();", "c();", "return 0;"],
+        "counts": {"c();": 2},
+    },
+    {
         "name": "branch_return_region_proxy",
         "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
         "semantic": "ReturnDuplicatorLow branch return region proxy",
