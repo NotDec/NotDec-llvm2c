@@ -1781,6 +1781,12 @@ bool canConsumeLoweredSwitchIfNode(const StructuredCFG &Graph,
   return Preds.size() == 1 && Preds.front() == ExpectedPred;
 }
 
+bool hasOnlyPredecessor(const StructuredCFG &Graph, BlockId Node,
+                        BlockId ExpectedPred) {
+  std::vector<BlockId> Preds = predecessorsOf(Graph, Node);
+  return Preds.size() == 1 && Preds.front() == ExpectedPred;
+}
+
 bool rangeConditionContainsCaseValue(const ConditionCompare &Range,
                                      const ConditionCompare &Case,
                                      bool TrueOutcome) {
@@ -1870,6 +1876,24 @@ bool loweredSwitchIfChainHasRangeGuard(const StructuredCFG &Graph,
     }
   }
   return false;
+}
+
+bool loweredSwitchChainFitsRangeGuard(const StructuredCFG &Graph,
+                                      const CFGBlock &GuardBlock,
+                                      const ConditionCompare &Guard,
+                                      const LoweredSwitchIfChain &Chain,
+                                      std::size_t ChainIndex) {
+  if (!samePayload(Graph, Guard.ComparedValue, Chain.ComparedValue)) {
+    return false;
+  }
+
+  std::size_t DefaultIndex = ChainIndex == 0 ? 1 : 0;
+  if (GuardBlock.Successors[DefaultIndex] != Chain.DefaultTarget) {
+    return false;
+  }
+
+  bool TrueOutcome = ChainIndex == Guard.TrueTargetIndex;
+  return loweredSwitchCasesFitRangeGuard(Guard, Chain, TrueOutcome);
 }
 
 std::optional<LoweredSwitchIfChain>
@@ -1963,15 +1987,14 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
 }
 
 std::optional<LoweredSwitchIfChain>
-collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
-                                        BlockId HeadId) {
-  if (!Graph.dephicationVVars().empty() ||
-      !Graph.dephicationIncomings().empty()) {
-    return std::nullopt;
-  }
-
+collectRangeGuardedLoweredSwitchIfChainFrom(const StructuredCFG &Graph,
+                                            BlockId HeadId,
+                                            std::set<BlockId> SeenGuards) {
   const CFGBlock *Head = Graph.getBlock(HeadId);
   if (Head == nullptr || !Head->Statements.empty()) {
+    return std::nullopt;
+  }
+  if (!SeenGuards.insert(HeadId).second) {
     return std::nullopt;
   }
 
@@ -1984,22 +2007,25 @@ collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
   for (std::size_t ChainIndex = 0; ChainIndex < Head->Successors.size();
        ++ChainIndex) {
     BlockId ChainHead = Head->Successors[ChainIndex];
+    if (!hasOnlyPredecessor(Graph, ChainHead, HeadId)) {
+      continue;
+    }
     std::optional<LoweredSwitchIfChain> Chain =
         collectLoweredSwitchIfChain(Graph, ChainHead,
                                     /*AllowRangeGuardedHead=*/true);
     if (!Chain.has_value()) {
-      continue;
+      // Support a conservative linear range-guard chain:
+      //   range guard -> range guard -> equality if-chain
+      // All non-chain guard edges must share the final default target.
+      Chain = collectRangeGuardedLoweredSwitchIfChainFrom(Graph, ChainHead,
+                                                          SeenGuards);
     }
-    if (!samePayload(Graph, Guard->ComparedValue, Chain->ComparedValue)) {
+    if (!Chain.has_value()) {
       continue;
     }
 
-    std::size_t DefaultIndex = ChainIndex == 0 ? 1 : 0;
-    bool TrueOutcome = ChainIndex == Guard->TrueTargetIndex;
-    if (Head->Successors[DefaultIndex] != Chain->DefaultTarget) {
-      continue;
-    }
-    if (!loweredSwitchCasesFitRangeGuard(*Guard, *Chain, TrueOutcome)) {
+    if (!loweredSwitchChainFitsRangeGuard(Graph, *Head, *Guard, *Chain,
+                                          ChainIndex)) {
       continue;
     }
 
@@ -2009,6 +2035,17 @@ collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
   }
 
   return std::nullopt;
+}
+
+std::optional<LoweredSwitchIfChain>
+collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
+                                        BlockId HeadId) {
+  if (!Graph.dephicationVVars().empty() ||
+      !Graph.dephicationIncomings().empty()) {
+    return std::nullopt;
+  }
+
+  return collectRangeGuardedLoweredSwitchIfChainFrom(Graph, HeadId, {});
 }
 
 bool rewriteLoweredSwitchIfChain(StructuredCFG &Graph,
