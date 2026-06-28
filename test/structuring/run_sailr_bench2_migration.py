@@ -114,6 +114,33 @@ default:
         "absent": ["switch (x)", "case 7:", "case 8:"],
     },
     {
+        "name": "lowered_switch_range_compare_proxy",
+        "angr_test": "test_reverting_switch_lowering_range_condition_compare",
+        "semantic": "LoweredSwitchSimplifier range-compare safety proxy",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cmp7 = icmp sgt i32 %x, 7
+  br i1 %cmp7, label %case7, label %check9
+
+case7:
+  ret i32 7
+
+check9:
+  %cmp9 = icmp sgt i32 %x, 9
+  br i1 %cmp9, label %case9, label %default
+
+case9:
+  ret i32 9
+
+default:
+  ret i32 0
+}
+""",
+        "contains": ["if (x > 7)", "if (x > 9)", "return 7;", "return 9;", "return 0;"],
+        "absent": ["switch (x)", "case 7:", "case 9:"],
+    },
+    {
         "name": "branch_return_region_proxy",
         "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
         "semantic": "ReturnDuplicatorLow branch return region proxy",
