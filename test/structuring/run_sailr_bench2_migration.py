@@ -59,6 +59,118 @@ CASES = [
         "absent": ["goto "],
     },
     {
+        "name": "branch_return_region_proxy",
+        "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
+        "semantic": "ReturnDuplicatorLow branch return region proxy",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %branch
+
+case2:
+  br label %branch
+
+default:
+  ret i32 0
+
+branch:
+  %cond = icmp eq i32 %a, %b
+  br i1 %cond, label %then, label %else
+
+then:
+  ret i32 7
+
+else:
+  ret i32 8
+}
+""",
+        "contains": [
+            "switch (x)",
+            "case 1:",
+            "case 2:",
+            "if (a == b)",
+            "return 7;",
+            "return 8;",
+        ],
+        "absent": ["goto branch", "goto then", "goto else", "phi", "reg2mem"],
+        "counts": {"return 7;": 2, "return 8;": 2},
+    },
+    {
+        "name": "copied_return_tail_dephication_proxy",
+        "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
+        "semantic": "ReturnDuplicatorLow copied Phi/vvar payload proxy",
+        "args": ["--sailr-dephication-mode=angr"],
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %shared_tail
+
+case2:
+  br label %shared_tail
+
+default:
+  ret i32 0
+
+shared_tail:
+  %p = phi i32 [ %a, %case1 ], [ %b, %case2 ]
+  %r = add i32 %p, 1
+  br label %shared_ret
+
+shared_ret:
+  ret i32 %r
+}
+""",
+        "contains": [
+            "int p_copy",
+            "p_copy1 = a;",
+            "r = p_copy1 + 1;",
+            "p = b;",
+            "r = p + 1;",
+            "return r;",
+        ],
+        "absent": ["phi", "reg2mem", "p_reg2mem"],
+        "counts": {"return r;": 2},
+    },
+    {
+        "name": "lowered_switch_default_cycle_regression",
+        "angr_test": "test_megatest_arm64_freebsd",
+        "semantic": "LoweredSwitchSimplifier default-cycle safety proxy",
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cmp7 = icmp eq i32 %x, 7
+  br i1 %cmp7, label %case7, label %check9
+
+case7:
+  ret i32 7
+
+check9:
+  %cmp9 = icmp eq i32 %x, 9
+  br i1 %cmp9, label %case9, label %default
+
+case9:
+  ret i32 9
+
+default:
+  br label %check9
+}
+""",
+        "contains": ["return 7;", "return 9;"],
+        "absent": ["switch (x)", "case 7:", "case 9:"],
+    },
+    {
         "name": "condensing_real_lighttpd",
         "angr_test": "test_who_condensing_opt_reversion",
         "semantic": "CrossJumpReverter / real condensing sample",
@@ -88,7 +200,7 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
             str(input_path),
             "-o",
             str(output_path),
-        ],
+        ] + case.get("args", []),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -107,6 +219,12 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     for needle in case.get("absent", []):
         if needle in output:
             failures.append(f"{header}: unexpected {needle!r}")
+    for needle, expected in case.get("counts", {}).items():
+        actual = output.count(needle)
+        if actual != expected:
+            failures.append(
+                f"{header}: expected {expected} x {needle!r}, got {actual}"
+            )
     return failures
 
 

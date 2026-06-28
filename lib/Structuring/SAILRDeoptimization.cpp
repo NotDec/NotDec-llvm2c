@@ -1861,7 +1861,8 @@ bool loweredSwitchChainFitsRangeGuard(const StructuredCFG &Graph,
   }
 
   std::size_t DefaultIndex = ChainIndex == 0 ? 1 : 0;
-  if (GuardBlock.Successors[DefaultIndex] != Chain.DefaultTarget) {
+  if (!sameBlockReference(Graph, GuardBlock.Successors[DefaultIndex],
+                          Chain.DefaultTarget)) {
     return false;
   }
 
@@ -1930,6 +1931,16 @@ bool loweredSwitchTargetOnlyReachedFromChain(const StructuredCFG &Graph,
         PredBlock->SyntheticTarget == Target &&
         Chain.count(PredBlock->SyntheticSource) != 0;
     if (Pred != Target && Chain.count(Pred) == 0 && !SyntheticChainEdge) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool blockOnlyReachedFrom(const StructuredCFG &Graph, BlockId Target,
+                          const std::set<BlockId> &AllowedPreds) {
+  for (BlockId Pred : predecessorsOf(Graph, Target)) {
+    if (Pred != Target && AllowedPreds.count(Pred) == 0) {
       return false;
     }
   }
@@ -2223,6 +2234,18 @@ collectRangeGuardedLoweredSwitchIfChainFrom(const StructuredCFG &Graph,
       continue;
     }
 
+    std::size_t DefaultIndex = ChainIndex == 0 ? 1 : 0;
+    BlockId GuardDefault = Head->Successors[DefaultIndex];
+    if (GuardDefault != Chain->DefaultTarget) {
+      std::set<BlockId> RemovedBlocks = {HeadId};
+      RemovedBlocks.insert(Chain->RemovedBlocks.begin(),
+                           Chain->RemovedBlocks.end());
+      if (!blockOnlyReachedFrom(Graph, Chain->DefaultTarget, RemovedBlocks)) {
+        continue;
+      }
+      Chain->RemovedBlocks.push_back(Chain->DefaultTarget);
+      Chain->DefaultTarget = GuardDefault;
+    }
     Chain->Head = HeadId;
     Chain->RemovedBlocks.insert(Chain->RemovedBlocks.begin(), ChainHead);
     return Chain;
