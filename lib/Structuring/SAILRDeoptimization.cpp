@@ -1870,6 +1870,66 @@ bool loweredSwitchChainFitsRangeGuard(const StructuredCFG &Graph,
   return loweredSwitchCasesFitRangeGuard(Guard, Chain, TrueOutcome);
 }
 
+bool loweredSwitchCaseValuesAreDisjoint(const StructuredCFG &Graph,
+                                        const LoweredSwitchIfChain &Lhs,
+                                        const LoweredSwitchIfChain &Rhs) {
+  std::set<std::uint64_t> IntegerValues;
+  std::set<PayloadId> PayloadValues;
+
+  auto AddCase = [&](const LoweredSwitchIfCase &Case) {
+    if (Case.Compare.has_value() && Case.Compare->HasIntegerValue) {
+      return IntegerValues.insert(Case.Compare->UnsignedIntegerValue).second;
+    }
+    return PayloadValues.insert(Graph.payloadOrigin(Case.Value.Id)).second;
+  };
+
+  for (const LoweredSwitchIfCase &Case : Lhs.Cases) {
+    if (!AddCase(Case)) {
+      return false;
+    }
+  }
+  for (const LoweredSwitchIfCase &Case : Rhs.Cases) {
+    if (!AddCase(Case)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Conservative subset of Angr's range-tree lowered switch recovery:
+// both sides of one range guard must already be valid equality chains, share
+// one exact default target, and contain only cases allowed by the guard side.
+bool mergeRangeTreeLoweredSwitchIfChains(const StructuredCFG &Graph,
+                                         const CFGBlock &GuardBlock,
+                                         const ConditionCompare &Guard,
+                                         LoweredSwitchIfChain &First,
+                                         LoweredSwitchIfChain &Second) {
+  if (!samePayload(Graph, Guard.ComparedValue, First.ComparedValue) ||
+      !samePayload(Graph, Guard.ComparedValue, Second.ComparedValue) ||
+      First.DefaultTarget != Second.DefaultTarget ||
+      !loweredSwitchCaseValuesAreDisjoint(Graph, First, Second)) {
+    return false;
+  }
+
+  for (std::size_t I = 0; I < GuardBlock.Successors.size(); ++I) {
+    const LoweredSwitchIfChain &Chain = I == 0 ? First : Second;
+    bool TrueOutcome = I == Guard.TrueTargetIndex;
+    if (!loweredSwitchCasesFitRangeGuard(Guard, Chain, TrueOutcome)) {
+      return false;
+    }
+  }
+
+  First.Cases.insert(First.Cases.end(), Second.Cases.begin(),
+                     Second.Cases.end());
+  First.RemovedBlocks.insert(First.RemovedBlocks.end(),
+                             Second.RemovedBlocks.begin(),
+                             Second.RemovedBlocks.end());
+  First.RemovedBlocks.push_back(First.Head);
+  First.RemovedBlocks.push_back(Second.Head);
+  First.Head = GuardBlock.Id;
+  return true;
+}
+
 bool rangeGuardCoversChainCases(const StructuredCFG &Graph,
                                 const CFGBlock &GuardBlock,
                                 const LoweredSwitchIfChain &Chain) {
@@ -2218,6 +2278,8 @@ collectRangeGuardedLoweredSwitchIfChainFrom(const StructuredCFG &Graph,
     return std::nullopt;
   }
 
+  std::optional<LoweredSwitchIfChain> BranchChains[2];
+
   for (std::size_t ChainIndex = 0; ChainIndex < Head->Successors.size();
        ++ChainIndex) {
     BlockId ChainHead = Head->Successors[ChainIndex];
@@ -2237,6 +2299,8 @@ collectRangeGuardedLoweredSwitchIfChainFrom(const StructuredCFG &Graph,
     if (!Chain.has_value()) {
       continue;
     }
+
+    BranchChains[ChainIndex] = Chain;
 
     if (!loweredSwitchChainFitsRangeGuard(Graph, *Head, *Guard, *Chain,
                                           ChainIndex)) {
@@ -2258,6 +2322,13 @@ collectRangeGuardedLoweredSwitchIfChainFrom(const StructuredCFG &Graph,
     Chain->Head = HeadId;
     Chain->RemovedBlocks.insert(Chain->RemovedBlocks.begin(), ChainHead);
     return Chain;
+  }
+
+  if (BranchChains[0].has_value() && BranchChains[1].has_value() &&
+      mergeRangeTreeLoweredSwitchIfChains(Graph, *Head, *Guard,
+                                          *BranchChains[0],
+                                          *BranchChains[1])) {
+    return BranchChains[0];
   }
 
   return std::nullopt;

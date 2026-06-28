@@ -171,6 +171,129 @@ default:
         "absent": ["switch (x)", "case 7:", "case 9:"],
     },
     {
+        "name": "switch_shared_default_proxy",
+        "angr_test": "test_switch_case_header_mismatch_caused_by_cmovs",
+        "semantic": "SwitchDefaultCaseDuplicator shared default proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+declare void @d()
+declare void @e()
+
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  %choose = icmp eq i32 %y, 0
+  br i1 %choose, label %sw0, label %sw1
+
+sw0:
+  switch i32 %x, label %shared_default [
+    i32 1, label %case1
+    i32 3, label %case3
+  ]
+
+sw1:
+  switch i32 %x, label %shared_default [
+    i32 2, label %case2
+    i32 4, label %case4
+  ]
+
+case1:
+  call void @a()
+  ret i32 1
+
+case2:
+  call void @b()
+  ret i32 2
+
+case3:
+  call void @d()
+  ret i32 3
+
+case4:
+  call void @e()
+  ret i32 4
+
+shared_default:
+  call void @c()
+  ret i32 0
+}
+""",
+        "contains": [
+            "switch (x)",
+            "case 1:",
+            "case 2:",
+            "case 3:",
+            "case 4:",
+            "default:",
+            "goto structured_block_",
+            "c();",
+            "return 0;",
+        ],
+        "counts": {"switch (x)": 2},
+    },
+    {
+        "name": "switch_reused_entry_proxy",
+        "angr_test": "test_decompiling_reused_entries_between_switch_cases",
+        "semantic": "SwitchReusedEntryRewriter reused case entry proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+declare void @d()
+declare void @e()
+
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  %choose = icmp eq i32 %y, 0
+  br i1 %choose, label %sw0, label %sw1
+
+sw0:
+  switch i32 %x, label %default0 [
+    i32 1, label %shared_case
+    i32 3, label %case3
+  ]
+
+sw1:
+  switch i32 %x, label %default1 [
+    i32 2, label %shared_case
+    i32 4, label %case4
+  ]
+
+default0:
+  call void @a()
+  ret i32 0
+
+default1:
+  call void @b()
+  ret i32 10
+
+shared_case:
+  call void @c()
+  ret i32 20
+
+case3:
+  call void @d()
+  ret i32 3
+
+case4:
+  call void @e()
+  ret i32 4
+}
+""",
+        "contains": [
+            "switch (x)",
+            "case 1:",
+            "case 2:",
+            "case 3:",
+            "case 4:",
+            "goto structured_block_",
+            "c();",
+            "return 20;",
+        ],
+        "counts": {"switch (x)": 2, "return 20;": 1},
+    },
+    {
         "name": "condensing_real_lighttpd",
         "angr_test": "test_who_condensing_opt_reversion",
         "semantic": "CrossJumpReverter / real condensing sample",
