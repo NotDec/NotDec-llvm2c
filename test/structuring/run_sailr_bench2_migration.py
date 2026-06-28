@@ -359,6 +359,50 @@ shared_ret:
         "counts": {"return r;": 2},
     },
     {
+        "name": "copied_return_tail_multi_vvar_proxy",
+        "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
+        "semantic": "ReturnDuplicatorLow copied multi-vvar payload proxy",
+        "args": ["--sailr-dephication-mode=angr"],
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b, i32 %c, i32 %d) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %shared_tail
+
+case2:
+  br label %shared_tail
+
+default:
+  ret i32 0
+
+shared_tail:
+  %p = phi i32 [ %a, %case1 ], [ %b, %case2 ]
+  %q = phi i32 [ %c, %case1 ], [ %d, %case2 ]
+  %s = add i32 %p, %q
+  br label %shared_ret
+
+shared_ret:
+  ret i32 %s
+}
+""",
+        "contains": [
+            "int p_copy",
+            "int q_copy",
+            " = a;",
+            " = c;",
+            "p = b;",
+            "q = d;",
+            "return s;",
+        ],
+        "absent": ["phi", "reg2mem", "p_reg2mem", "q_reg2mem"],
+        "counts": {"return s;": 2},
+    },
+    {
         "name": "lowered_switch_default_cycle_regression",
         "angr_test": "test_megatest_arm64_freebsd",
         "semantic": "LoweredSwitchSimplifier default-cycle safety proxy",
