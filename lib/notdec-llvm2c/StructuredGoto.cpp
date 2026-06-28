@@ -129,8 +129,9 @@ class StructuredGotoAdapter {
   std::map<clang::ValueDecl *, st::PayloadRef> ConditionDeclPayloads;
   std::map<std::string, st::PayloadRef> ConditionIntegerPayloads;
   // RetDupPass can clone one default return into two AST nodes; keep the
-  // payloads separate for rendering, but share origin for literal return value.
-  std::map<std::string, st::PayloadRef> SimpleReturnPayloads;
+  // payloads separate for rendering, but share origin for simple return values.
+  std::map<clang::ValueDecl *, st::PayloadRef> SimpleReturnDeclPayloads;
+  std::map<std::string, st::PayloadRef> SimpleReturnIntegerPayloads;
   std::set<st::BlockId> TargetedLabels;
 
 public:
@@ -178,20 +179,33 @@ private:
       return;
     }
 
-    auto *Literal =
-        llvm::dyn_cast_or_null<clang::IntegerLiteral>(getNoCast(Value));
-    if (Literal == nullptr) {
+    clang::Expr *NoCastValue = getNoCast(Value);
+    if (auto *Literal =
+            llvm::dyn_cast_or_null<clang::IntegerLiteral>(NoCastValue)) {
+      std::string Key = llvm::toString(Literal->getValue(), 10,
+                                       /*isSigned=*/false);
+      auto It = SimpleReturnIntegerPayloads.find(Key);
+      if (It == SimpleReturnIntegerPayloads.end()) {
+        SimpleReturnIntegerPayloads.emplace(std::move(Key), Payload);
+        return;
+      }
+
+      Cfg.setPayloadOrigin(Payload.Id, It->second.Id);
       return;
     }
 
-    std::string Key = llvm::toString(Literal->getValue(), 10,
-                                    /*isSigned=*/false);
-    auto It = SimpleReturnPayloads.find(Key);
-    if (It == SimpleReturnPayloads.end()) {
-      SimpleReturnPayloads.emplace(std::move(Key), Payload);
+    auto *DeclRef =
+        llvm::dyn_cast_or_null<clang::DeclRefExpr>(NoCastValue);
+    if (DeclRef == nullptr || DeclRef->getDecl() == nullptr) {
       return;
     }
 
+    clang::ValueDecl *Decl = DeclRef->getDecl();
+    auto It = SimpleReturnDeclPayloads.find(Decl);
+    if (It == SimpleReturnDeclPayloads.end()) {
+      SimpleReturnDeclPayloads.emplace(Decl, Payload);
+      return;
+    }
     Cfg.setPayloadOrigin(Payload.Id, It->second.Id);
   }
 
