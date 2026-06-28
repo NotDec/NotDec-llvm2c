@@ -176,6 +176,7 @@ struct LinearRegion {
 // payload text.
 struct LoweredSwitchIfCase {
   PayloadRef Value;
+  std::optional<ConditionCompare> Compare;
   BlockId Target = InvalidBlockId;
 };
 
@@ -1738,6 +1739,35 @@ matchedConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
   return Compare;
 }
 
+std::optional<ConditionCompare>
+matchedRangeConditionCompare(const StructuredCFG &Graph, const CFGBlock &Block,
+                             PayloadRef ComparedValue) {
+  if (Block.Terminator != TerminatorKind::Branch ||
+      Block.Successors.size() != 2) {
+    return std::nullopt;
+  }
+
+  std::optional<ConditionCompare> Compare =
+      Graph.conditionCompare(Block.Condition);
+  if (!Compare.has_value()) {
+    return std::nullopt;
+  }
+  if (Compare->Kind != ConditionCompareKind::GreaterThan &&
+      Compare->Kind != ConditionCompareKind::GreaterEqual &&
+      Compare->Kind != ConditionCompareKind::LessThan &&
+      Compare->Kind != ConditionCompareKind::LessEqual) {
+    return std::nullopt;
+  }
+  if (Compare->TrueTargetIndex >= Block.Successors.size()) {
+    return std::nullopt;
+  }
+  if (ComparedValue.isValid() &&
+      !samePayload(Graph, Compare->ComparedValue, ComparedValue)) {
+    return std::nullopt;
+  }
+  return Compare;
+}
+
 bool canConsumeLoweredSwitchIfNode(const StructuredCFG &Graph,
                                    BlockId Node, BlockId ExpectedPred,
                                    PayloadRef ComparedValue) {
@@ -1751,8 +1781,100 @@ bool canConsumeLoweredSwitchIfNode(const StructuredCFG &Graph,
   return Preds.size() == 1 && Preds.front() == ExpectedPred;
 }
 
+bool rangeConditionContainsCaseValue(const ConditionCompare &Range,
+                                     const ConditionCompare &Case,
+                                     bool TrueOutcome) {
+  if (!Range.HasIntegerValue || !Case.HasIntegerValue) {
+    return false;
+  }
+
+  bool Result = false;
+  if (Range.SignedPredicate) {
+    switch (Range.Kind) {
+    case ConditionCompareKind::GreaterThan:
+      Result = Case.SignedIntegerValue > Range.SignedIntegerValue;
+      break;
+    case ConditionCompareKind::GreaterEqual:
+      Result = Case.SignedIntegerValue >= Range.SignedIntegerValue;
+      break;
+    case ConditionCompareKind::LessThan:
+      Result = Case.SignedIntegerValue < Range.SignedIntegerValue;
+      break;
+    case ConditionCompareKind::LessEqual:
+      Result = Case.SignedIntegerValue <= Range.SignedIntegerValue;
+      break;
+    default:
+      return false;
+    }
+  } else {
+    switch (Range.Kind) {
+    case ConditionCompareKind::GreaterThan:
+      Result = Case.UnsignedIntegerValue > Range.UnsignedIntegerValue;
+      break;
+    case ConditionCompareKind::GreaterEqual:
+      Result = Case.UnsignedIntegerValue >= Range.UnsignedIntegerValue;
+      break;
+    case ConditionCompareKind::LessThan:
+      Result = Case.UnsignedIntegerValue < Range.UnsignedIntegerValue;
+      break;
+    case ConditionCompareKind::LessEqual:
+      Result = Case.UnsignedIntegerValue <= Range.UnsignedIntegerValue;
+      break;
+    default:
+      return false;
+    }
+  }
+
+  return TrueOutcome ? Result : !Result;
+}
+
+bool loweredSwitchCasesFitRangeGuard(const ConditionCompare &Range,
+                                     const LoweredSwitchIfChain &Chain,
+                                     bool TrueOutcome) {
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    if (!Case.Compare.has_value() ||
+        !rangeConditionContainsCaseValue(Range, *Case.Compare, TrueOutcome)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool loweredSwitchIfChainHasRangeGuard(const StructuredCFG &Graph,
+                                       const LoweredSwitchIfChain &Chain) {
+  for (BlockId PredId : predecessorsOf(Graph, Chain.Head)) {
+    const CFGBlock *Pred = Graph.getBlock(PredId);
+    if (Pred == nullptr || Pred->Successors.size() != 2) {
+      continue;
+    }
+    std::optional<ConditionCompare> Guard =
+        matchedRangeConditionCompare(Graph, *Pred, Chain.ComparedValue);
+    if (!Guard.has_value()) {
+      continue;
+    }
+
+    std::optional<std::size_t> ChainIndex;
+    for (std::size_t I = 0; I < Pred->Successors.size(); ++I) {
+      if (Pred->Successors[I] == Chain.Head) {
+        ChainIndex = I;
+        break;
+      }
+    }
+    if (!ChainIndex.has_value()) {
+      continue;
+    }
+
+    std::size_t DefaultIndex = *ChainIndex == 0 ? 1 : 0;
+    if (Pred->Successors[DefaultIndex] == Chain.DefaultTarget) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::optional<LoweredSwitchIfChain>
-collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
+collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
+                            bool AllowRangeGuardedHead = false) {
   if (!Graph.dephicationVVars().empty() ||
       !Graph.dephicationIncomings().empty()) {
     return std::nullopt;
@@ -1797,7 +1919,7 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
     if (ChainBlocks.count(CaseTarget) != 0) {
       return std::nullopt;
     }
-    Chain.Cases.push_back({Compare->ConstantValue, CaseTarget});
+    Chain.Cases.push_back({Compare->ConstantValue, Compare, CaseTarget});
     PayloadId CaseValueOrigin = Graph.payloadOrigin(Compare->ConstantValue.Id);
     if (!CaseValues.insert(CaseValueOrigin).second) {
       return std::nullopt;
@@ -1833,7 +1955,60 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId) {
       return std::nullopt;
     }
   }
+  if (!AllowRangeGuardedHead &&
+      loweredSwitchIfChainHasRangeGuard(Graph, Chain)) {
+    return std::nullopt;
+  }
   return Chain;
+}
+
+std::optional<LoweredSwitchIfChain>
+collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
+                                        BlockId HeadId) {
+  if (!Graph.dephicationVVars().empty() ||
+      !Graph.dephicationIncomings().empty()) {
+    return std::nullopt;
+  }
+
+  const CFGBlock *Head = Graph.getBlock(HeadId);
+  if (Head == nullptr || !Head->Statements.empty()) {
+    return std::nullopt;
+  }
+
+  std::optional<ConditionCompare> Guard =
+      matchedRangeConditionCompare(Graph, *Head, {});
+  if (!Guard.has_value()) {
+    return std::nullopt;
+  }
+
+  for (std::size_t ChainIndex = 0; ChainIndex < Head->Successors.size();
+       ++ChainIndex) {
+    BlockId ChainHead = Head->Successors[ChainIndex];
+    std::optional<LoweredSwitchIfChain> Chain =
+        collectLoweredSwitchIfChain(Graph, ChainHead,
+                                    /*AllowRangeGuardedHead=*/true);
+    if (!Chain.has_value()) {
+      continue;
+    }
+    if (!samePayload(Graph, Guard->ComparedValue, Chain->ComparedValue)) {
+      continue;
+    }
+
+    std::size_t DefaultIndex = ChainIndex == 0 ? 1 : 0;
+    bool TrueOutcome = ChainIndex == Guard->TrueTargetIndex;
+    if (Head->Successors[DefaultIndex] != Chain->DefaultTarget) {
+      continue;
+    }
+    if (!loweredSwitchCasesFitRangeGuard(*Guard, *Chain, TrueOutcome)) {
+      continue;
+    }
+
+    Chain->Head = HeadId;
+    Chain->RemovedBlocks.insert(Chain->RemovedBlocks.begin(), ChainHead);
+    return Chain;
+  }
+
+  return std::nullopt;
 }
 
 bool rewriteLoweredSwitchIfChain(StructuredCFG &Graph,
@@ -2577,7 +2752,10 @@ bool LoweredSwitchSimplifier::runOnGraph(
 
   for (BlockId BranchId : BranchIds) {
     std::optional<LoweredSwitchIfChain> Chain =
-        collectLoweredSwitchIfChain(Graph, BranchId);
+        collectRangeGuardedLoweredSwitchIfChain(Graph, BranchId);
+    if (!Chain.has_value()) {
+      Chain = collectLoweredSwitchIfChain(Graph, BranchId);
+    }
     if (!Chain.has_value()) {
       continue;
     }

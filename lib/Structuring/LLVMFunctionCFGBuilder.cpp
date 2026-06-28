@@ -104,6 +104,18 @@ ConditionCompareKind swappedConditionCompareKind(ConditionCompareKind Kind) {
   return Kind;
 }
 
+bool isSignedICmp(llvm::CmpInst::Predicate Predicate) {
+  switch (Predicate) {
+  case llvm::CmpInst::ICMP_SGT:
+  case llvm::CmpInst::ICMP_SGE:
+  case llvm::CmpInst::ICMP_SLT:
+  case llvm::CmpInst::ICMP_SLE:
+    return true;
+  default:
+    return false;
+  }
+}
+
 std::optional<ConditionCompare>
 conditionCompareFromICmp(const llvm::Value &V,
                          LLVMFunctionCFGBuilder::PayloadProvider &Provider,
@@ -132,6 +144,7 @@ conditionCompareFromICmp(const llvm::Value &V,
     return std::nullopt;
   }
 
+  bool HasIntegerValue = Constant->getBitWidth() <= 64;
   // LLVM's BasicBlock successor iteration currently matches the existing
   // shared-CFG convention used by this builder: index 1 is the condition-true
   // edge. Keep that local here so range metadata follows the same convention as
@@ -140,6 +153,10 @@ conditionCompareFromICmp(const llvm::Value &V,
   return ConditionCompare{
       .ComparedValue = cachedCondition(Provider, Cache, *Compared, "switch"),
       .ConstantValue = cachedSwitchCase(Provider, Cache, *Constant),
+      .HasIntegerValue = HasIntegerValue,
+      .SignedPredicate = isSignedICmp(ICmp->getPredicate()),
+      .SignedIntegerValue = HasIntegerValue ? Constant->getSExtValue() : 0,
+      .UnsignedIntegerValue = HasIntegerValue ? Constant->getZExtValue() : 0,
       .TrueTargetIndex = TrueTargetIndex,
       .EqualTargetIndex = Kind == ConditionCompareKind::NotEqual
                               ? std::size_t{0}

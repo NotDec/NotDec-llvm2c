@@ -276,6 +276,10 @@ private:
     return st::ConditionCompare{
         .ComparedValue = addConditionComparedPayload(Compared),
         .ConstantValue = addConditionIntegerPayload(Constant),
+        .HasIntegerValue = true,
+        .SignedPredicate = true,
+        .SignedIntegerValue = Constant->getValue().getSExtValue(),
+        .UnsignedIntegerValue = Constant->getValue().getZExtValue(),
         .TrueTargetIndex = TrueTargetIndex,
         .EqualTargetIndex = Kind == st::ConditionCompareKind::NotEqual
                                 ? std::size_t{1}

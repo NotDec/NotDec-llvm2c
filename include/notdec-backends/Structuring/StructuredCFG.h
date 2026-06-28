@@ -103,6 +103,13 @@ enum class ConditionCompareKind {
 struct ConditionCompare {
   PayloadRef ComparedValue;
   PayloadRef ConstantValue;
+  // Numeric value of ConstantValue for passes that need ordering semantics.
+  // PayloadRef stays the renderer-facing identity; these fields are only for
+  // shared CFG analysis.
+  bool HasIntegerValue = false;
+  bool SignedPredicate = false;
+  std::int64_t SignedIntegerValue = 0;
+  std::uint64_t UnsignedIntegerValue = 0;
   // Index of the branch successor reached when the comparison is true.
   std::size_t TrueTargetIndex = 0;
   // Index of the branch successor that represents the "equal" outcome.

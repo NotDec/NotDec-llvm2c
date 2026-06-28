@@ -1819,6 +1819,10 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   llvm::BasicBlock *Gt = llvm::BasicBlock::Create(Context, "gt", F);
   llvm::BasicBlock *Check = llvm::BasicBlock::Create(Context, "check", F);
   llvm::BasicBlock *Ge = llvm::BasicBlock::Create(Context, "ge", F);
+  llvm::BasicBlock *UnsignedCheck =
+      llvm::BasicBlock::Create(Context, "unsigned_check", F);
+  llvm::BasicBlock *UnsignedCase =
+      llvm::BasicBlock::Create(Context, "unsigned_case", F);
   llvm::BasicBlock *Else = llvm::BasicBlock::Create(Context, "else", F);
 
   llvm::IRBuilder<> Builder(Entry);
@@ -1830,9 +1834,15 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   Builder.SetInsertPoint(Check);
   llvm::Value *CmpGe =
       Builder.CreateICmpSLE(llvm::ConstantInt::get(I32Ty, 7), X, "cmp_ge");
-  Builder.CreateCondBr(CmpGe, Ge, Else);
+  Builder.CreateCondBr(CmpGe, Ge, UnsignedCheck);
   Builder.SetInsertPoint(Ge);
   Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 2));
+  Builder.SetInsertPoint(UnsignedCheck);
+  llvm::Value *CmpUgt =
+      Builder.CreateICmpUGT(X, llvm::ConstantInt::get(I32Ty, 250), "cmp_ugt");
+  Builder.CreateCondBr(CmpUgt, UnsignedCase, Else);
+  Builder.SetInsertPoint(UnsignedCase);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 3));
   Builder.SetInsertPoint(Else);
   Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
 
@@ -1852,6 +1862,10 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   assert(Compare->EqualTargetIndex == 1);
   assert(Payloads[Compare->ComparedValue.Id] == "x");
   assert(Payloads[Compare->ConstantValue.Id] == "7");
+  assert(Compare->HasIntegerValue);
+  assert(Compare->SignedPredicate);
+  assert(Compare->SignedIntegerValue == 7);
+  assert(Compare->UnsignedIntegerValue == 7);
 
   Compare = Cfg.conditionCompare(CheckBlock->Condition);
   assert(Compare.has_value());
@@ -1860,6 +1874,24 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   assert(Compare->EqualTargetIndex == 1);
   assert(Payloads[Compare->ComparedValue.Id] == "x");
   assert(Payloads[Compare->ConstantValue.Id] == "7");
+  assert(Compare->HasIntegerValue);
+  assert(Compare->SignedPredicate);
+  assert(Compare->SignedIntegerValue == 7);
+  assert(Compare->UnsignedIntegerValue == 7);
+
+  const CFGBlock *UnsignedBlock = Cfg.getBlock(4);
+  assert(UnsignedBlock != nullptr);
+  Compare = Cfg.conditionCompare(UnsignedBlock->Condition);
+  assert(Compare.has_value());
+  assert(Compare->Kind == ConditionCompareKind::GreaterThan);
+  assert(Compare->TrueTargetIndex == 1);
+  assert(Compare->EqualTargetIndex == 1);
+  assert(Payloads[Compare->ComparedValue.Id] == "x");
+  assert(Payloads[Compare->ConstantValue.Id] == "250");
+  assert(Compare->HasIntegerValue);
+  assert(!Compare->SignedPredicate);
+  assert(Compare->SignedIntegerValue == 250);
+  assert(Compare->UnsignedIntegerValue == 250);
 }
 
 void testSolidityBodyBuilderReadsSharedPhiAssignments() {
@@ -9981,6 +10013,68 @@ void testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain() {
   assert(Switch->Cases[1].Target == 4);
 }
 
+void testLoweredSwitchSimplifierBuildsSwitchFromRangeGuardedIfChain() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-range-guard-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Check7 = llvm::BasicBlock::Create(Context, "check7", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Check9 = llvm::BasicBlock::Create(Context, "check9", F);
+  llvm::BasicBlock *Case9 = llvm::BasicBlock::Create(Context, "case9", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Guard =
+      Builder.CreateICmpSLE(X, llvm::ConstantInt::get(I32Ty, 9), "guard");
+  Builder.CreateCondBr(Guard, Check7, Default);
+  Builder.SetInsertPoint(Check7);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Check9);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Check9);
+  llvm::Value *Cmp9 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 9), "cmp9");
+  Builder.CreateCondBr(Cmp9, Case9, Default);
+  Builder.SetInsertPoint(Case9);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 9));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(1) == nullptr);
+  assert(Cfg.getBlock(3) == nullptr);
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Terminator == TerminatorKind::Switch);
+  assert(Payloads[Switch->Condition.Id] == "x");
+  assert(Switch->Successors == std::vector<BlockId>({5, 2, 4}));
+  assert(Switch->Cases.size() == 2);
+  assert(Payloads[Switch->Cases[0].Value.Id] == "7");
+  assert(Switch->Cases[0].Target == 2);
+  assert(Payloads[Switch->Cases[1].Value.Id] == "9");
+  assert(Switch->Cases[1].Target == 4);
+}
+
 void testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue() {
   StructuredCFG Cfg;
 
@@ -10076,6 +10170,60 @@ void testLoweredSwitchSimplifierSkipsRangeConditionCompare() {
   assert(Cfg.getBlock(2) != nullptr);
   assert(Cfg.getBlock(3) != nullptr);
   assert(Cfg.getBlock(4) != nullptr);
+}
+
+void testLoweredSwitchSimplifierSkipsRangeGuardWithOutsideCase() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("lowered-switch-range-guard-skip-test", Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy =
+      llvm::FunctionType::get(I32Ty, {I32Ty}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+  llvm::Argument *X = F->getArg(0);
+  X->setName("x");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Check7 = llvm::BasicBlock::Create(Context, "check7", F);
+  llvm::BasicBlock *Case7 = llvm::BasicBlock::Create(Context, "case7", F);
+  llvm::BasicBlock *Check9 = llvm::BasicBlock::Create(Context, "check9", F);
+  llvm::BasicBlock *Case9 = llvm::BasicBlock::Create(Context, "case9", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Guard =
+      Builder.CreateICmpSLE(X, llvm::ConstantInt::get(I32Ty, 8), "guard");
+  Builder.CreateCondBr(Guard, Check7, Default);
+  Builder.SetInsertPoint(Check7);
+  llvm::Value *Cmp7 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 7), "cmp7");
+  Builder.CreateCondBr(Cmp7, Case7, Check9);
+  Builder.SetInsertPoint(Case7);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+  Builder.SetInsertPoint(Check9);
+  llvm::Value *Cmp9 =
+      Builder.CreateICmpEQ(X, llvm::ConstantInt::get(I32Ty, 9), "cmp9");
+  Builder.CreateCondBr(Cmp9, Case9, Default);
+  Builder.SetInsertPoint(Case9);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 9));
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *GuardBlock = Cfg.getBlock(0);
+  assert(GuardBlock != nullptr);
+  assert(GuardBlock->Terminator == TerminatorKind::Branch);
+  assert(Cfg.getBlock(1) != nullptr);
+  assert(Cfg.getBlock(3) != nullptr);
 }
 
 void testControlFlowStructureCounterCollectsSharedQuality() {
@@ -13103,8 +13251,10 @@ int main() {
   testLoweredSwitchSimplifierKeepsNestedSwitchSharedShape();
   testLoweredSwitchSimplifierBuildsSwitchFromIfChain();
   testLoweredSwitchSimplifierBuildsSwitchFromNotEqualIfChain();
+  testLoweredSwitchSimplifierBuildsSwitchFromRangeGuardedIfChain();
   testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue();
   testLoweredSwitchSimplifierSkipsRangeConditionCompare();
+  testLoweredSwitchSimplifierSkipsRangeGuardWithOutsideCase();
   testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock();
   testSwitchDefaultCaseDuplicatorInsertsSharedDefaultGotosByDefault();
   testSwitchDefaultCaseDuplicatorCanUseSharedDefaultForwarders();
