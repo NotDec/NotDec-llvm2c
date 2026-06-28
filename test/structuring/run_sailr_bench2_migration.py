@@ -357,6 +357,44 @@ else:
         "counts": {"return 7;": 2, "return 8;": 2},
     },
     {
+        "name": "terminal_fork_return_region_proxy",
+        "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
+        "semantic": "ReturnDuplicatorLow terminal fork return region proxy",
+        "expected_failure": "P2 ReturnDuplicatorLow has pass-level terminal fork support, but the default pipeline still leaves a shared fork goto for this shape",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %fork
+
+case2:
+  br label %fork
+
+default:
+  ret i32 0
+
+fork:
+  %cond = icmp eq i32 %a, %b
+  br i1 %cond, label %ret, label %trap
+
+ret:
+  ret i32 7
+
+trap:
+  unreachable
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "if (a == b)",
+                     "return 7;", "return 0;"],
+        "absent": ["goto fork", "goto ret", "goto trap", "phi", "reg2mem"],
+        "counts": {"return 7;": 2},
+    },
+    {
         "name": "copied_return_tail_dephication_proxy",
         "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
         "semantic": "ReturnDuplicatorLow copied Phi/vvar payload proxy",
