@@ -141,6 +141,62 @@ default:
         "absent": ["switch (x)", "case 7:", "case 9:"],
     },
     {
+        "name": "lowered_switch_range_tree_output_gap",
+        "angr_test": "test_reverting_switch_lowering_range_tree",
+        "semantic": "LoweredSwitchSimplifier range-tree output gap",
+        "expected_failure": (
+            "shared-CFG range-tree regression passes, but notdec-llvm2c output "
+            "still keeps the nested if tree"
+        ),
+        "ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %guard = icmp sle i32 %x, 9
+  br i1 %guard, label %low_check7, label %high_check11
+
+low_check7:
+  %cmp7 = icmp eq i32 %x, 7
+  br i1 %cmp7, label %case7, label %low_check9
+
+low_check9:
+  %cmp9 = icmp eq i32 %x, 9
+  br i1 %cmp9, label %case9, label %default
+
+high_check11:
+  %cmp11 = icmp eq i32 %x, 11
+  br i1 %cmp11, label %case11, label %high_check13
+
+high_check13:
+  %cmp13 = icmp eq i32 %x, 13
+  br i1 %cmp13, label %case13, label %default
+
+case7:
+  ret i32 7
+
+case9:
+  ret i32 9
+
+case11:
+  ret i32 11
+
+case13:
+  ret i32 13
+
+default:
+  ret i32 0
+}
+""",
+        "contains": [
+            "switch (x)",
+            "case 7:",
+            "case 9:",
+            "case 11:",
+            "case 13:",
+            "default:",
+        ],
+        "absent": ["if (x <= 9)", "if (x == 7)", "if (x == 11)"],
+    },
+    {
         "name": "fmt_deduplication_proxy",
         "angr_test": "test_fmt_deduplication",
         "semantic": "DuplicationReverter duplicated call proxy",
@@ -566,7 +622,18 @@ def main() -> int:
             status, case_failures, metrics = run_case(
                 args.notdec_llvm2c, work_dir, case
             )
-            if status == "fail":
+            if case.get("expected_failure"):
+                if status == "fail":
+                    status = "xfail"
+                    case_failures.append(
+                        "expected failure: " + case["expected_failure"]
+                    )
+                elif status == "pass":
+                    status = "xpass"
+                    case_failures.append(
+                        "unexpected pass: " + case["expected_failure"]
+                    )
+            if status in {"fail", "xpass"}:
                 failures.extend(case_failures)
             rows.append({
                 "name": case["name"],
