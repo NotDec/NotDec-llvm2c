@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import subprocess
 import sys
 import tempfile
@@ -335,6 +336,10 @@ case4:
 ]
 
 
+def case_kind(case: dict) -> str:
+    return case.get("kind", "real" if "input" in case else "proxy")
+
+
 def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     input_path = case.get("input")
     if input_path is None:
@@ -378,16 +383,38 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     return failures
 
 
+def write_report(path: Path, rows: list[dict]) -> None:
+    fieldnames = ["name", "kind", "angr_test", "semantic", "status", "failures"]
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notdec-llvm2c", required=True, type=Path)
+    parser.add_argument("--report-csv", type=Path)
     args = parser.parse_args()
 
     failures = []
+    rows = []
     with tempfile.TemporaryDirectory(prefix="notdec-sailr-bench2-") as tmp:
         work_dir = Path(tmp)
         for case in CASES:
-            failures.extend(run_case(args.notdec_llvm2c, work_dir, case))
+            case_failures = run_case(args.notdec_llvm2c, work_dir, case)
+            failures.extend(case_failures)
+            rows.append({
+                "name": case["name"],
+                "kind": case_kind(case),
+                "angr_test": case["angr_test"],
+                "semantic": case["semantic"],
+                "status": "fail" if case_failures else "pass",
+                "failures": " | ".join(case_failures),
+            })
+
+    if args.report_csv is not None:
+        write_report(args.report_csv, rows)
 
     if failures:
         print("\n".join(failures))
