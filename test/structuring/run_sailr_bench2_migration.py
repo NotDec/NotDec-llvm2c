@@ -322,6 +322,60 @@ case4:
         "counts": {"switch (x)": 2, "return 20;": 1},
     },
     {
+        "name": "switch_case_default_overlap_proxy",
+        "angr_test": "test_decompiling_abnormal_switch_case_case3",
+        "semantic": "Switch default/case overlap output proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+declare void @c()
+declare void @d()
+
+define i32 @f(i32 %sel, i32 %x, i32 %y) {
+entry:
+  %choose = icmp eq i32 %sel, 0
+  br i1 %choose, label %xsw, label %ysw
+
+xsw:
+  switch i32 %x, label %xdefault [
+    i32 1, label %shared
+    i32 3, label %xcase3
+  ]
+
+xdefault:
+  call void @a()
+  ret i32 10
+
+xcase3:
+  call void @c()
+  ret i32 30
+
+ysw:
+  switch i32 %y, label %shared [
+    i32 2, label %shared
+    i32 4, label %ycase4
+  ]
+
+ycase4:
+  call void @d()
+  ret i32 40
+
+shared:
+  call void @b()
+  ret i32 0
+}
+""",
+        "contains": [
+            "switch (y)",
+            "case 2:",
+            "default:",
+            "b();",
+            "return 0;",
+            "goto structured_block_5;",
+        ],
+        "counts": {"structured_block_5:": 1},
+    },
+    {
         "name": "condensing_real_lighttpd",
         "angr_test": "test_who_condensing_opt_reversion",
         "semantic": "CrossJumpReverter / real condensing sample",
