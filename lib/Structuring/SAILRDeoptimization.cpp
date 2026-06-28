@@ -1846,38 +1846,6 @@ bool loweredSwitchCasesFitRangeGuard(const ConditionCompare &Range,
   return true;
 }
 
-bool loweredSwitchIfChainHasRangeGuard(const StructuredCFG &Graph,
-                                       const LoweredSwitchIfChain &Chain) {
-  for (BlockId PredId : predecessorsOf(Graph, Chain.Head)) {
-    const CFGBlock *Pred = Graph.getBlock(PredId);
-    if (Pred == nullptr || Pred->Successors.size() != 2) {
-      continue;
-    }
-    std::optional<ConditionCompare> Guard =
-        matchedRangeConditionCompare(Graph, *Pred, Chain.ComparedValue);
-    if (!Guard.has_value()) {
-      continue;
-    }
-
-    std::optional<std::size_t> ChainIndex;
-    for (std::size_t I = 0; I < Pred->Successors.size(); ++I) {
-      if (Pred->Successors[I] == Chain.Head) {
-        ChainIndex = I;
-        break;
-      }
-    }
-    if (!ChainIndex.has_value()) {
-      continue;
-    }
-
-    std::size_t DefaultIndex = *ChainIndex == 0 ? 1 : 0;
-    if (Pred->Successors[DefaultIndex] == Chain.DefaultTarget) {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool loweredSwitchChainFitsRangeGuard(const StructuredCFG &Graph,
                                       const CFGBlock &GuardBlock,
                                       const ConditionCompare &Guard,
@@ -1894,6 +1862,91 @@ bool loweredSwitchChainFitsRangeGuard(const StructuredCFG &Graph,
 
   bool TrueOutcome = ChainIndex == Guard.TrueTargetIndex;
   return loweredSwitchCasesFitRangeGuard(Guard, Chain, TrueOutcome);
+}
+
+bool rangeGuardCoversChainCases(const StructuredCFG &Graph,
+                                const CFGBlock &GuardBlock,
+                                const LoweredSwitchIfChain &Chain) {
+  // This is only a "do not rewrite the inner chain first" check. The real
+  // range-guard rewrite still verifies the default target before consuming it.
+  std::optional<ConditionCompare> Guard =
+      matchedRangeConditionCompare(Graph, GuardBlock, Chain.ComparedValue);
+  if (!Guard.has_value()) {
+    return false;
+  }
+
+  for (std::size_t I = 0; I < GuardBlock.Successors.size(); ++I) {
+    if (GuardBlock.Successors[I] != Chain.Head) {
+      continue;
+    }
+    bool TrueOutcome = I == Guard->TrueTargetIndex;
+    return loweredSwitchCasesFitRangeGuard(*Guard, Chain, TrueOutcome);
+  }
+  return false;
+}
+
+bool loweredSwitchIfChainHasRangeGuard(const StructuredCFG &Graph,
+                                       const LoweredSwitchIfChain &Chain) {
+  std::vector<BlockId> Worklist = predecessorsOf(Graph, Chain.Head);
+  std::set<BlockId> Seen;
+  while (!Worklist.empty()) {
+    BlockId PredId = Worklist.back();
+    Worklist.pop_back();
+    if (!Seen.insert(PredId).second) {
+      continue;
+    }
+
+    const CFGBlock *Pred = Graph.getBlock(PredId);
+    if (Pred == nullptr || Pred->Successors.size() != 2) {
+      continue;
+    }
+    if (rangeGuardCoversChainCases(Graph, *Pred, Chain)) {
+      return true;
+    }
+
+    std::vector<BlockId> Preds = predecessorsOf(Graph, PredId);
+    Worklist.insert(Worklist.end(), Preds.begin(), Preds.end());
+  }
+  return false;
+}
+
+// Angr rejects lowered-switch candidates whose case/default bodies are also
+// entered from outside the comparison chain. Keep the same guard here because
+// rewriting such a shared target as a switch case would hide real sharing.
+bool loweredSwitchTargetOnlyReachedFromChain(const StructuredCFG &Graph,
+                                             BlockId Target,
+                                             const std::set<BlockId> &Chain) {
+  for (BlockId Pred : predecessorsOf(Graph, Target)) {
+    const CFGBlock *PredBlock = Graph.getBlock(Pred);
+    bool SyntheticChainEdge =
+        PredBlock != nullptr &&
+        (PredBlock->CopyKind == CFGBlockCopyKind::SyntheticForwarder ||
+         PredBlock->CopyKind == CFGBlockCopyKind::SyntheticGoto) &&
+        PredBlock->SyntheticTarget == Target &&
+        Chain.count(PredBlock->SyntheticSource) != 0;
+    if (Pred != Target && Chain.count(Pred) == 0 && !SyntheticChainEdge) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool loweredSwitchTargetsOnlyReachedFromChain(
+    const StructuredCFG &Graph, const LoweredSwitchIfChain &Chain) {
+  std::set<BlockId> ChainBlocks = {Chain.Head};
+  ChainBlocks.insert(Chain.RemovedBlocks.begin(), Chain.RemovedBlocks.end());
+
+  if (!loweredSwitchTargetOnlyReachedFromChain(Graph, Chain.DefaultTarget,
+                                               ChainBlocks)) {
+    return false;
+  }
+  for (const LoweredSwitchIfCase &Case : Chain.Cases) {
+    if (!loweredSwitchTargetOnlyReachedFromChain(Graph, Case.Target,
+                                                 ChainBlocks)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::optional<LoweredSwitchIfChain>
@@ -1983,6 +2036,10 @@ collectLoweredSwitchIfChain(const StructuredCFG &Graph, BlockId HeadId,
       loweredSwitchIfChainHasRangeGuard(Graph, Chain)) {
     return std::nullopt;
   }
+  if (!AllowRangeGuardedHead &&
+      !loweredSwitchTargetsOnlyReachedFromChain(Graph, Chain)) {
+    return std::nullopt;
+  }
   return Chain;
 }
 
@@ -2045,7 +2102,13 @@ collectRangeGuardedLoweredSwitchIfChain(const StructuredCFG &Graph,
     return std::nullopt;
   }
 
-  return collectRangeGuardedLoweredSwitchIfChainFrom(Graph, HeadId, {});
+  std::optional<LoweredSwitchIfChain> Chain =
+      collectRangeGuardedLoweredSwitchIfChainFrom(Graph, HeadId, {});
+  if (!Chain.has_value() ||
+      !loweredSwitchTargetsOnlyReachedFromChain(Graph, *Chain)) {
+    return std::nullopt;
+  }
+  return Chain;
 }
 
 bool rewriteLoweredSwitchIfChain(StructuredCFG &Graph,
