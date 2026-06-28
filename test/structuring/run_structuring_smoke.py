@@ -254,6 +254,7 @@ merge:
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "lighttpd/1-main_init_once.ll"
         ),
+        "skip_if_missing": True,
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
@@ -1361,6 +1362,12 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     elif not input_path.is_absolute():
         input_path = REPO_ROOT / input_path
 
+    if not input_path.exists():
+        if case.get("skip_if_missing", False):
+            print(f"{case['name']}: skipped missing input file {input_path}")
+            return []
+        return [f"{case['name']}: missing input file {input_path}"]
+
     proc = subprocess.run(
         [
             str(notdec_llvm2c),
@@ -1376,6 +1383,8 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     failures = []
     if proc.returncode != 0:
         return [f"{case['name']}: command failed\n{proc.stdout}"]
+    if not output_path.exists():
+        return [f"{case['name']}: missing output file\n{proc.stdout}"]
 
     output = output_path.read_text()
     for needle in case.get("contains", []):
