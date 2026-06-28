@@ -14,6 +14,8 @@
 #include "notdec-backends/Structuring/StructuringOptimizationPipeline.h"
 #include "notdec-backends/Structuring/StructuringQuality.h"
 #include "notdec-backends/Solidity/BodyBuilder.h"
+#include "notdec-llvm2c/CFG.h"
+#include "notdec-llvm2c/Utils.h"
 
 #include <algorithm>
 #include <cassert>
@@ -31,6 +33,8 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Instructions.h>
+
+#include <clang/AST/Expr.h>
 
 using namespace notdec::backend::structuring;
 
@@ -609,6 +613,27 @@ bool containsLineSubstring(const std::vector<std::string> &Lines,
   return std::find_if(Lines.begin(), Lines.end(), [&](const std::string &Line) {
            return Line.find(Needle.str()) != std::string::npos;
          }) != Lines.end();
+}
+
+void testCFGBlockUpdateStmtFallsBackWhenSlotIsAlreadyFilled() {
+  auto AST = notdec::llvm2c::buildAST("cfg_block_update_stmt");
+  clang::ASTContext &Ctx = AST->getASTContext();
+
+  notdec::llvm2c::CFG Cfg;
+  auto BlockIt = Cfg.createBlock();
+  notdec::llvm2c::CFGBlock *Block = *BlockIt;
+
+  auto *Initial = new (Ctx) clang::NullStmt(clang::SourceLocation());
+  auto *First = clang::IntegerLiteral::Create(
+      Ctx, llvm::APInt(32, 1, false), Ctx.IntTy, clang::SourceLocation());
+  auto *Second = clang::IntegerLiteral::Create(
+      Ctx, llvm::APInt(32, 2, false), Ctx.IntTy, clang::SourceLocation());
+
+  Block->appendStmt(Initial);
+  assert(Block->updateStmt(0, First));
+  assert(Block->front().getAs<notdec::llvm2c::CFGStmt>()->getStmt() == First);
+  assert(!Block->updateStmt(0, Second));
+  assert(Block->front().getAs<notdec::llvm2c::CFGStmt>()->getStmt() == First);
 }
 
 PayloadRef addStringPayload(std::vector<std::string> &Payloads,
@@ -14309,6 +14334,7 @@ void testSAILRImprovePhoenixFlagFollowsConstructor() {
 } // namespace
 
 int main() {
+  testCFGBlockUpdateStmtFallsBackWhenSlotIsAlreadyFilled();
   testAcyclicDroppedEdges();
   testMutableRegionGraphCheckpointRestoresMutations();
   testEdgeVirtualizationHints();

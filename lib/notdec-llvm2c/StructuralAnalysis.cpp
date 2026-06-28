@@ -1281,10 +1281,11 @@ void SAFuncContext::addStmt(CFGBlock &Block, clang::Stmt &Stmt,
 
   if (Slot) {
     assert(isa<llvm::LoadInst>(&InsertLoc));
-    Block.updateStmt(*Slot, NewStmt);
-  } else {
-    Block.appendStmt(NewStmt);
+    if (Block.updateStmt(*Slot, NewStmt)) {
+      return;
+    }
   }
+  Block.appendStmt(NewStmt);
 }
 
 void SAFuncContext::registerPhiRewrite(llvm::PHINode &Phi, CFGBlock &Block,

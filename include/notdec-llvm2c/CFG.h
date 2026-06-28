@@ -504,13 +504,17 @@ public:
     return std::holds_alternative<SwitchTerminator>(Terminator);
   }
 
-  // allows load inst to create tmp var lazily
-  void updateStmt(size_t Ind, Stmt *St) {
+  // allows load inst to create tmp var lazily; return false if the slot was
+  // already consumed by another stmt.
+  bool updateStmt(size_t Ind, Stmt *St) {
     assert(Ind < size());
     assert(Elements[Ind].getKind() == CFGStmt::Statement);
-    assert(
-        llvm::isa<clang::NullStmt>(Elements[Ind].getAs<CFGStmt>()->getStmt()));
+    if (!llvm::isa<clang::NullStmt>(
+            Elements[Ind].getAs<CFGStmt>()->getStmt())) {
+      return false;
+    }
     Elements[Ind] = CFGStmt(St);
+    return true;
   }
 };
 
