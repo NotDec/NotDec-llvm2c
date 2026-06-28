@@ -34,10 +34,12 @@ public:
   explicit ReturnDuplicatorLow(
       StructuringOptimizationOptions Options = defaultOptions(),
       std::size_t MaxFunctionBlocks = 500,
-      std::size_t MaxDuplicatedStatements = 16)
+      std::size_t MaxDuplicatedStatements = 16,
+      std::size_t MaxDuplicatedCalls = 2)
       : StructuringOptimizationPass(Options),
         MaxFunctionBlocks(MaxFunctionBlocks),
-        MaxDuplicatedStatements(MaxDuplicatedStatements) {}
+        MaxDuplicatedStatements(MaxDuplicatedStatements),
+        MaxDuplicatedCalls(MaxDuplicatedCalls) {}
 
   const char *name() const override { return "ReturnDuplicatorLow"; }
 
@@ -51,6 +53,7 @@ protected:
 private:
   std::size_t MaxFunctionBlocks;
   std::size_t MaxDuplicatedStatements;
+  std::size_t MaxDuplicatedCalls;
 };
 
 class SwitchDefaultCaseDuplicator : public StructuringOptimizationPass {
@@ -125,9 +128,11 @@ public:
 
   explicit CrossJumpReverter(
       StructuringOptimizationOptions Options = defaultOptions(),
-      std::size_t MaxDuplicatedStatements = 16)
+      std::size_t MaxDuplicatedStatements = 16,
+      std::size_t MaxDuplicatedCalls = 1)
       : StructuringOptimizationPass(Options),
-        MaxDuplicatedStatements(MaxDuplicatedStatements) {}
+        MaxDuplicatedStatements(MaxDuplicatedStatements),
+        MaxDuplicatedCalls(MaxDuplicatedCalls) {}
 
   const char *name() const override { return "CrossJumpReverter"; }
 
@@ -137,6 +142,7 @@ protected:
 
 private:
   std::size_t MaxDuplicatedStatements;
+  std::size_t MaxDuplicatedCalls;
 };
 
 struct SAILRDeoptimizationPipelineOptions {

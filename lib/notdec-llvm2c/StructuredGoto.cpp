@@ -94,6 +94,26 @@ public:
   }
 };
 
+class CallExprCounter : public clang::RecursiveASTVisitor<CallExprCounter> {
+public:
+  bool VisitCallExpr(clang::CallExpr *) {
+    ++Count;
+    return true;
+  }
+
+  std::size_t Count = 0;
+};
+
+std::size_t callExprCount(clang::Stmt *Stmt) {
+  if (Stmt == nullptr) {
+    return 0;
+  }
+
+  CallExprCounter Counter;
+  Counter.TraverseStmt(Stmt);
+  return Counter.Count;
+}
+
 class StructuredGotoAdapter {
   CFG &Cfg;
   clang::ASTContext &Ctx;
@@ -458,6 +478,7 @@ private:
             continue;
           }
           HasReturnStmt |= llvm::isa<clang::ReturnStmt>(Stmt);
+          NewBlock.CallCount += callExprCount(Stmt);
           st::PayloadRef Payload = addPayload(Stmt);
           NewBlock.Statements.push_back(Payload);
           Statements.push_back(Payload);

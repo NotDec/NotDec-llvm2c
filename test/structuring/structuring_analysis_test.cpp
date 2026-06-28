@@ -1926,6 +1926,40 @@ void testLLVMFunctionCFGBuilderRecordsRangeConditionCompare() {
   assert(Compare->UnsignedIntegerValue == 250);
 }
 
+void testLLVMFunctionCFGBuilderRecordsCallCount() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("call-count-test", Context);
+  llvm::Type *VoidTy = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *CalleeTy = llvm::FunctionType::get(VoidTy, {}, /*isVarArg=*/false);
+  auto *Callee = llvm::Function::Create(CalleeTy,
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        "callee", Module);
+  auto *FnTy = llvm::FunctionType::get(I32Ty, {}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "f", Module);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", F);
+
+  llvm::IRBuilder<> Builder(Entry);
+  Builder.CreateCall(Callee);
+  Builder.CreateCall(Callee);
+  Builder.CreateBr(Exit);
+  Builder.SetInsertPoint(Exit);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  const CFGBlock *EntryBlock = Cfg.getBlock(0);
+  const CFGBlock *ExitBlock = Cfg.getBlock(1);
+  assert(EntryBlock != nullptr && ExitBlock != nullptr);
+  assert(EntryBlock->CallCount == 2);
+  assert(ExitBlock->CallCount == 0);
+}
+
 void testSolidityBodyBuilderReadsSharedPhiAssignments() {
   llvm::LLVMContext Context;
   llvm::Module Module("solidity-shared-phi-test", Context);
@@ -3560,6 +3594,37 @@ void testCrossJumpReverterSkipsLargeLinearGotoTarget() {
   assert(OriginalTarget->Statements.size() == 2);
   assert(OriginalTarget->Statements[0].Id == 7);
   assert(OriginalTarget->Statements[1].Id == 8);
+  assert(Exit != nullptr);
+}
+
+void testCrossJumpReverterSkipsCallHeavyLinearGotoTarget() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Target = block(1, {2});
+  Target.Statements.push_back({7});
+  Target.CallCount = 2;
+  Cfg.addBlock(std::move(Target));
+
+  Cfg.addBlock(block(2, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos =
+      GotoManager::fromGotos({StructuredGoto{0, 1, InvalidNodeId}});
+
+  TestCrossJumpReverter Pass(CrossJumpReverter::defaultOptions(),
+                             /*MaxDuplicatedStatements=*/16,
+                             /*MaxDuplicatedCalls=*/1);
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  const CFGBlock *Source = Cfg.getBlock(0);
+  const CFGBlock *OriginalTarget = Cfg.getBlock(1);
+  const CFGBlock *Exit = Cfg.getBlock(2);
+  assert(Source != nullptr && Source->Successors == std::vector<BlockId>{1});
+  assert(OriginalTarget != nullptr);
+  assert(OriginalTarget->Successors == std::vector<BlockId>{2});
+  assert(OriginalTarget->CallCount == 2);
   assert(Exit != nullptr);
 }
 
@@ -5423,6 +5488,38 @@ void testReturnDuplicatorLowSkipsLargeReturnRegion() {
   assert(Cfg.getBlock(2) != nullptr);
   assert(Cfg.getBlock(3) != nullptr);
   assert(Cfg.getBlock(4) != nullptr);
+}
+
+void testReturnDuplicatorLowSkipsCallHeavyReturnRegion() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {2}));
+  Cfg.addBlock(block(1, {2}));
+
+  CFGBlock Head = block(2, {3});
+  Head.Statements.push_back({20});
+  Head.CallCount = 2;
+  Cfg.addBlock(std::move(Head));
+
+  CFGBlock Ret = block(3, {});
+  Ret.Terminator = TerminatorKind::Return;
+  Ret.Statements.push_back({30});
+  Cfg.addBlock(std::move(Ret));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 2}});
+
+  TestReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions(),
+                               /*MaxFunctionBlocks=*/500,
+                               /*MaxDuplicatedStatements=*/16,
+                               /*MaxDuplicatedCalls=*/1);
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(1)->Successors == std::vector<BlockId>{2});
+  assert(Cfg.getBlock(2) != nullptr);
+  assert(Cfg.getBlock(2)->CallCount == 2);
+  assert(Cfg.getBlock(3) != nullptr);
 }
 
 void testReturnDuplicatorLowCopiesConnectedPredsOnce() {
@@ -13175,6 +13272,7 @@ int main() {
   testStructuredCFGDuplicateSyntheticGotoKeepsCopyIdentityChain();
   testStructuredCFGMaterializeCopiedSyntheticGotoKeepsIdentity();
   testLLVMFunctionCFGBuilderRecordsRangeConditionCompare();
+  testLLVMFunctionCFGBuilderRecordsCallCount();
   testStructuredCFGDuplicateRegionRollsBackOnMissingBlock();
   testStructuredCFGCreateSyntheticBlock();
   testDuplicationReverterMergesExactDuplicateBlocks();
@@ -13204,6 +13302,7 @@ int main() {
   testDuplicationReverterSkipsGotoRelatedLinearTailWithoutHint();
   testCrossJumpReverterDuplicatesLinearGotoTarget();
   testCrossJumpReverterSkipsLargeLinearGotoTarget();
+  testCrossJumpReverterSkipsCallHeavyLinearGotoTarget();
   testCrossJumpReverterCommitsCopyAtomically();
   testCrossJumpReverterCopiesConnectedPredsOnce();
   testCrossJumpReverterKeepsPredSensitiveCopiesSeparate();
@@ -13218,6 +13317,7 @@ int main() {
   testReturnDuplicatorLowCopiesReturnEndNodeWithMultipleDephicationVVars();
   testReturnDuplicatorLowSkipsLargeFunction();
   testReturnDuplicatorLowSkipsLargeReturnRegion();
+  testReturnDuplicatorLowSkipsCallHeavyReturnRegion();
   testReturnDuplicatorLowCopiesConnectedPredsOnce();
   testReturnDuplicatorLowExpandsGotoPredToConnectedComponent();
   testReturnDuplicatorLowUsesSwitchCaseGotoSource();

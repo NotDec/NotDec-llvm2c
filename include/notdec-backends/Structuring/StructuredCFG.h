@@ -223,6 +223,9 @@ struct CFGBlock {
   // point to themselves; copied blocks point to the original body.
   BlockId BodyBlock = InvalidBlockId;
   std::vector<PayloadRef> Statements;
+  // Call-like statements are a separate duplication cost. This follows Angr's
+  // SAILR guards, where a small block with calls is still expensive to copy.
+  std::size_t CallCount = 0;
   TerminatorKind Terminator = TerminatorKind::Fallthrough;
   PayloadRef Condition;
   std::vector<BlockId> Successors;

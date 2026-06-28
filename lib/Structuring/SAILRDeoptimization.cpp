@@ -2633,6 +2633,32 @@ std::size_t statementCountInRegion(const StructuredCFG &Graph,
   return Count;
 }
 
+std::size_t callCountInRegion(const StructuredCFG &Graph,
+                              const LinearRegion &Region) {
+  std::size_t Count = 0;
+  for (BlockId Id : Region.Blocks) {
+    const CFGBlock *Block = Graph.getBlock(Id);
+    if (Block == nullptr) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    Count += Block->CallCount;
+  }
+  return Count;
+}
+
+std::size_t callCountInRegion(const StructuredCFG &Graph,
+                              const ReturnRegion &Region) {
+  std::size_t Count = 0;
+  for (BlockId Id : Region.Blocks) {
+    const CFGBlock *Block = Graph.getBlock(Id);
+    if (Block == nullptr) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    Count += Block->CallCount;
+  }
+  return Count;
+}
+
 } // namespace
 
 bool hasInitialSourceGoto(const StructuringEvaluation &Initial,
@@ -3161,7 +3187,8 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
   bool Changed = false;
   for (auto &Entry : Regions) {
     const ReturnRegion &Region = Entry.second;
-    if (statementCountInRegion(Graph, Region) > MaxDuplicatedStatements) {
+    if (statementCountInRegion(Graph, Region) > MaxDuplicatedStatements ||
+        callCountInRegion(Graph, Region) > MaxDuplicatedCalls) {
       continue;
     }
 
@@ -3331,7 +3358,8 @@ bool CrossJumpReverter::runOnGraph(StructuredCFG &Graph,
     if (Region.Head == InvalidBlockId || Graph.successorsOf(Target).size() != 1) {
       continue;
     }
-    if (statementCountInRegion(Graph, Region) > MaxDuplicatedStatements) {
+    if (statementCountInRegion(Graph, Region) > MaxDuplicatedStatements ||
+        callCountInRegion(Graph, Region) > MaxDuplicatedCalls) {
       continue;
     }
 

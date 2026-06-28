@@ -182,6 +182,11 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
     CFGBlock Block;
     Block.Id = BlockIds[&BB];
     Provider.collectStatements(BB, Block.Statements);
+    for (const llvm::Instruction &I : BB) {
+      if (llvm::isa<llvm::CallBase>(&I)) {
+        ++Block.CallCount;
+      }
+    }
 
     const llvm::Instruction *Term = BB.getTerminator();
     if (const auto *Br = llvm::dyn_cast_or_null<llvm::BranchInst>(Term)) {

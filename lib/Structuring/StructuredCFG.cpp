@@ -431,6 +431,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
     Context.OriginalTerminator = Body->Terminator;
     Context.NewTerminator = Block->Terminator;
     Block->Statements = Body->Statements;
+    Block->CallCount = Body->CallCount;
     Block->Terminator = Body->Terminator;
     Block->Condition = Body->Condition;
     for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
@@ -554,6 +555,7 @@ bool StructuredCFG::materializeBlockBodyImpl(
   // region rewrites that were already applied.
   std::vector<PayloadRef> OriginalStatements = Body->Statements;
   Block->Statements = std::move(Statements);
+  Block->CallCount = Body->CallCount;
   Block->Terminator = Body->Terminator;
   Block->Condition = Condition;
   for (std::size_t I = 0, E = Block->Cases.size(); I != E; ++I) {
