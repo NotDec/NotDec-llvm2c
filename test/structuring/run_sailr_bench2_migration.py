@@ -394,13 +394,25 @@ def case_kind(case: dict) -> str:
     return case.get("kind", "real" if "input" in case else "proxy")
 
 
-def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
+def output_metrics(output: str) -> dict:
+    return {
+        "switch_count": output.count("switch ("),
+        "case_count": output.count("case "),
+        "goto_count": output.count("goto "),
+        "return_count": output.count("return "),
+    }
+
+
+def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> tuple[str, list[str], dict]:
     input_path = case.get("input")
     if input_path is None:
         input_path = work_dir / f"{case['name']}.ll"
         input_path.write_text(case["ir"].strip() + "\n")
     elif not input_path.is_absolute():
         input_path = REPO_ROOT / input_path
+    if not input_path.exists():
+        return "skip", [f"{case['name']}: missing input file {input_path}"], {}
+
     output_path = work_dir / f"{case['name']}.c"
     proc = subprocess.run(
         [
@@ -415,7 +427,9 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
         stderr=subprocess.STDOUT,
     )
     if proc.returncode != 0:
-        return [f"{case['name']}: command failed\n{proc.stdout}"]
+        return "fail", [f"{case['name']}: command failed\n{proc.stdout}"], {}
+    if not output_path.exists():
+        return "fail", [f"{case['name']}: missing output file\n{proc.stdout}"], {}
 
     output = output_path.read_text()
     failures = []
@@ -434,11 +448,22 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
             failures.append(
                 f"{header}: expected {expected} x {needle!r}, got {actual}"
             )
-    return failures
+    return ("fail" if failures else "pass"), failures, output_metrics(output)
 
 
 def write_report(path: Path, rows: list[dict]) -> None:
-    fieldnames = ["name", "kind", "angr_test", "semantic", "status", "failures"]
+    fieldnames = [
+        "name",
+        "kind",
+        "angr_test",
+        "semantic",
+        "status",
+        "switch_count",
+        "case_count",
+        "goto_count",
+        "return_count",
+        "failures",
+    ]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -456,14 +481,21 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="notdec-sailr-bench2-") as tmp:
         work_dir = Path(tmp)
         for case in CASES:
-            case_failures = run_case(args.notdec_llvm2c, work_dir, case)
-            failures.extend(case_failures)
+            status, case_failures, metrics = run_case(
+                args.notdec_llvm2c, work_dir, case
+            )
+            if status == "fail":
+                failures.extend(case_failures)
             rows.append({
                 "name": case["name"],
                 "kind": case_kind(case),
                 "angr_test": case["angr_test"],
                 "semantic": case["semantic"],
-                "status": "fail" if case_failures else "pass",
+                "status": status,
+                "switch_count": metrics.get("switch_count", ""),
+                "case_count": metrics.get("case_count", ""),
+                "goto_count": metrics.get("goto_count", ""),
+                "return_count": metrics.get("return_count", ""),
                 "failures": " | ".join(case_failures),
             })
 
