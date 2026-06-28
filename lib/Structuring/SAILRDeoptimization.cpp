@@ -155,6 +155,8 @@ bool gotoEdgeFromSourceOrParent(const StructuredCFG &Graph,
                                 BlockId Target);
 
 bool reachesBlock(const StructuredCFG &Graph, BlockId Start, BlockId Target);
+bool blockOnlyReachedFrom(const StructuredCFG &Graph, BlockId Target,
+                          const std::set<BlockId> &AllowedPreds);
 
 bool sameBlockSet(std::vector<BlockId> A, std::vector<BlockId> B) {
   std::sort(A.begin(), A.end());
@@ -1896,9 +1898,53 @@ bool loweredSwitchCaseValuesAreDisjoint(const StructuredCFG &Graph,
   return true;
 }
 
+bool sameClosedDefaultBlock(const StructuredCFG &Graph, BlockId Lhs,
+                            BlockId Rhs) {
+  const CFGBlock *LhsBlock = Graph.getBlock(Lhs);
+  const CFGBlock *RhsBlock = Graph.getBlock(Rhs);
+  if (LhsBlock == nullptr || RhsBlock == nullptr) {
+    return false;
+  }
+  if (!isClosedTerminal(*LhsBlock) || !isClosedTerminal(*RhsBlock)) {
+    return false;
+  }
+  if (LhsBlock->Statements.empty() || RhsBlock->Statements.empty()) {
+    return false;
+  }
+  return samePayloads(Graph, LhsBlock->Statements, RhsBlock->Statements);
+}
+
+bool mergeEquivalentRangeTreeDefaults(const StructuredCFG &Graph,
+                                      LoweredSwitchIfChain &First,
+                                      LoweredSwitchIfChain &Second) {
+  if (First.DefaultTarget == Second.DefaultTarget) {
+    return true;
+  }
+  if (!sameClosedDefaultBlock(Graph, First.DefaultTarget,
+                              Second.DefaultTarget)) {
+    return false;
+  }
+
+  std::set<BlockId> Removed;
+  Removed.insert(First.RemovedBlocks.begin(), First.RemovedBlocks.end());
+  Removed.insert(Second.RemovedBlocks.begin(), Second.RemovedBlocks.end());
+  Removed.insert(First.Head);
+  Removed.insert(Second.Head);
+  if (!blockOnlyReachedFrom(Graph, First.DefaultTarget, Removed) ||
+      !blockOnlyReachedFrom(Graph, Second.DefaultTarget, Removed)) {
+    return false;
+  }
+
+  Second.RemovedBlocks.push_back(Second.DefaultTarget);
+  Second.DefaultTarget = First.DefaultTarget;
+  return true;
+}
+
 // Conservative subset of Angr's range-tree lowered switch recovery:
-// both sides of one range guard must already be valid equality chains, share
-// one exact default target, and contain only cases allowed by the guard side.
+// both sides of one range guard must already be valid equality chains and
+// contain only cases allowed by the guard side. RetDupPass may split one empty
+// default return into two equal blocks before this pass sees the graph, so we
+// only merge duplicated defaults when both are closed and chain-private.
 bool mergeRangeTreeLoweredSwitchIfChains(const StructuredCFG &Graph,
                                          const CFGBlock &GuardBlock,
                                          const ConditionCompare &Guard,
@@ -1906,8 +1952,10 @@ bool mergeRangeTreeLoweredSwitchIfChains(const StructuredCFG &Graph,
                                          LoweredSwitchIfChain &Second) {
   if (!samePayload(Graph, Guard.ComparedValue, First.ComparedValue) ||
       !samePayload(Graph, Guard.ComparedValue, Second.ComparedValue) ||
-      First.DefaultTarget != Second.DefaultTarget ||
       !loweredSwitchCaseValuesAreDisjoint(Graph, First, Second)) {
+    return false;
+  }
+  if (!mergeEquivalentRangeTreeDefaults(Graph, First, Second)) {
     return false;
   }
 

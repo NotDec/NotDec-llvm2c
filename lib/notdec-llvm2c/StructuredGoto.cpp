@@ -128,6 +128,9 @@ class StructuredGotoAdapter {
   std::map<st::BlockId, clang::LabelStmt *> Labels;
   std::map<clang::ValueDecl *, st::PayloadRef> ConditionDeclPayloads;
   std::map<std::string, st::PayloadRef> ConditionIntegerPayloads;
+  // RetDupPass can clone one default return into two AST nodes; keep the
+  // payloads separate for rendering, but share origin for literal return value.
+  std::map<std::string, st::PayloadRef> SimpleReturnPayloads;
   std::set<st::BlockId> TargetedLabels;
 
 public:
@@ -162,6 +165,34 @@ private:
     }
     Payloads.push_back(Stmt);
     return {Payloads.size() - 1};
+  }
+
+  void setSimpleReturnOrigin(st::StructuredCFG &Cfg, st::PayloadRef Payload,
+                             clang::ReturnStmt *Ret) {
+    if (!Payload.isValid() || Ret == nullptr) {
+      return;
+    }
+
+    clang::Expr *Value = Ret->getRetValue();
+    if (Value == nullptr) {
+      return;
+    }
+
+    auto *Literal =
+        llvm::dyn_cast_or_null<clang::IntegerLiteral>(getNoCast(Value));
+    if (Literal == nullptr) {
+      return;
+    }
+
+    std::string Key = llvm::toString(Literal->getValue(), 10,
+                                    /*isSigned=*/false);
+    auto It = SimpleReturnPayloads.find(Key);
+    if (It == SimpleReturnPayloads.end()) {
+      SimpleReturnPayloads.emplace(std::move(Key), Payload);
+      return;
+    }
+
+    Cfg.setPayloadOrigin(Payload.Id, It->second.Id);
   }
 
   st::PayloadRef addConditionComparedPayload(clang::Expr *Expr) {
@@ -484,6 +515,8 @@ private:
           st::PayloadRef Payload = addPayload(Stmt);
           NewBlock.Statements.push_back(Payload);
           Statements.push_back(Payload);
+          setSimpleReturnOrigin(Ret, Payload,
+                                llvm::dyn_cast<clang::ReturnStmt>(Stmt));
         }
       }
 

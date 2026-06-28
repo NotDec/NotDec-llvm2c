@@ -10846,6 +10846,111 @@ void testLoweredSwitchSimplifierBuildsSwitchFromRangeTree() {
   assert(Switch->Cases[3].Target == 13);
 }
 
+void testLoweredSwitchSimplifierMergesRangeTreeDuplicatedDefaultReturns() {
+  StructuredCFG Cfg;
+
+  CFGBlock Guard = branchBlock(0, {1, 3});
+  Guard.Condition = {100};
+  Cfg.addBlock(std::move(Guard));
+
+  CFGBlock LowHead = branchBlock(1, {10, 2});
+  LowHead.Condition = {101};
+  Cfg.addBlock(std::move(LowHead));
+
+  CFGBlock LowNext = branchBlock(2, {11, 30});
+  LowNext.Condition = {102};
+  Cfg.addBlock(std::move(LowNext));
+
+  CFGBlock HighHead = branchBlock(3, {12, 4});
+  HighHead.Condition = {103};
+  Cfg.addBlock(std::move(HighHead));
+
+  CFGBlock HighNext = branchBlock(4, {13, 31});
+  HighNext.Condition = {104};
+  Cfg.addBlock(std::move(HighNext));
+
+  for (BlockId Id : {10, 11, 12, 13}) {
+    Cfg.addBlock(block(Id, {}));
+  }
+
+  CFGBlock LowDefault = block(30, {});
+  LowDefault.Statements.push_back({400});
+  Cfg.addBlock(std::move(LowDefault));
+
+  CFGBlock HighDefault = block(31, {});
+  HighDefault.Statements.push_back({400});
+  Cfg.addBlock(std::move(HighDefault));
+
+  Cfg.setConditionCompare({100}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {302},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 9,
+                                      .UnsignedIntegerValue = 9,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::LessEqual});
+  Cfg.setConditionCompare({101}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {300},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 7,
+                                      .UnsignedIntegerValue = 7,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::Equal});
+  Cfg.setConditionCompare({102}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {302},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 9,
+                                      .UnsignedIntegerValue = 9,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::Equal});
+  Cfg.setConditionCompare({103}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {304},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 11,
+                                      .UnsignedIntegerValue = 11,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::Equal});
+  Cfg.setConditionCompare({104}, ConditionCompare{
+                                      .ComparedValue = {200},
+                                      .ConstantValue = {306},
+                                      .HasIntegerValue = true,
+                                      .SignedPredicate = true,
+                                      .SignedIntegerValue = 13,
+                                      .UnsignedIntegerValue = 13,
+                                      .TrueTargetIndex = 0,
+                                      .EqualTargetIndex = 0,
+                                      .Kind = ConditionCompareKind::Equal});
+
+  TestLoweredSwitchSimplifier Pass(
+      LoweredSwitchSimplifier::defaultOptions());
+  StructuringEvaluation Current;
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  for (BlockId Removed : {1, 2, 3, 4, 31}) {
+    assert(Cfg.getBlock(Removed) == nullptr);
+  }
+
+  const CFGBlock *Switch = Cfg.getBlock(0);
+  assert(Switch != nullptr);
+  assert(Switch->Terminator == TerminatorKind::Switch);
+  assert(Switch->Successors == std::vector<BlockId>({30, 10, 11, 12, 13}));
+  assert(Switch->Cases.size() == 4);
+  assert(Cfg.getBlock(30) != nullptr);
+  assert(hasSinglePayload(Cfg.getBlock(30)->Statements, 400));
+}
+
 void testLoweredSwitchSimplifierSkipsRangeTreeWithDifferentDefaults() {
   StructuredCFG Cfg;
 
@@ -14393,6 +14498,7 @@ int main() {
   testLoweredSwitchSimplifierMergesCopiedRangeGuardDefault();
   testLoweredSwitchSimplifierSkipsSharedCopiedRangeGuardDefault();
   testLoweredSwitchSimplifierBuildsSwitchFromRangeTree();
+  testLoweredSwitchSimplifierMergesRangeTreeDuplicatedDefaultReturns();
   testLoweredSwitchSimplifierSkipsRangeTreeWithDifferentDefaults();
   testLoweredSwitchSimplifierSkipsIfChainWithDifferentComparedValue();
   testLoweredSwitchSimplifierSkipsDuplicateIntegerCaseValue();

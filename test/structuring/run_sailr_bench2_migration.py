@@ -141,13 +141,9 @@ default:
         "absent": ["switch (x)", "case 7:", "case 9:"],
     },
     {
-        "name": "lowered_switch_range_tree_output_gap",
+        "name": "lowered_switch_range_tree_proxy",
         "angr_test": "test_reverting_switch_lowering_range_tree",
-        "semantic": "LoweredSwitchSimplifier range-tree output gap",
-        "expected_failure": (
-            "shared-CFG range-tree regression passes, but notdec-llvm2c output "
-            "still keeps the nested if tree"
-        ),
+        "semantic": "LoweredSwitchSimplifier range-tree recovery proxy",
         "ir": r"""
 define i32 @main(i32 %x) {
 entry:
