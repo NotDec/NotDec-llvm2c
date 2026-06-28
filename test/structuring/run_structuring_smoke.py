@@ -412,6 +412,19 @@ entry:
         "absent": ["extractvalue"],
     },
     {
+        "name": "opaque_pointer_gep_source_type",
+        "ir": r"""
+define i64 @f(ptr %p) {
+entry:
+  %q = getelementptr i64, ptr %p, i64 1
+  %v = load i64, ptr %q
+  ret i64 %v
+}
+""",
+        "contains": ["return *((long long *)p + 1LL);"],
+        "absent": ["void *p +", "extractvalue"],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {

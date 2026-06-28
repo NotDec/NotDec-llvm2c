@@ -439,9 +439,15 @@ std::vector<clang::Expr *> TypeBuilder::tryGepZero(clang::Expr *Val) {
   return CT->tryAddZero(Val);
 }
 
-clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
+clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB, TypeBuilder &TB,
                        llvm::GEPOperator &I) {
   clang::Expr *Val = EB.visitValue(I.getPointerOperand(), &I, 0);
+  if (Val->getType()->isVoidPointerType()) {
+    clang::QualType SourceTy = TB.visitType(*I.getSourceElementType());
+    clang::QualType SourcePtrTy = Ctx.getPointerType(SourceTy);
+    Val = createCStyleCastExpr(Ctx, SourcePtrTy, clang::VK_PRValue,
+                               clang::CK_BitCast, Val);
+  }
   llvm::SmallVector<clang::Expr *, 8> Indices;
 
   if (I.hasAllZeroIndices()) {
@@ -459,7 +465,9 @@ clang::Expr *handleGEP(clang::ASTContext &Ctx, ExprBuilder &EB,
 }
 
 void CFGBuilder::visitGetElementPtrInst(llvm::GetElementPtrInst &I) {
-  addExprOrStmt(I, *handleGEP(Ctx, EB, llvm::cast<llvm::GEPOperator>(I)));
+  addExprOrStmt(I,
+                *handleGEP(Ctx, EB, getTypeBuilder(),
+                           llvm::cast<llvm::GEPOperator>(I)));
 }
 
 void CFGBuilder::visitStoreInst(llvm::StoreInst &I) {
@@ -2883,7 +2891,7 @@ clang::Expr *ExprBuilder::visitConstant(llvm::Constant &C, llvm::User *User,
     // https://llvm.org/docs/LangRef.html#constant-expressions
     // handle gep
     if (CE->getOpcode() == llvm::Instruction::GetElementPtr) {
-      return handleGEP(Ctx, *this, *llvm::cast<llvm::GEPOperator>(CE));
+      return handleGEP(Ctx, *this, TB, *llvm::cast<llvm::GEPOperator>(CE));
     }
     // handle casts
     switch (CE->getOpcode()) {
