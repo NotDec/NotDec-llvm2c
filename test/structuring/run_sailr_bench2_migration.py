@@ -141,6 +141,34 @@ default:
         "absent": ["switch (x)", "case 7:", "case 9:"],
     },
     {
+        "name": "fmt_deduplication_proxy",
+        "angr_test": "test_fmt_deduplication",
+        "semantic": "DuplicationReverter duplicated call proxy",
+        "ir": r"""
+declare void @xdectoumax()
+
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %left, label %right
+
+left:
+  call void @xdectoumax()
+  br label %merge
+
+right:
+  call void @xdectoumax()
+  br label %merge
+
+merge:
+  ret i32 0
+}
+""",
+        "contains": ["xdectoumax()", "return 0;"],
+        "absent": ["goto left", "goto right"],
+        "counts": {"return 0;": 2},
+    },
+    {
         "name": "branch_return_region_proxy",
         "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
         "semantic": "ReturnDuplicatorLow branch return region proxy",
