@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+MAX_FAILURE_DETAIL = 800
 
 CASES = [
     {
@@ -38,8 +39,9 @@ CASES = [
         "semantic": "CrossJumpReverter / condensing",
         "input": Path(
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
-            "lighttpd/1-main_init_once.ll"
+            "selected-targets-native/lighttpd/executable/module-all.ll"
         ),
+        "expected_failure": "lighttpd module-all currently aborts in llvm2c with null QualType",
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
@@ -612,8 +614,9 @@ shared:
         "semantic": "CrossJumpReverter / real condensing sample",
         "input": Path(
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
-            "lighttpd/1-main_init_once.ll"
+            "selected-targets-native/lighttpd/executable/module-all.ll"
         ),
+        "expected_failure": "lighttpd module-all currently aborts in llvm2c with null QualType",
         "contains": ["goto structured_block_1;", "goto structured_block_4;",
                       "goto structured_block_6;"],
         "absent": ["goto structured_block_24;\n    goto structured_block_24;"],
@@ -649,6 +652,13 @@ def classify_failures(status: str, failures: list[str]) -> str:
     ):
         return "missing-structure"
     return "output-mismatch"
+
+
+def summarize_failure(failure: str) -> str:
+    failure = failure.replace("\r\n", "\n").replace("\n", r"\n")
+    if len(failure) <= MAX_FAILURE_DETAIL:
+        return failure
+    return failure[:MAX_FAILURE_DETAIL] + "... <truncated>"
 
 
 def run_case(
@@ -765,7 +775,9 @@ def main() -> int:
                 "case_count": metrics.get("case_count", ""),
                 "goto_count": metrics.get("goto_count", ""),
                 "return_count": metrics.get("return_count", ""),
-                "failures": " | ".join(case_failures),
+                "failures": " | ".join(
+                    summarize_failure(failure) for failure in case_failures
+                ),
             })
 
     if args.report_csv is not None:
