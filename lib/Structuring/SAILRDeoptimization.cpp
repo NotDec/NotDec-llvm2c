@@ -175,6 +175,9 @@ constexpr std::size_t MaxLinearRegionMergeBlocks = 12;
 bool collectJoinedDiamondReturnRegion(const StructuredCFG &Graph,
                                       BlockId Terminal,
                                       ReturnRegion &Region);
+bool collectClosedReturnTail(const StructuredCFG &Graph, BlockId Head,
+                             BlockId ExpectedPred, std::set<BlockId> &Seen,
+                             std::vector<BlockId> &Blocks);
 
 const LinearRegion *cachedLinearRegion(const StructuredCFG &Graph, BlockId Head,
                                        std::map<BlockId, LinearRegion> &Cache) {
@@ -527,6 +530,46 @@ bool collectClosedJoinedDiamondReturnTail(const StructuredCFG &Graph,
   return false;
 }
 
+// Conservative switch-tail support for wrapper regions. The switch itself must
+// be single-predecessor and every unique successor must already be a closed
+// return tail.
+bool collectClosedSwitchReturnTail(const StructuredCFG &Graph, BlockId Head,
+                                   BlockId ExpectedPred,
+                                   std::set<BlockId> &Seen,
+                                   std::vector<BlockId> &Blocks) {
+  const CFGBlock *HeadBlock = Graph.getBlock(Head);
+  if (HeadBlock == nullptr || HeadBlock->Terminator != TerminatorKind::Switch ||
+      Seen.count(Head) != 0) {
+    return false;
+  }
+
+  std::vector<BlockId> Succs = Graph.successorsOf(Head);
+  if (Succs.empty()) {
+    return false;
+  }
+
+  std::vector<BlockId> HeadPreds = predecessorsOf(Graph, Head);
+  if (HeadPreds.size() != 1 || HeadPreds.front() != ExpectedPred) {
+    return false;
+  }
+
+  std::set<BlockId> NewSeen = Seen;
+  std::vector<BlockId> NewBlocks = {Head};
+  if (!NewSeen.insert(Head).second) {
+    return false;
+  }
+
+  for (BlockId Succ : Succs) {
+    if (!collectClosedReturnTail(Graph, Succ, Head, NewSeen, NewBlocks)) {
+      return false;
+    }
+  }
+
+  Seen = std::move(NewSeen);
+  Blocks.insert(Blocks.end(), NewBlocks.begin(), NewBlocks.end());
+  return true;
+}
+
 bool collectReverseFallthroughSideToBranch(
     const StructuredCFG &Graph, BlockId Start, BlockId TailHead,
     const std::set<BlockId> &TailBlocks, BlockId &Head,
@@ -731,6 +774,16 @@ bool collectClosedReturnTail(const StructuredCFG &Graph, BlockId Head,
   CandidateBlocks.clear();
   if (collectClosedJoinedDiamondReturnTail(Graph, Head, ExpectedPred,
                                            CandidateSeen, CandidateBlocks)) {
+    Seen = std::move(CandidateSeen);
+    Blocks.insert(Blocks.end(), CandidateBlocks.begin(),
+                  CandidateBlocks.end());
+    return true;
+  }
+
+  CandidateSeen = Seen;
+  CandidateBlocks.clear();
+  if (collectClosedSwitchReturnTail(Graph, Head, ExpectedPred, CandidateSeen,
+                                    CandidateBlocks)) {
     Seen = std::move(CandidateSeen);
     Blocks.insert(Blocks.end(), CandidateBlocks.begin(),
                   CandidateBlocks.end());

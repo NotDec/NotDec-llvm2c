@@ -847,6 +847,61 @@ diamond_ret:
         "counts": {"return 7;": 2, "return 9;": 4},
     },
     {
+        "name": "sailr_branch_switch_return_tail",
+        "ir": r"""
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+entry:
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+  ]
+
+case1:
+  br label %outer
+
+case2:
+  br label %outer
+
+default:
+  ret i32 0
+
+outer:
+  %outer_cond = icmp eq i32 %a, %b
+  br i1 %outer_cond, label %plain_tail, label %inner_switch
+
+plain_tail:
+  %plain = add i32 %a, 1
+  br label %plain_ret
+
+plain_ret:
+  ret i32 7
+
+inner_switch:
+  switch i32 %a, label %inner_default [
+    i32 10, label %inner_case
+    i32 11, label %inner_case2
+  ]
+
+inner_default:
+  ret i32 8
+
+inner_case:
+  ret i32 9
+
+inner_case2:
+  ret i32 10
+}
+""",
+        "contains": ["switch (x)", "case 1:", "case 2:", "if (a == b)",
+                     "switch (a)", "case 10:", "case 11:", "return 7;",
+                     "return 8;", "return 9;", "return 10;"],
+        "absent": ["goto outer", "goto plain_tail", "goto plain_ret",
+                   "goto inner_switch", "goto inner_default",
+                   "goto inner_case", "goto inner_case2", "phi", "reg2mem"],
+        "counts": {"switch (a)": 2, "return 7;": 2, "return 8;": 2,
+                   "return 9;": 2, "return 10;": 2},
+    },
+    {
         "name": "sailr_switch_diamond_return_tail",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a, i32 %b) {
