@@ -11,6 +11,7 @@
 #include <clang/AST/Expr.h>
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/AST/Stmt.h>
+#include <clang/AST/StmtCXX.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/Support/Casting.h>
@@ -116,6 +117,30 @@ std::size_t callExprCount(clang::Stmt *Stmt) {
   return Counter.Count;
 }
 
+clang::CallExpr *simpleCallExpr(clang::Stmt *Stmt) {
+  if (auto *Call = llvm::dyn_cast_or_null<clang::CallExpr>(Stmt)) {
+    return Call;
+  }
+  if (auto *Cleanups = llvm::dyn_cast_or_null<clang::ExprWithCleanups>(Stmt)) {
+    return llvm::dyn_cast_or_null<clang::CallExpr>(Cleanups->getSubExpr());
+  }
+  return nullptr;
+}
+
+clang::FunctionDecl *directZeroArgCallee(clang::CallExpr *Call) {
+  if (Call == nullptr || Call->getNumArgs() != 0) {
+    return nullptr;
+  }
+
+  auto *DeclRef = llvm::dyn_cast_or_null<clang::DeclRefExpr>(
+      getNoCast(Call->getCallee()));
+  if (DeclRef == nullptr) {
+    return nullptr;
+  }
+
+  return llvm::dyn_cast_or_null<clang::FunctionDecl>(DeclRef->getDecl());
+}
+
 class StructuredGotoAdapter {
   CFG &Cfg;
   clang::ASTContext &Ctx;
@@ -132,6 +157,9 @@ class StructuredGotoAdapter {
   // payloads separate for rendering, but share origin for simple return values.
   std::map<clang::ValueDecl *, st::PayloadRef> SimpleReturnDeclPayloads;
   std::map<std::string, st::PayloadRef> SimpleReturnIntegerPayloads;
+  // P1 merge-graph work needs a shared identity for obviously identical call
+  // statements. Keep this intentionally narrow: direct zero-argument calls only.
+  std::map<clang::FunctionDecl *, st::PayloadRef> SimpleCallPayloads;
   std::set<st::BlockId> TargetedLabels;
 
 public:
@@ -204,6 +232,25 @@ private:
     auto It = SimpleReturnDeclPayloads.find(Decl);
     if (It == SimpleReturnDeclPayloads.end()) {
       SimpleReturnDeclPayloads.emplace(Decl, Payload);
+      return;
+    }
+    Cfg.setPayloadOrigin(Payload.Id, It->second.Id);
+  }
+
+  void setSimpleCallOrigin(st::StructuredCFG &Cfg, st::PayloadRef Payload,
+                           clang::Stmt *Stmt) {
+    if (!Payload.isValid()) {
+      return;
+    }
+
+    clang::FunctionDecl *Callee = directZeroArgCallee(simpleCallExpr(Stmt));
+    if (Callee == nullptr) {
+      return;
+    }
+
+    auto It = SimpleCallPayloads.find(Callee);
+    if (It == SimpleCallPayloads.end()) {
+      SimpleCallPayloads.emplace(Callee, Payload);
       return;
     }
     Cfg.setPayloadOrigin(Payload.Id, It->second.Id);
@@ -531,6 +578,7 @@ private:
           Statements.push_back(Payload);
           setSimpleReturnOrigin(Ret, Payload,
                                 llvm::dyn_cast<clang::ReturnStmt>(Stmt));
+          setSimpleCallOrigin(Ret, Payload, Stmt);
         }
       }
 

@@ -4800,6 +4800,48 @@ void testDuplicationReverterExtractsGotoRelatedCommonStatementTail() {
   assert(Tail->Successors == std::vector<BlockId>{5});
 }
 
+void testDuplicationReverterExtractsCommonStatementTailByPayloadOrigin() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+
+  CFGBlock Left = block(1, {5});
+  Left.Statements.push_back({101});
+  Left.Statements.push_back({201});
+  Cfg.addBlock(std::move(Left));
+
+  Cfg.addBlock(block(2, {3}));
+
+  CFGBlock Right = block(3, {5});
+  Right.Statements.push_back({102});
+  Right.Statements.push_back({301});
+  Cfg.addBlock(std::move(Right));
+
+  Cfg.addBlock(block(5, {}));
+  Cfg.setPayloadOrigin(301, 201);
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+
+  const CFGBlock *LeftAfter = Cfg.getBlock(1);
+  const CFGBlock *RightAfter = Cfg.getBlock(3);
+  assert(LeftAfter != nullptr && RightAfter != nullptr);
+  assert(hasSinglePayload(LeftAfter->Statements, 101));
+  assert(hasSinglePayload(RightAfter->Statements, 102));
+  assert(LeftAfter->Successors.size() == 1);
+  assert(LeftAfter->Successors == RightAfter->Successors);
+
+  const CFGBlock *Tail = Cfg.getBlock(LeftAfter->Successors.front());
+  assert(Tail != nullptr);
+  assert(Tail->Origin == CFGBlockOrigin::Synthetic);
+  assert(hasSinglePayload(Tail->Statements, 201));
+  assert(Tail->Successors == std::vector<BlockId>{5});
+}
+
 void testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -14454,6 +14496,7 @@ int main() {
   testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
   testDuplicationReverterKeepsDivergentBranchPayloadsWithGotoHint();
+  testDuplicationReverterExtractsCommonStatementTailByPayloadOrigin();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference();
   testDuplicationReverterKeepsCommonStatementTailWithoutGotoHint();
   testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear();
