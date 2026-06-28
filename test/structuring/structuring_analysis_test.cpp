@@ -4842,6 +4842,76 @@ void testDuplicationReverterExtractsCommonStatementTailByPayloadOrigin() {
   assert(Tail->Successors == std::vector<BlockId>{5});
 }
 
+void testDuplicationReverterExtractsGotoBranchCommonStatementTail() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {5});
+  ThenBlock.Statements.push_back({101});
+  ThenBlock.Statements.push_back({201});
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {5});
+  ElseBlock.Statements.push_back({102});
+  ElseBlock.Statements.push_back({201});
+  Cfg.addBlock(std::move(ElseBlock));
+
+  Cfg.addBlock(block(5, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>({1, 2}));
+
+  const CFGBlock *ThenAfter = Cfg.getBlock(1);
+  const CFGBlock *ElseAfter = Cfg.getBlock(2);
+  assert(ThenAfter != nullptr && ElseAfter != nullptr);
+  assert(hasSinglePayload(ThenAfter->Statements, 101));
+  assert(hasSinglePayload(ElseAfter->Statements, 102));
+  assert(ThenAfter->Successors.size() == 1);
+  assert(ThenAfter->Successors == ElseAfter->Successors);
+
+  const CFGBlock *Tail = Cfg.getBlock(ThenAfter->Successors.front());
+  assert(Tail != nullptr);
+  assert(Tail->Origin == CFGBlockOrigin::Synthetic);
+  assert(Tail->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(hasSinglePayload(Tail->Statements, 201));
+  assert(Tail->Successors == std::vector<BlockId>{5});
+}
+
+void testDuplicationReverterKeepsBranchCommonStatementTailWithoutGotoHint() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {5});
+  ThenBlock.Statements.push_back({101});
+  ThenBlock.Statements.push_back({201});
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {5});
+  ElseBlock.Statements.push_back({102});
+  ElseBlock.Statements.push_back({201});
+  Cfg.addBlock(std::move(ElseBlock));
+
+  Cfg.addBlock(block(5, {}));
+
+  StructuringEvaluation Current;
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(0)->Successors == std::vector<BlockId>({1, 2}));
+  assert(Cfg.getBlock(1)->Statements.size() == 2);
+  assert(Cfg.getBlock(2)->Statements.size() == 2);
+  assert(Cfg.getBlock(1)->Successors == std::vector<BlockId>{5});
+  assert(Cfg.getBlock(2)->Successors == std::vector<BlockId>{5});
+}
+
 void testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -14497,6 +14567,8 @@ int main() {
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
   testDuplicationReverterKeepsDivergentBranchPayloadsWithGotoHint();
   testDuplicationReverterExtractsCommonStatementTailByPayloadOrigin();
+  testDuplicationReverterExtractsGotoBranchCommonStatementTail();
+  testDuplicationReverterKeepsBranchCommonStatementTailWithoutGotoHint();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTailWithCopiedSuccessorReference();
   testDuplicationReverterKeepsCommonStatementTailWithoutGotoHint();
   testDuplicationReverterSkipsCommonTailWhenRegionIsNotLinear();

@@ -1085,6 +1085,26 @@ bool disjointPredecessorSets(const StructuredCFG &Graph, BlockId Lhs,
   return true;
 }
 
+bool sameGotoBranchPredecessorPair(const StructuredCFG &Graph, BlockId Lhs,
+                                   BlockId Rhs, BlockId GotoSource) {
+  std::vector<BlockId> LhsPreds = predecessorsOf(Graph, Lhs);
+  std::vector<BlockId> RhsPreds = predecessorsOf(Graph, Rhs);
+  if (LhsPreds.size() != 1 || RhsPreds.size() != 1 ||
+      LhsPreds.front() != RhsPreds.front() ||
+      LhsPreds.front() != GotoSource) {
+    return false;
+  }
+
+  const CFGBlock *Pred = Graph.getBlock(GotoSource);
+  if (Pred == nullptr || Pred->Terminator != TerminatorKind::Branch ||
+      Pred->Successors.size() != 2) {
+    return false;
+  }
+
+  return (Pred->Successors[0] == Lhs && Pred->Successors[1] == Rhs) ||
+         (Pred->Successors[0] == Rhs && Pred->Successors[1] == Lhs);
+}
+
 bool hasDephicationContext(const StructuredCFG &Graph, BlockId Id) {
   DephicationEdgeContext EdgeContext = Graph.dephicationEdgeContext(Id);
   DephicationEdgeContext BlockContext = Graph.dephicationBlockContext(Id);
@@ -1158,6 +1178,32 @@ bool commonStatementTailCandidate(const StructuredCFG &Graph, BlockId LhsId,
 
   if (predecessorsOf(Graph, LhsId).empty() ||
       predecessorsOf(Graph, RhsId).empty()) {
+    return false;
+  }
+
+  CommonSuffix =
+      commonStatementSuffixLength(Graph, Lhs->Statements, Rhs->Statements);
+  return CommonSuffix > 0 && CommonSuffix < Lhs->Statements.size() &&
+         CommonSuffix < Rhs->Statements.size();
+}
+
+bool commonBranchStatementTailCandidate(const StructuredCFG &Graph,
+                                        BlockId LhsId, BlockId RhsId,
+                                        BlockId GotoSource,
+                                        std::size_t &CommonSuffix) {
+  if (LhsId == RhsId || Graph.hasEdge(LhsId, RhsId) ||
+      Graph.hasEdge(RhsId, LhsId)) {
+    return false;
+  }
+
+  const CFGBlock *Lhs = Graph.getBlock(LhsId);
+  const CFGBlock *Rhs = Graph.getBlock(RhsId);
+  if (Lhs == nullptr || Rhs == nullptr ||
+      !sameGotoBranchPredecessorPair(Graph, LhsId, RhsId, GotoSource) ||
+      !sameBlockControlShapeByReference(Graph, *Lhs, *Rhs) ||
+      !canSplitCommonStatementTailBlock(Graph, *Lhs) ||
+      !canSplitCommonStatementTailBlock(Graph, *Rhs) ||
+      reachesBlock(Graph, LhsId, RhsId) || reachesBlock(Graph, RhsId, LhsId)) {
     return false;
   }
 
@@ -1438,12 +1484,30 @@ bool revertGotoRelatedCommonStatementTail(StructuredCFG &Graph,
       continue;
     }
 
+    std::optional<BlockId> BranchOther;
+    const CFGBlock *GotoSourceBlock = Graph.getBlock(Goto.Source);
+    if (GotoSourceBlock != nullptr &&
+        GotoSourceBlock->Terminator == TerminatorKind::Branch &&
+        GotoSourceBlock->Successors.size() == 2) {
+      if (GotoSourceBlock->Successors[0] == Goto.Target) {
+        BranchOther = GotoSourceBlock->Successors[1];
+      } else if (GotoSourceBlock->Successors[1] == Goto.Target) {
+        BranchOther = GotoSourceBlock->Successors[0];
+      }
+    }
+
     BlockId BestOther = InvalidBlockId;
     std::size_t BestSuffix = 0;
     for (BlockId OtherId : BlockIds) {
       std::size_t CommonSuffix = 0;
-      if (!commonStatementTailCandidate(Graph, Goto.Target, OtherId,
-                                        CommonSuffix)) {
+      bool Candidate =
+          commonStatementTailCandidate(Graph, Goto.Target, OtherId,
+                                       CommonSuffix);
+      if (!Candidate && BranchOther.has_value() && OtherId == *BranchOther) {
+        Candidate = commonBranchStatementTailCandidate(
+            Graph, Goto.Target, OtherId, Goto.Source, CommonSuffix);
+      }
+      if (!Candidate) {
         continue;
       }
       if (CommonSuffix > BestSuffix ||
