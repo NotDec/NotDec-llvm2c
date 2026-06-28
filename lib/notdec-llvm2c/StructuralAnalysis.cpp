@@ -2801,6 +2801,19 @@ clang::Expr *ExprBuilder::getUndef(clang::QualType Ty) {
     return clang::CallExpr::Create(Ctx, makeDeclRefExpr(Target), {}, Ty,
                                    clang::VK_PRValue, clang::SourceLocation(),
                                    clang::FPOptionsOverride());
+  } else if (auto *RecordTy = Ty->getAs<clang::RecordType>()) {
+    // Preserve undef at field granularity instead of silently choosing zero.
+    llvm::SmallVector<clang::Expr *, 8> Inits;
+    for (auto *Field : RecordTy->getDecl()->fields()) {
+      Inits.push_back(getUndef(Field->getType()));
+    }
+    auto *Init = new (Ctx) clang::InitListExpr(
+        Ctx, clang::SourceLocation(), Inits, clang::SourceLocation());
+    return new (Ctx) clang::CompoundLiteralExpr(
+        clang::SourceLocation(), Ctx.getTrivialTypeSourceInfo(Ty), Ty,
+        clang::VK_LValue, Init, false);
+  } else if (Ty->isArrayType()) {
+    return new (Ctx) clang::ImplicitValueInitExpr(Ty);
   }
   assert(false && "TODO");
 }

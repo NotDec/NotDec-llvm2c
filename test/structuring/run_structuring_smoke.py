@@ -486,6 +486,17 @@ entry:
         "absent": ["extractvalue"],
     },
     {
+        "name": "aggregate_undef_return",
+        "ir": r"""
+define { i64, i64 } @f() {
+entry:
+  ret { i64, i64 } poison
+}
+""",
+        "contains": ["llvm_undef_i64", "return (struct (unnamed)){llvm_undef_i64(), llvm_undef_i64()};"],
+        "absent": ["poison"],
+    },
+    {
         "name": "sailr_angr_dephication_phi",
         "ir": r"""
 define i32 @f(i1 %c, i32 %a, i32 %b) {

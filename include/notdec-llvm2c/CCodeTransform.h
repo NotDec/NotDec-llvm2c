@@ -329,9 +329,68 @@ public:
         ParenExpr(E->getLParen(), E->getRParen(), Sub.get());
   }
 
+  ExprResult TransformCompoundLiteralExpr(clang::CompoundLiteralExpr *E) {
+    ExprResult Init = this->getDerived().TransformExpr(E->getInitializer());
+    if (Init.isInvalid())
+      return ExprError();
+
+    if (!this->getDerived().AlwaysRebuild() &&
+        Init.get() == E->getInitializer())
+      return E;
+
+    return new (this->Context) CompoundLiteralExpr(
+        E->getLParenLoc(), E->getTypeSourceInfo(), E->getType(),
+        E->getValueKind(), Init.get(), E->isFileScope());
+  }
+
+  ExprResult TransformInitListExpr(clang::InitListExpr *E) {
+    SmallVector<Expr *, 8> Inits;
+    bool AllInitsEqual = true;
+    for (Expr *Init : E->inits()) {
+      if (!Init) {
+        Inits.push_back(nullptr);
+        continue;
+      }
+      ExprResult R = this->getDerived().TransformExpr(Init);
+      if (R.isInvalid())
+        return ExprError();
+      if (R.get() != Init)
+        AllInitsEqual = false;
+      Inits.push_back(R.get());
+    }
+
+    Expr *ArrayFiller = E->getArrayFiller();
+    if (ArrayFiller) {
+      ExprResult R = this->getDerived().TransformExpr(ArrayFiller);
+      if (R.isInvalid())
+        return ExprError();
+      if (R.get() != ArrayFiller)
+        AllInitsEqual = false;
+      ArrayFiller = R.get();
+    }
+
+    if (!this->getDerived().AlwaysRebuild() && AllInitsEqual)
+      return E;
+
+    auto *NewE = new (this->Context)
+        InitListExpr(this->Context, E->getLBraceLoc(), Inits,
+                     E->getRBraceLoc());
+    NewE->setType(E->getType());
+    if (ArrayFiller)
+      NewE->setArrayFiller(ArrayFiller);
+    if (FieldDecl *Field = E->getInitializedFieldInUnion())
+      NewE->setInitializedFieldInUnion(Field);
+    NewE->sawArrayRangeDesignator(E->hadArrayRangeDesignator());
+    return NewE;
+  }
+
   ExprResult TransformIntegerLiteral(clang::IntegerLiteral *E) { return E; }
 
   ExprResult TransformCXXBoolLiteralExpr(clang::CXXBoolLiteralExpr *E) {
+    return E;
+  }
+
+  ExprResult TransformImplicitValueInitExpr(clang::ImplicitValueInitExpr *E) {
     return E;
   }
 
