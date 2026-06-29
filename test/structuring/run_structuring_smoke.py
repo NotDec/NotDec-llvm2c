@@ -242,6 +242,36 @@ merge:
         "absent": ["goto left", "goto right"],
     },
     {
+        "name": "sailr_return_deduplicator_linear_chain",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %then_head, label %else_head
+
+then_head:
+  call void @a()
+  br label %then_ret
+
+then_ret:
+  ret i32 0
+
+else_head:
+  call void @b()
+  br label %else_ret
+
+else_ret:
+  ret i32 0
+}
+""",
+        "contains": ["a();", "b();", "return 0;"],
+        "absent": ["goto then_ret", "goto else_ret"],
+        "counts": {"return 0;": 1},
+    },
+    {
         "name": "real_switch_fixture",
         "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/switch_case_recovery.ll"),
         "contains": ["switch (a)", "case 1:", "case 12:", "case 123:",
