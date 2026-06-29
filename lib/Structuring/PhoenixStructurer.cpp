@@ -49,6 +49,8 @@ void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
                             NodeId Id);
 void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
                                RegionOverlay &Overlay);
+bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
+                          StructuredNodeKind Kind);
 bool sourceContainsStructuredSwitch(const MutableRegionNode &Source,
                                     const StructuredTree &Tree);
 bool isStructuredLoopKind(StructuredNodeKind Kind);
@@ -1467,11 +1469,55 @@ NodeId buildVirtualizedBranchSource(const CFGBlock &Tail,
   return Tree.addNode(std::move(Sequence));
 }
 
+NodeId buildTerminalBlockBody(const StructuredCFG &Cfg, BlockId Target,
+                              StructuredTree &Tree) {
+  const CFGBlock *TargetBlock = Cfg.getBlock(Target);
+  if (TargetBlock == nullptr ||
+      (TargetBlock->Terminator != TerminatorKind::Return &&
+       TargetBlock->Terminator != TerminatorKind::Unreachable)) {
+    return InvalidNodeId;
+  }
+
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  appendBlockBody(Cfg, Target, Body, Tree);
+
+  StructuredNode Terminal;
+  Terminal.Kind = TargetBlock->Terminator == TerminatorKind::Return
+                      ? StructuredNodeKind::Return
+                      : StructuredNodeKind::Unreachable;
+  Body.Children.push_back(Tree.addNode(std::move(Terminal)));
+  return Tree.addNode(std::move(Body));
+}
+
+NodeId buildSwitchTargetBody(const StructuredCFG &Cfg, const Region &R,
+                             BlockId Target, VirtualEdgeKind Kind,
+                             StructuredTree &Tree) {
+  if (NodeId TerminalBody = buildTerminalBlockBody(Cfg, Target, Tree);
+      TerminalBody != InvalidNodeId) {
+    return TerminalBody;
+  }
+  return Tree.addNode(makeControlTransfer(
+      Target, Kind == VirtualEdgeKind::Goto
+                  ? classifyNaturalLoopExit(Cfg, R, Target)
+                  : Kind));
+}
+
 NodeId buildVirtualizedSwitchSource(const CFGBlock &Tail,
                                     const MutableRegionNode &Source,
                                     const VirtualEdge &Edge, const Region &R,
                                     const StructuredCFG &Cfg,
                                     StructuredTree &Tree) {
+  if (Source.StructuredRoot != InvalidNodeId &&
+      (nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                            StructuredNodeKind::While) ||
+       nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                            StructuredNodeKind::DoWhile) ||
+       nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                            StructuredNodeKind::InfiniteLoop))) {
+    return InvalidNodeId;
+  }
+
   StructuredNode Sequence;
   Sequence.Kind = StructuredNodeKind::Sequence;
   appendSourceBody(Cfg, Source, Sequence, Tree);
@@ -1480,6 +1526,42 @@ NodeId buildVirtualizedSwitchSource(const CFGBlock &Tail,
   SwitchNode.Kind = StructuredNodeKind::Switch;
   SwitchNode.Block = Tail.Id;
   SwitchNode.Condition = Tail.Condition;
+
+  if (R.Kind == RegionKind::NaturalLoop) {
+    if (Source.StructuredRoot != InvalidNodeId &&
+        sourceContainsStructuredSwitch(Source, Tree)) {
+      return InvalidNodeId;
+    }
+
+    auto TransferKindFor = [&](BlockId Target) {
+      if (Target == Edge.ToBlock && Edge.Kind != VirtualEdgeKind::Goto) {
+        return Edge.Kind;
+      }
+      return classifyNaturalLoopExit(Cfg, R, Target);
+    };
+
+    bool Matched = false;
+    if (!Tail.Successors.empty()) {
+      SwitchNode.DefaultTarget = Tail.Successors[0];
+      SwitchNode.Default =
+          buildSwitchTargetBody(Cfg, R, Tail.Successors[0],
+                                TransferKindFor(Tail.Successors[0]), Tree);
+      Matched = Tail.Successors[0] == Edge.ToBlock;
+    }
+    for (const SwitchCase &Case : Tail.Cases) {
+      NodeId CaseBody = buildSwitchTargetBody(
+          Cfg, R, Case.Target, TransferKindFor(Case.Target), Tree);
+      SwitchNode.StructuredCases.push_back({Case.Value, Case.Target, CaseBody});
+      Matched |= Case.Target == Edge.ToBlock;
+    }
+    if (!Matched) {
+      return InvalidNodeId;
+    }
+
+    Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
+    return Tree.addNode(std::move(Sequence));
+  }
+
   SwitchNode.Cases = Tail.Cases;
 
   bool Matched = false;
@@ -2491,6 +2573,42 @@ bool virtualizeNonFollowLoopExits(const StructuredCFG &Cfg,
   return Changed;
 }
 
+bool virtualizeTerminalSwitchLoopExits(const StructuredCFG &Cfg,
+                                       const Region &LoopRegion,
+                                       const std::set<GraphNodeId> &Members,
+                                       MutableRegionGraph &Graph,
+                                       StructuredTree &Tree,
+                                       RegionOverlay *Overlay) {
+  std::vector<VirtualEdge> Edges;
+  for (GraphNodeId Id : Members) {
+    const MutableRegionNode *Node = Graph.getNode(Id);
+    if (Node == nullptr ||
+        !nodeTreeContainsKind(Tree, Node->StructuredRoot,
+                              StructuredNodeKind::Switch)) {
+      continue;
+    }
+    for (GraphNodeId SuccId : Node->Succs) {
+      if (Members.count(SuccId)) {
+        continue;
+      }
+      const MutableRegionNode *Succ = Graph.getNode(SuccId);
+      if (Succ == nullptr || Succ->Blocks.empty() ||
+          !isTerminalBlock(Cfg, Succ->Blocks.front())) {
+        continue;
+      }
+      Edges.push_back({Id, SuccId, Node->TailBlock, Succ->Blocks.front(),
+                       VirtualEdgeKind::Break});
+    }
+  }
+
+  bool Changed = false;
+  for (const VirtualEdge &Edge : Edges) {
+    Changed |= installVirtualizedEdge(Cfg, LoopRegion, Graph, Tree, Overlay,
+                                      Edge, /*RewriteSource=*/false);
+  }
+  return Changed;
+}
+
 bool wouldDetachAllPredecessorsOfNonFollowSuccessor(
     const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
     const std::set<GraphNodeId> &Members, BlockId FollowBlock) {
@@ -2816,6 +2934,8 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
       virtualizeNonFollowLoopExits(Cfg, LoopRegion, MemberSet, FollowBlock,
                                    Graph, Tree, Overlay);
     }
+    virtualizeTerminalSwitchLoopExits(Cfg, LoopRegion, MemberSet, Graph, Tree,
+                                      Overlay);
     virtualizeExtraContinueEdges(Cfg, LoopRegion, MemberSet, HeadId, Analysis,
                                  Graph, Tree, Overlay);
 

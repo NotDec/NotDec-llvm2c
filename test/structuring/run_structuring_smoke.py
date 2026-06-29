@@ -141,6 +141,45 @@ exit:
         "contains": ["switch (x)", "case 1:", "case 2:", "return 0;"],
     },
     {
+        "name": "loop_header_switch_keeps_condition_once",
+        "ir": r"""
+declare i32 @next()
+declare void @a()
+declare void @b()
+
+define i32 @main() {
+entry:
+  br label %head
+
+head:
+  %x = call i32 @next()
+  switch i32 %x, label %default [
+    i32 1, label %case1
+    i32 2, label %case2
+    i32 -1, label %exit
+  ]
+
+case1:
+  call void @a()
+  br label %head
+
+case2:
+  call void @b()
+  br label %head
+
+default:
+  ret i32 -1
+
+exit:
+  ret i32 0
+}
+""",
+        "contains": ["while (1)", "switch (next())", "case 1:", "case 2:",
+                     "case -1:", "continue;", "return 0;"],
+        "absent": ["goto case1", "goto case2", "goto head"],
+        "counts": {"switch (next())": 1},
+    },
+    {
         "name": "lowered_if_chain_switch",
         "ir": r"""
 define i32 @main(i32 %x) {
