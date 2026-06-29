@@ -311,7 +311,8 @@ exit:
 }
 """,
         "contains": ["a();", "b();", "c();", "return 0;"],
-        "counts": {"c();": 2},
+        "absent": ["goto structured_block_"],
+        "body_counts": {"c();": 2},
     },
     {
         "name": "branch_return_region_proxy",
