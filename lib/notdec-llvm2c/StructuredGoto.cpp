@@ -155,6 +155,7 @@ class StructuredGotoAdapter {
   std::map<std::string, st::PayloadRef> ConditionIntegerPayloads;
   // RetDupPass can clone one default return into two AST nodes; keep the
   // payloads separate for rendering, but share origin for simple return values.
+  std::optional<st::PayloadRef> SimpleVoidReturnPayload;
   std::map<clang::ValueDecl *, st::PayloadRef> SimpleReturnDeclPayloads;
   std::map<std::string, st::PayloadRef> SimpleReturnIntegerPayloads;
   // P1 merge-graph work needs a shared identity for obviously identical call
@@ -204,6 +205,11 @@ private:
 
     clang::Expr *Value = Ret->getRetValue();
     if (Value == nullptr) {
+      if (!SimpleVoidReturnPayload.has_value()) {
+        SimpleVoidReturnPayload = Payload;
+        return;
+      }
+      Cfg.setPayloadOrigin(Payload.Id, SimpleVoidReturnPayload->Id);
       return;
     }
 

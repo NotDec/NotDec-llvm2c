@@ -272,6 +272,29 @@ else_ret:
         "counts": {"return 0;": 1},
     },
     {
+        "name": "sailr_return_deduplicator_void_branch",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define void @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %then, label %else
+
+then:
+  call void @a()
+  ret void
+
+else:
+  call void @b()
+  ret void
+}
+""",
+        "contains": ["a();", "b();", "return;"],
+        "counts": {"return;": 1},
+    },
+    {
         "name": "real_switch_fixture",
         "input": Path("external/NotDec-llvm2c/test/structuring/fixtures/switch_case_recovery.ll"),
         "contains": ["switch (a)", "case 1:", "case 12:", "case 123:",
