@@ -4010,7 +4010,7 @@ bool canDeduplicateReturnArm(const StructuredCFG &Graph, BlockId Branch,
                              BlockId Arm) {
   const CFGBlock *Block = Graph.getBlock(Arm);
   if (Block == nullptr || Block->Terminator != TerminatorKind::Return ||
-      Block->Successors.empty() == false || Block->Statements.empty()) {
+      Block->Successors.empty() == false) {
     return false;
   }
 
@@ -4021,7 +4021,7 @@ bool canDeduplicateReturnArm(const StructuredCFG &Graph, BlockId Branch,
 bool sameTailReturnPayload(const StructuredCFG &Graph, const CFGBlock &Lhs,
                            const CFGBlock &Rhs) {
   if (Lhs.Statements.empty() || Rhs.Statements.empty()) {
-    return false;
+    return Lhs.Statements.empty() && Rhs.Statements.empty();
   }
   return samePayload(Graph, Lhs.Statements.back(), Rhs.Statements.back());
 }
@@ -4056,13 +4056,18 @@ bool deduplicateReturnArmGroup(StructuredCFG &Graph, BlockId Parent,
     return false;
   }
 
-  PayloadRef SharedReturn = FirstCandidateArm->Statements.back();
+  std::optional<PayloadRef> SharedReturn;
+  if (!FirstCandidateArm->Statements.empty()) {
+    SharedReturn = FirstCandidateArm->Statements.back();
+  }
   for (BlockId ArmId : ArmIds) {
     CFGBlock *Arm = Candidate.getBlock(ArmId);
-    if (Arm == nullptr || Arm->Statements.empty()) {
+    if (Arm == nullptr) {
       return false;
     }
-    Arm->Statements.pop_back();
+    if (!Arm->Statements.empty()) {
+      Arm->Statements.pop_back();
+    }
     Arm->Terminator = TerminatorKind::Fallthrough;
   }
 
@@ -4070,7 +4075,9 @@ bool deduplicateReturnArmGroup(StructuredCFG &Graph, BlockId Parent,
   ReturnBlock.Origin = CFGBlockOrigin::Synthetic;
   ReturnBlock.CopyKind = CFGBlockCopyKind::None;
   ReturnBlock.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
-  ReturnBlock.Statements = {SharedReturn};
+  if (SharedReturn.has_value()) {
+    ReturnBlock.Statements = {*SharedReturn};
+  }
   ReturnBlock.Terminator = TerminatorKind::Return;
   BlockId ReturnId = Candidate.addBlock(std::move(ReturnBlock));
   for (BlockId ArmId : ArmIds) {
