@@ -1134,6 +1134,91 @@ std::optional<BlockId> privateBranchSibling(const StructuredCFG &Graph,
   return std::nullopt;
 }
 
+bool hasGotoTouchingBranchPair(const GotoManager &Gotos, BlockId Branch,
+                               BlockId Lhs, BlockId Rhs) {
+  for (const StructuredGoto &Goto : Gotos.gotos()) {
+    if (Goto.Source == Branch &&
+        (Goto.Target == Lhs || Goto.Target == Rhs)) {
+      return true;
+    }
+    if ((Goto.Source == Lhs || Goto.Source == Rhs) &&
+        (Goto.Target == Lhs || Goto.Target == Rhs ||
+         Goto.Target == InvalidBlockId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool canMergePrivateBranchArm(const StructuredCFG &Graph, BlockId Branch,
+                              BlockId Arm, const CFGBlock &Reference) {
+  const CFGBlock *Block = Graph.getBlock(Arm);
+  return Block != nullptr &&
+         sameBranchPredecessorPair(Graph, Reference.Id, Arm, Branch) &&
+         sameBlockIdentityKind(Reference, *Block) &&
+         sameBlockShapeByReference(Graph, Reference, *Block);
+}
+
+bool canDiscardBranchCondition(const StructuredCFG &Graph,
+                               const CFGBlock &Branch) {
+  if (!Branch.Condition.isValid()) {
+    return true;
+  }
+  return Graph.conditionCompare(Branch.Condition).has_value();
+}
+
+bool revertGotoRelatedDuplicateBranchArms(
+    StructuredCFG &Graph, const StructuringEvaluation &Current) {
+  if (Current.Gotos.empty()) {
+    return false;
+  }
+
+  std::vector<BlockId> BlockIds;
+  BlockIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    BlockIds.push_back(Block.Id);
+  }
+  std::sort(BlockIds.begin(), BlockIds.end());
+
+  for (BlockId BranchId : BlockIds) {
+    const CFGBlock *Branch = Graph.getBlock(BranchId);
+    if (Branch == nullptr || Branch->Terminator != TerminatorKind::Branch ||
+        Branch->Successors.size() != 2 ||
+        Branch->Successors[0] == Branch->Successors[1] ||
+        !canDiscardBranchCondition(Graph, *Branch)) {
+      continue;
+    }
+
+    BlockId KeepId = std::min(Branch->Successors[0], Branch->Successors[1]);
+    BlockId DropId = std::max(Branch->Successors[0], Branch->Successors[1]);
+    const CFGBlock *Keep = Graph.getBlock(KeepId);
+    if (Keep == nullptr ||
+        !hasGotoTouchingBranchPair(Current.Gotos, BranchId, KeepId, DropId) ||
+        !canMergePrivateBranchArm(Graph, BranchId, DropId, *Keep)) {
+      continue;
+    }
+
+    StructuredCFG Candidate = Graph;
+    CFGBlock *CandidateBranch = Candidate.getBlock(BranchId);
+    if (CandidateBranch == nullptr) {
+      continue;
+    }
+    CandidateBranch->Terminator = TerminatorKind::Fallthrough;
+    CandidateBranch->Condition = {};
+    CandidateBranch->Successors = {KeepId};
+    CandidateBranch->Cases.clear();
+
+    if (!Candidate.removeBlock(DropId)) {
+      continue;
+    }
+
+    Graph = std::move(Candidate);
+    return true;
+  }
+
+  return false;
+}
+
 bool hasDephicationContext(const StructuredCFG &Graph, BlockId Id) {
   DephicationEdgeContext EdgeContext = Graph.dephicationEdgeContext(Id);
   DephicationEdgeContext BlockContext = Graph.dephicationBlockContext(Id);
@@ -3628,6 +3713,9 @@ StructuringOptimizationOptions DuplicationReverter::defaultOptions() {
 
 bool DuplicationReverter::runOnGraph(StructuredCFG &Graph,
                                      const StructuringEvaluation &Current) {
+  if (revertGotoRelatedDuplicateBranchArms(Graph, Current)) {
+    return true;
+  }
   if (revertGotoRelatedCommonLinearRegionTail(Graph, Current)) {
     return true;
   }

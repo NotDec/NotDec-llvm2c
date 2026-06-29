@@ -252,7 +252,7 @@ default:
         "name": "fmt_deduplication_proxy",
         "angr_test": "test_fmt_deduplication",
         "semantic": "DuplicationReverter duplicated call proxy",
-        "expected_failure": "P1 DuplicationReverter still lacks Angr-style similar-statement merge graph for duplicated call/return arms",
+        "expected_failure": "P1 DuplicationReverter still lacks Angr-style candidate search and ReturnDeduplicator interaction for this no-goto proxy",
         "ir": r"""
 declare void @xdectoumax()
 

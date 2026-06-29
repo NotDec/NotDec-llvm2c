@@ -4809,6 +4809,45 @@ void testDuplicationReverterKeepsDivergentBranchPayloadsWithGotoHint() {
   assert(hasSinglePayload(Cfg.getBlock(2)->Statements, 112));
 }
 
+void testDuplicationReverterMergesGotoRelatedDuplicateBranchArms() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {3});
+  ThenBlock.Statements.push_back({101});
+  ThenBlock.Statements.push_back({201});
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {3});
+  ElseBlock.Statements.push_back({301});
+  ElseBlock.Statements.push_back({401});
+  Cfg.addBlock(std::move(ElseBlock));
+  Cfg.setPayloadOrigin(301, 101);
+  Cfg.setPayloadOrigin(401, 201);
+
+  Cfg.addBlock(block(3, {}));
+
+  StructuringEvaluation Current;
+  Current.Gotos = GotoManager::fromGotos({StructuredGoto{0, 1}});
+
+  TestDuplicationReverter Pass(DuplicationReverter::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  assert(Cfg.getBlock(2) == nullptr);
+
+  const CFGBlock *Branch = Cfg.getBlock(0);
+  const CFGBlock *Merged = Cfg.getBlock(1);
+  assert(Branch != nullptr && Merged != nullptr);
+  assert(Branch->Terminator == TerminatorKind::Fallthrough);
+  assert(Branch->Condition.Id == InvalidPayloadId);
+  assert(Branch->Successors == std::vector<BlockId>{1});
+  assert(Merged->Successors == std::vector<BlockId>{3});
+  assert(Merged->Statements.size() == 2);
+  assert(Merged->Statements[0].Id == 101);
+  assert(Merged->Statements[1].Id == 201);
+}
+
 void testDuplicationReverterExtractsGotoRelatedCommonStatementTail() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -14740,6 +14779,7 @@ int main() {
   testDuplicationReverterSeparatesWrittenAndMergeableDuplication();
   testDuplicationReverterExtractsGotoRelatedCommonStatementTail();
   testDuplicationReverterKeepsDivergentBranchPayloadsWithGotoHint();
+  testDuplicationReverterMergesGotoRelatedDuplicateBranchArms();
   testDuplicationReverterExtractsCommonStatementTailByPayloadOrigin();
   testDuplicationReverterExtractsGotoBranchCommonStatementTail();
   testDuplicationReverterExtractsBranchCommonTailFromArmGotoHint();
