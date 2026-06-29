@@ -747,7 +747,7 @@ def summarize_failure(failure: str) -> str:
 
 
 def run_case(
-    notdec_llvm2c: Path, work_dir: Path, case: dict
+    notdec_llvm2c: Path, work_dir: Path, case: dict, run_cache: dict
 ) -> tuple[str, list[str], dict, str]:
     input_path = case.get("input")
     if input_path is None:
@@ -758,6 +758,18 @@ def run_case(
     if not input_path.exists():
         failures = [f"{case['name']}: missing input file {input_path}"]
         return "skip", failures, {}, classify_failures("skip", failures)
+
+    cache_key = (
+        str(input_path),
+        tuple(case.get("args", [])),
+        case.get("timeout"),
+    )
+    if cache_key in run_cache:
+        failures, classification = run_cache[cache_key]
+        return "fail", [
+            f"{case['name']}: reused cached result from same input",
+            *list(failures),
+        ], {}, classification
 
     output_path = work_dir / f"{case['name']}.c"
     try:
@@ -781,13 +793,18 @@ def run_case(
         failures = [
             f"{case['name']}: command timed out after {case['timeout']}s\n{output}"
         ]
+        run_cache[cache_key] = (list(failures), "timeout")
         return "fail", failures, {}, "timeout"
     if proc.returncode != 0:
         failures = [f"{case['name']}: command failed\n{proc.stdout}"]
-        return "fail", failures, {}, classify_failures("fail", failures)
+        classification = classify_failures("fail", failures)
+        run_cache[cache_key] = (list(failures), classification)
+        return "fail", failures, {}, classification
     if not output_path.exists():
         failures = [f"{case['name']}: missing output file\n{proc.stdout}"]
-        return "fail", failures, {}, classify_failures("fail", failures)
+        classification = classify_failures("fail", failures)
+        run_cache[cache_key] = (list(failures), classification)
+        return "fail", failures, {}, classification
 
     output = output_path.read_text()
     failures = []
@@ -814,7 +831,13 @@ def run_case(
                 f"{header}: expected {expected} x {needle!r} in function body, got {actual}"
             )
     status = "fail" if failures else "pass"
-    return status, failures, output_metrics(output), classify_failures(status, failures)
+    result = (
+        status,
+        failures,
+        output_metrics(output),
+        classify_failures(status, failures),
+    )
+    return result
 
 
 def write_report(path: Path, rows: list[dict]) -> None:
@@ -847,9 +870,10 @@ def main() -> int:
     rows = []
     with tempfile.TemporaryDirectory(prefix="notdec-sailr-bench2-") as tmp:
         work_dir = Path(tmp)
+        run_cache = {}
         for case in CASES:
             status, case_failures, metrics, classification = run_case(
-                args.notdec_llvm2c, work_dir, case
+                args.notdec_llvm2c, work_dir, case, run_cache
             )
             if case.get("expected_failure"):
                 if status == "fail":
