@@ -360,7 +360,6 @@ else:
         "name": "terminal_fork_return_region_proxy",
         "angr_test": "test_decompiling_abnormal_switch_case_within_a_loop_case_1",
         "semantic": "ReturnDuplicatorLow terminal fork return region proxy",
-        "expected_failure": "P2 ReturnDuplicatorLow has pass-level terminal fork support, but the default pipeline still leaves a shared fork goto for this shape",
         "ir": r"""
 define i32 @f(i32 %x, i32 %a, i32 %b) {
 entry:

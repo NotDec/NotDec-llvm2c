@@ -776,6 +776,57 @@ llvm::Function *makeSharedPhiSwitchFunction(llvm::LLVMContext &Context,
   return F;
 }
 
+llvm::Function *makeSwitchCaseTerminalForkFunction(llvm::LLVMContext &Context,
+                                                   llvm::Module &Module) {
+  llvm::IntegerType *I32Ty = llvm::Type::getInt32Ty(Context);
+  auto *FnTy = llvm::FunctionType::get(I32Ty, {I32Ty, I32Ty, I32Ty},
+                                       /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                   "terminal_fork_switch", Module);
+  auto ArgIt = F->arg_begin();
+  llvm::Value *X = &*ArgIt++;
+  X->setName("x");
+  llvm::Value *A = &*ArgIt++;
+  A->setName("a");
+  llvm::Value *B = &*ArgIt++;
+  B->setName("b");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  llvm::BasicBlock *Case1 = llvm::BasicBlock::Create(Context, "case1", F);
+  llvm::BasicBlock *Case2 = llvm::BasicBlock::Create(Context, "case2", F);
+  llvm::BasicBlock *Default = llvm::BasicBlock::Create(Context, "default", F);
+  llvm::BasicBlock *Fork = llvm::BasicBlock::Create(Context, "fork", F);
+  llvm::BasicBlock *Ret = llvm::BasicBlock::Create(Context, "ret", F);
+  llvm::BasicBlock *Trap = llvm::BasicBlock::Create(Context, "trap", F);
+
+  llvm::IRBuilder<> Builder(Context);
+  Builder.SetInsertPoint(Entry);
+  llvm::SwitchInst *Switch = Builder.CreateSwitch(X, Default, 2);
+  Switch->addCase(llvm::ConstantInt::get(I32Ty, 1), Case1);
+  Switch->addCase(llvm::ConstantInt::get(I32Ty, 2), Case2);
+
+  Builder.SetInsertPoint(Case1);
+  Builder.CreateBr(Fork);
+
+  Builder.SetInsertPoint(Case2);
+  Builder.CreateBr(Fork);
+
+  Builder.SetInsertPoint(Default);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 0));
+
+  Builder.SetInsertPoint(Fork);
+  llvm::Value *Cond = Builder.CreateICmpEQ(A, B, "cond");
+  Builder.CreateCondBr(Cond, Ret, Trap);
+
+  Builder.SetInsertPoint(Ret);
+  Builder.CreateRet(llvm::ConstantInt::get(I32Ty, 7));
+
+  Builder.SetInsertPoint(Trap);
+  Builder.CreateUnreachable();
+
+  return F;
+}
+
 void testAcyclicDroppedEdges() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {1}));
@@ -8184,6 +8235,88 @@ void testReturnDuplicatorLowCopiesTerminalForkRegion() {
   assert(hasSinglePayload(CopyTrap1->Statements, 19));
 }
 
+void testReturnDuplicatorLowAcceptsSwitchCaseTerminalForkByDefault() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("terminal-fork-switch-test", Context);
+  llvm::Function *F = makeSwitchCaseTerminalForkFunction(Context, Module);
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  SAILRStructurer Structurer;
+  ReturnDuplicatorLow Pass(ReturnDuplicatorLow::defaultOptions());
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(4) == nullptr);
+  assert(Result.Output.getBlock(5) == nullptr);
+  assert(Result.Output.getBlock(6) == nullptr);
+
+  const CFGBlock *ResultSwitch = Result.Output.getBlock(0);
+  assert(ResultSwitch != nullptr);
+  assert(ResultSwitch->Terminator == TerminatorKind::Switch);
+  assert(ResultSwitch->Successors.size() == 3);
+  assert(ResultSwitch->Cases.size() == 2);
+  assert(ResultSwitch->Successors[0] == 3);
+  assert(ResultSwitch->Successors[1] == 1);
+  assert(ResultSwitch->Successors[2] == 2);
+  assert(ResultSwitch->Cases[0].Target == 1);
+  assert(ResultSwitch->Cases[1].Target == 2);
+
+  const CFGBlock *Case1 = Result.Output.getBlock(1);
+  const CFGBlock *Case2 = Result.Output.getBlock(2);
+  assert(Case1 != nullptr && Case2 != nullptr);
+  assert(Case1->Successors.size() == 1);
+  assert(Case2->Successors.size() == 1);
+  assert(Case1->Successors.front() != 4);
+  assert(Case2->Successors.front() != 4);
+  assert(Case1->Successors.front() != Case2->Successors.front());
+
+  for (BlockId CopyHeadId : {Case1->Successors.front(),
+                             Case2->Successors.front()}) {
+    const CFGBlock *CopyHead = Result.Output.getBlock(CopyHeadId);
+    assert(CopyHead != nullptr);
+    assert(CopyHead->SourceBlock == 4);
+    assert(CopyHead->Terminator == TerminatorKind::Branch);
+    assert(CopyHead->Condition.isValid());
+    assert(CopyHead->Successors.size() == 2);
+
+    const CFGBlock *FirstSucc = Result.Output.getBlock(CopyHead->Successors[0]);
+    const CFGBlock *SecondSucc = Result.Output.getBlock(CopyHead->Successors[1]);
+    assert(FirstSucc != nullptr && SecondSucc != nullptr);
+    const CFGBlock *CopyRet =
+        FirstSucc->Terminator == TerminatorKind::Return ? FirstSucc : SecondSucc;
+    const CFGBlock *CopyTrap =
+        FirstSucc->Terminator == TerminatorKind::Unreachable ? FirstSucc
+                                                             : SecondSucc;
+    assert(CopyRet->SourceBlock == 5);
+    assert(CopyTrap->SourceBlock == 6);
+    assert(CopyRet->Terminator == TerminatorKind::Return);
+    assert(CopyTrap->Terminator == TerminatorKind::Unreachable);
+  }
+}
+
+void testSAILRDeoptimizationPipelineCopiesSwitchCaseTerminalFork() {
+  llvm::LLVMContext Context;
+  llvm::Module Module("terminal-fork-pipeline-test", Context);
+  llvm::Function *F = makeSwitchCaseTerminalForkFunction(Context, Module);
+
+  std::vector<std::string> Payloads;
+  StringPayloadProvider Provider(Payloads);
+  StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(*F, Provider);
+
+  SAILRStructurer Structurer;
+  StructuringOptimizationPipeline Pipeline = buildSAILRDeoptimizationPipeline();
+  StructuringOptimizationPipelineResult Result = Pipeline.run(Cfg, Structurer);
+
+  assert(Result.Changed);
+  assert(Result.Output.getBlock(4) == nullptr);
+  assert(Result.Output.getBlock(5) == nullptr);
+  assert(Result.Output.getBlock(6) == nullptr);
+}
+
 void testReturnDuplicatorLowCopiesReturnTailForkRegion() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {2}));
@@ -14670,6 +14803,8 @@ int main() {
   testReturnDuplicatorLowCopiesSwitchWithJoinedDiamondReturnTail();
   testReturnDuplicatorLowCopiesPrefixedSwitchReturnRegion();
   testReturnDuplicatorLowCopiesTerminalForkRegion();
+  testReturnDuplicatorLowAcceptsSwitchCaseTerminalForkByDefault();
+  testSAILRDeoptimizationPipelineCopiesSwitchCaseTerminalFork();
   testReturnDuplicatorLowCopiesReturnTailForkRegion();
   testReturnDuplicatorLowCopiesUnreachableTailRegion();
   testReturnDuplicatorLowCopiesBranchReturnRegionWithPayloadRewrite();

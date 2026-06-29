@@ -585,6 +585,11 @@ private:
       if (HasReturnStmt ||
           llvm::isa_and_nonnull<clang::ReturnStmt>(Block->getTerminatorStmt())) {
         NewBlock.Terminator = st::TerminatorKind::Return;
+      } else if (Block->succ_size() == 0 && Block->size() == 0 &&
+                 Block->getTerminatorStmt() == nullptr) {
+        // LLVM unreachable lowers to an empty, closed CFG block in this C CFG.
+        // Mark only that narrow shape as a SAILR terminal.
+        NewBlock.Terminator = st::TerminatorKind::Unreachable;
       } else {
         for (CFGBlock *Succ : Block->succs()) {
           NewBlock.Successors.push_back(Succ->getBlockID());
@@ -593,6 +598,8 @@ private:
 
       if (NewBlock.Terminator == st::TerminatorKind::Return) {
         // keep terminal blocks closed so structuring can treat them as exits
+      } else if (NewBlock.Terminator == st::TerminatorKind::Unreachable) {
+        // keep trap blocks closed for the same reason
       } else if (Block->succ_size() == 2) {
         NewBlock.Terminator = st::TerminatorKind::Branch;
         NewBlock.Condition = addPayload(Block->getTerminatorStmt());

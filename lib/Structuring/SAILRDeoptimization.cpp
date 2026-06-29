@@ -232,6 +232,13 @@ bool isClosedTerminal(const CFGBlock &Block) {
           Block.Terminator == TerminatorKind::Unreachable);
 }
 
+bool isClosedTerminalForkLeaf(const CFGBlock &Block) {
+  return isClosedTerminal(Block) ||
+         (Block.Successors.empty() &&
+          Block.Terminator == TerminatorKind::Fallthrough &&
+          Block.Statements.empty());
+}
+
 bool prependTerminalForkRegion(const StructuredCFG &Graph, ReturnRegion &Region,
                                BlockId Pred, std::set<BlockId> &Seen) {
   const CFGBlock *PredBlock = Graph.getBlock(Pred);
@@ -247,7 +254,7 @@ bool prependTerminalForkRegion(const StructuredCFG &Graph, ReturnRegion &Region,
     }
 
     const CFGBlock *SuccBlock = Graph.getBlock(Succ);
-    if (SuccBlock == nullptr || !isClosedTerminal(*SuccBlock)) {
+    if (SuccBlock == nullptr || !isClosedTerminalForkLeaf(*SuccBlock)) {
       return false;
     }
 
@@ -1667,6 +1674,79 @@ expandToConnectedPredecessorComponents(const StructuredCFG &Graph,
   return std::vector<BlockId>(Expanded.begin(), Expanded.end());
 }
 
+std::optional<BlockId>
+privateSwitchParentForJumpTo(const StructuredCFG &Graph, BlockId Pred,
+                             BlockId Target) {
+  const CFGBlock *PredBlock = Graph.getBlock(Pred);
+  if (PredBlock == nullptr ||
+      PredBlock->Terminator != TerminatorKind::Fallthrough ||
+      PredBlock->Successors.size() != 1 ||
+      PredBlock->Successors.front() != Target) {
+    return std::nullopt;
+  }
+
+  std::vector<BlockId> Preds = predecessorsOf(Graph, Pred);
+  if (Preds.size() != 1) {
+    return std::nullopt;
+  }
+
+  const CFGBlock *Parent = Graph.getBlock(Preds.front());
+  if (Parent == nullptr || Parent->Terminator != TerminatorKind::Switch ||
+      !Graph.hasEdge(Parent->Id, Pred)) {
+    return std::nullopt;
+  }
+  return Parent->Id;
+}
+
+bool returnRegionContainsUnreachableTerminal(const StructuredCFG &Graph,
+                                             const ReturnRegion &Region) {
+  for (BlockId Id : Region.Blocks) {
+    const CFGBlock *Block = Graph.getBlock(Id);
+    if (Block != nullptr && Block->Terminator == TerminatorKind::Unreachable) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<BlockId>
+expandToSiblingSwitchJumpPredecessors(const StructuredCFG &Graph,
+                                      const std::vector<BlockId> &AllPreds,
+                                      const std::vector<BlockId> &Selected,
+                                      const ReturnRegion &Region) {
+  if (!returnRegionContainsUnreachableTerminal(Graph, Region)) {
+    return Selected;
+  }
+
+  std::set<BlockId> AllPredSet(AllPreds.begin(), AllPreds.end());
+  std::set<BlockId> Expanded(Selected.begin(), Selected.end());
+
+  // Phoenix may put the goto on only one case stub even when sibling stubs from
+  // the same switch all jump to the same return fork. Copy all such private
+  // stubs together so the original fork can disappear.
+  for (BlockId Pred : Selected) {
+    std::optional<BlockId> Parent =
+        privateSwitchParentForJumpTo(Graph, Pred, Region.Head);
+    if (!Parent.has_value()) {
+      continue;
+    }
+
+    for (BlockId Sibling : Graph.successorsOf(*Parent)) {
+      if (AllPredSet.count(Sibling) == 0 || Expanded.count(Sibling) != 0) {
+        continue;
+      }
+
+      std::optional<BlockId> SiblingParent =
+          privateSwitchParentForJumpTo(Graph, Sibling, Region.Head);
+      if (SiblingParent.has_value() && *SiblingParent == *Parent) {
+        Expanded.insert(Sibling);
+      }
+    }
+  }
+
+  return std::vector<BlockId>(Expanded.begin(), Expanded.end());
+}
+
 bool switchCaseReachesBlock(const CFGBlock &Block, BlockId Target) {
   if (Block.Terminator != TerminatorKind::Switch) {
     return false;
@@ -2664,6 +2744,16 @@ bool materializeDuplicatedRegion(StructuredCFG &Graph,
     const CFGBlock *CopyBlock = Graph.getBlock(Copy);
     if (OriginalBlock == nullptr || CopyBlock == nullptr) {
       return false;
+    }
+    if (isClosedTerminalForkLeaf(*OriginalBlock) &&
+        CopyBlock->Terminator == TerminatorKind::Fallthrough &&
+        CopyBlock->Successors.empty() && CopyBlock->Statements.empty()) {
+      CFGBlock *MutableCopy = Graph.getBlock(Copy);
+      if (MutableCopy == nullptr) {
+        return false;
+      }
+      MutableCopy->Terminator = TerminatorKind::Unreachable;
+      CopyBlock = MutableCopy;
     }
     for (std::size_t I = 0; I < OriginalBlock->Statements.size() &&
                             I < CopyBlock->Statements.size(); ++I) {
@@ -3708,6 +3798,8 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
       PredsToUpdate =
           expandToConnectedPredecessorComponents(Graph, CurrentPreds,
                                                  PredsToUpdate);
+      PredsToUpdate = expandToSiblingSwitchJumpPredecessors(
+          Graph, CurrentPreds, PredsToUpdate, Region);
     }
 
     std::sort(PredsToUpdate.begin(), PredsToUpdate.end());
