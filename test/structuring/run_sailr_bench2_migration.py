@@ -252,7 +252,6 @@ default:
         "name": "fmt_deduplication_proxy",
         "angr_test": "test_fmt_deduplication",
         "semantic": "DuplicationReverter duplicated call proxy",
-        "expected_failure": "P1 DuplicationReverter still lacks Angr-style candidate search for this no-goto duplicated call proxy",
         "ir": r"""
 declare void @xdectoumax()
 
@@ -275,7 +274,8 @@ merge:
 """,
         "contains": ["xdectoumax()", "return 0;"],
         "absent": ["goto left", "goto right"],
-        "counts": {"xdectoumax();": 2, "return 0;": 1},
+        "counts": {"return 0;": 1},
+        "body_counts": {"xdectoumax();": 2},
     },
     {
         "name": "branch_common_tail_pipeline_proxy",
@@ -713,6 +713,14 @@ def output_metrics(output: str) -> dict:
     }
 
 
+def function_body(output: str) -> str:
+    marker = "// ====== Function Definitions ======"
+    start = output.find(marker)
+    if start == -1:
+        return output
+    return output[start:]
+
+
 def classify_failures(status: str, failures: list[str]) -> str:
     if status == "pass":
         return "pass"
@@ -796,6 +804,13 @@ def run_case(
         if actual != expected:
             failures.append(
                 f"{header}: expected {expected} x {needle!r}, got {actual}"
+            )
+    body = function_body(output)
+    for needle, expected in case.get("body_counts", {}).items():
+        actual = body.count(needle)
+        if actual != expected:
+            failures.append(
+                f"{header}: expected {expected} x {needle!r} in function body, got {actual}"
             )
     status = "fail" if failures else "pass"
     return status, failures, output_metrics(output), classify_failures(status, failures)
