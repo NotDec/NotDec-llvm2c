@@ -4026,6 +4026,65 @@ bool sameTailReturnPayload(const StructuredCFG &Graph, const CFGBlock &Lhs,
   return samePayload(Graph, Lhs.Statements.back(), Rhs.Statements.back());
 }
 
+bool deduplicateReturnArmGroup(StructuredCFG &Graph, BlockId Parent,
+                               const std::vector<BlockId> &ArmIds) {
+  if (ArmIds.size() < 2) {
+    return false;
+  }
+
+  std::set<BlockId> UniqueArms(ArmIds.begin(), ArmIds.end());
+  if (UniqueArms.size() != ArmIds.size()) {
+    return false;
+  }
+
+  const CFGBlock *FirstArm = Graph.getBlock(ArmIds.front());
+  if (FirstArm == nullptr || !canDeduplicateReturnArm(Graph, Parent,
+                                                      ArmIds.front())) {
+    return false;
+  }
+  for (BlockId ArmId : ArmIds) {
+    const CFGBlock *Arm = Graph.getBlock(ArmId);
+    if (Arm == nullptr || !canDeduplicateReturnArm(Graph, Parent, ArmId) ||
+        !sameTailReturnPayload(Graph, *FirstArm, *Arm)) {
+      return false;
+    }
+  }
+
+  StructuredCFG Candidate = Graph;
+  CFGBlock *FirstCandidateArm = Candidate.getBlock(ArmIds.front());
+  if (FirstCandidateArm == nullptr) {
+    return false;
+  }
+
+  PayloadRef SharedReturn = FirstCandidateArm->Statements.back();
+  for (BlockId ArmId : ArmIds) {
+    CFGBlock *Arm = Candidate.getBlock(ArmId);
+    if (Arm == nullptr || Arm->Statements.empty()) {
+      return false;
+    }
+    Arm->Statements.pop_back();
+    Arm->Terminator = TerminatorKind::Fallthrough;
+  }
+
+  CFGBlock ReturnBlock;
+  ReturnBlock.Origin = CFGBlockOrigin::Synthetic;
+  ReturnBlock.CopyKind = CFGBlockCopyKind::None;
+  ReturnBlock.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  ReturnBlock.Statements = {SharedReturn};
+  ReturnBlock.Terminator = TerminatorKind::Return;
+  BlockId ReturnId = Candidate.addBlock(std::move(ReturnBlock));
+  for (BlockId ArmId : ArmIds) {
+    CFGBlock *Arm = Candidate.getBlock(ArmId);
+    if (Arm == nullptr) {
+      return false;
+    }
+    Arm->Successors = {ReturnId};
+  }
+
+  Graph = std::move(Candidate);
+  return true;
+}
+
 bool ReturnDeduplicator::runOnGraph(StructuredCFG &Graph,
                                     const StructuringEvaluation &Current) {
   (void)Current;
@@ -4039,53 +4098,54 @@ bool ReturnDeduplicator::runOnGraph(StructuredCFG &Graph,
 
   for (BlockId BranchId : BlockIds) {
     const CFGBlock *Branch = Graph.getBlock(BranchId);
-    if (Branch == nullptr || Branch->Terminator != TerminatorKind::Branch ||
-        Branch->Successors.size() != 2 ||
-        Branch->Successors[0] == Branch->Successors[1]) {
+    if (Branch == nullptr) {
       continue;
     }
 
-    BlockId LhsId = Branch->Successors[0];
-    BlockId RhsId = Branch->Successors[1];
-    const CFGBlock *Lhs = Graph.getBlock(LhsId);
-    const CFGBlock *Rhs = Graph.getBlock(RhsId);
-    if (Lhs == nullptr || Rhs == nullptr ||
-        !canDeduplicateReturnArm(Graph, BranchId, LhsId) ||
-        !canDeduplicateReturnArm(Graph, BranchId, RhsId) ||
-        !sameTailReturnPayload(Graph, *Lhs, *Rhs)) {
+    if (Branch->Terminator == TerminatorKind::Branch &&
+        Branch->Successors.size() == 2 &&
+        Branch->Successors[0] != Branch->Successors[1] &&
+        deduplicateReturnArmGroup(
+            Graph, BranchId, {Branch->Successors[0], Branch->Successors[1]})) {
+      return true;
+    }
+
+    if (Branch->Terminator != TerminatorKind::Switch ||
+        Branch->Successors.size() < 3) {
       continue;
     }
 
-    StructuredCFG Candidate = Graph;
-    CFGBlock *LhsArm = Candidate.getBlock(LhsId);
-    CFGBlock *RhsArm = Candidate.getBlock(RhsId);
-    if (LhsArm == nullptr || RhsArm == nullptr) {
+    // Keep case/default overlap out of this narrow pass. ReturnDuplicatorLow has
+    // explicit switch-edge logic for that shape; ReturnDeduplicator only shares
+    // distinct private return arms here.
+    std::set<BlockId> UniqueSuccessors(Branch->Successors.begin(),
+                                       Branch->Successors.end());
+    if (UniqueSuccessors.size() != Branch->Successors.size()) {
       continue;
     }
 
-    PayloadRef SharedReturn = LhsArm->Statements.back();
-    LhsArm->Statements.pop_back();
-    RhsArm->Statements.pop_back();
-    LhsArm->Terminator = TerminatorKind::Fallthrough;
-    RhsArm->Terminator = TerminatorKind::Fallthrough;
-
-    CFGBlock ReturnBlock;
-    ReturnBlock.Origin = CFGBlockOrigin::Synthetic;
-    ReturnBlock.CopyKind = CFGBlockCopyKind::None;
-    ReturnBlock.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
-    ReturnBlock.Statements = {SharedReturn};
-    ReturnBlock.Terminator = TerminatorKind::Return;
-    BlockId ReturnId = Candidate.addBlock(std::move(ReturnBlock));
-    LhsArm = Candidate.getBlock(LhsId);
-    RhsArm = Candidate.getBlock(RhsId);
-    if (LhsArm == nullptr || RhsArm == nullptr) {
-      continue;
+    std::vector<BlockId> ReturnArms;
+    for (BlockId Succ : Branch->Successors) {
+      if (canDeduplicateReturnArm(Graph, BranchId, Succ)) {
+        ReturnArms.push_back(Succ);
+      }
     }
-    LhsArm->Successors = {ReturnId};
-    RhsArm->Successors = {ReturnId};
-
-    Graph = std::move(Candidate);
-    return true;
+    for (unsigned I = 0; I < ReturnArms.size(); ++I) {
+      const CFGBlock *Base = Graph.getBlock(ReturnArms[I]);
+      if (Base == nullptr) {
+        continue;
+      }
+      std::vector<BlockId> Group = {ReturnArms[I]};
+      for (unsigned J = I + 1; J < ReturnArms.size(); ++J) {
+        const CFGBlock *Other = Graph.getBlock(ReturnArms[J]);
+        if (Other != nullptr && sameTailReturnPayload(Graph, *Base, *Other)) {
+          Group.push_back(ReturnArms[J]);
+        }
+      }
+      if (deduplicateReturnArmGroup(Graph, BranchId, Group)) {
+        return true;
+      }
+    }
   }
 
   return false;
