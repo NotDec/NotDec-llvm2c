@@ -44,7 +44,7 @@ bool isNodeKind(const StructuredTree &Tree, NodeId Id, StructuredNodeKind Kind) 
 }
 
 void dropGotoIntoFollowingNode(StructuredNode &Node,
-                               const StructuredTree &Tree);
+                               StructuredTree &Tree);
 void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
                             NodeId Id);
 void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
@@ -2124,8 +2124,15 @@ BlockId structuredLoopEntryBlock(const StructuredTree &Tree, NodeId Id) {
   return InvalidBlockId;
 }
 
-void dropGotoIntoFollowingNode(StructuredNode &Node,
-                               const StructuredTree &Tree) {
+BlockId followingEntryBlock(const StructuredTree &Tree, NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node != nullptr && Node->Kind == StructuredNodeKind::Label) {
+    return Node->Block;
+  }
+  return structuredLoopEntryBlock(Tree, Id);
+}
+
+void dropGotoIntoFollowingNode(StructuredNode &Node, StructuredTree &Tree) {
   if (Node.Kind != StructuredNodeKind::Sequence || Node.Children.size() < 2) {
     return;
   }
@@ -2138,12 +2145,26 @@ void dropGotoIntoFollowingNode(StructuredNode &Node,
     if (Index + 1 < Node.Children.size()) {
       Next = Tree.getNode(Node.Children[Index + 1]);
     }
+
+    BlockId NextEntry =
+        Index + 1 < Node.Children.size()
+            ? followingEntryBlock(Tree, Node.Children[Index + 1])
+            : InvalidBlockId;
+    if (Current != nullptr && Current->Kind == StructuredNodeKind::Sequence &&
+        NextEntry != InvalidBlockId && !Current->Children.empty()) {
+      const StructuredNode *Last = Tree.getNode(Current->Children.back());
+      if (Last != nullptr && Last->Kind == StructuredNodeKind::Goto &&
+          Last->Target == NextEntry) {
+        StructuredNode Copy = *Current;
+        Copy.Children.pop_back();
+        Node.Children[Index] = Tree.addNode(std::move(Copy));
+        Current = Tree.getNode(Node.Children[Index]);
+      }
+    }
+
     if (Current != nullptr && Next != nullptr &&
         Current->Kind == StructuredNodeKind::Goto &&
-        (Current->Target ==
-             structuredLoopEntryBlock(Tree, Node.Children[Index + 1]) ||
-         (Next->Kind == StructuredNodeKind::Label &&
-          Current->Target == Next->Block))) {
+        Current->Target == NextEntry) {
       continue;
     }
     Filtered.push_back(Node.Children[Index]);
@@ -2609,6 +2630,136 @@ bool virtualizeTerminalSwitchLoopExits(const StructuredCFG &Cfg,
   return Changed;
 }
 
+bool isSimpleLoopContinueSwitchArm(const StructuredCFG &Cfg,
+                                   const MutableRegionGraph &Graph,
+                                   const Region &LoopRegion,
+                                   GraphNodeId HeadId,
+                                   GraphNodeId ArmId) {
+  const MutableRegionNode *Arm = Graph.getNode(ArmId);
+  if (Arm == nullptr || Arm->ExternalPlaceholder || Arm->Blocks.empty() ||
+      Arm->Preds.size() != 1 || Arm->Preds[0] != HeadId ||
+      Arm->Succs.size() != 1 || Arm->Succs[0] != HeadId) {
+    return false;
+  }
+
+  const CFGBlock *Tail = Cfg.getBlock(Arm->TailBlock);
+  return Tail != nullptr && Tail->Terminator == TerminatorKind::Fallthrough &&
+         Tail->Successors.size() == 1 &&
+         Tail->Successors.front() == LoopRegion.Head;
+}
+
+NodeId buildLoopSwitchContinueArmBody(const StructuredCFG &Cfg,
+                                      const MutableRegionNode &Arm,
+                                      StructuredTree &Tree) {
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  if (Arm.StructuredRoot != InvalidNodeId) {
+    Body.Children.push_back(Arm.StructuredRoot);
+  } else {
+    for (BlockId Block : Arm.Blocks) {
+      appendBlockBody(Cfg, Block, Body, Tree);
+    }
+  }
+  Body.Children.push_back(
+      Tree.addNode(makeControlTransfer(Arm.TailBlock, VirtualEdgeKind::Continue)));
+  return Tree.addNode(std::move(Body));
+}
+
+NodeId buildLoopSwitchCaseBody(const StructuredCFG &Cfg,
+                               const MutableRegionGraph &Graph,
+                               const Region &LoopRegion,
+                               const std::set<GraphNodeId> &CollapsedArms,
+                               BlockId Target, StructuredTree &Tree) {
+  if (Target == LoopRegion.Head) {
+    return Tree.addNode(
+        makeControlTransfer(Target, VirtualEdgeKind::Continue));
+  }
+
+  GraphNodeId TargetId = Graph.getNodeForBlock(Target);
+  if (CollapsedArms.count(TargetId) != 0) {
+    const MutableRegionNode *Arm = Graph.getNode(TargetId);
+    if (Arm != nullptr) {
+      return buildLoopSwitchContinueArmBody(Cfg, *Arm, Tree);
+    }
+  }
+
+  return Tree.addNode(makeControlTransfer(
+      Target, classifyNaturalLoopExit(Cfg, LoopRegion, Target)));
+}
+
+bool reduceLoopHeaderSwitchContinueArms(
+    const StructuredCFG &Cfg, const Region &LoopRegion,
+    const std::set<GraphNodeId> &MemberSet, GraphNodeId HeadId,
+    MutableRegionGraph &Graph, StructuredTree &Tree, RegionOverlay *Overlay) {
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  if (Head == nullptr || Head->Blocks.empty() ||
+      Head->Blocks.front() != LoopRegion.Head ||
+      Head->StructuredRoot != InvalidNodeId) {
+    return false;
+  }
+
+  const CFGBlock *Tail = Cfg.getBlock(Head->TailBlock);
+  if (Tail == nullptr || Tail->Terminator != TerminatorKind::Switch ||
+      Tail->Successors.empty()) {
+    return false;
+  }
+
+  std::set<GraphNodeId> CollapsedArms;
+  auto TryCollectArm = [&](BlockId Target) {
+    GraphNodeId TargetId = Graph.getNodeForBlock(Target);
+    if (TargetId == InvalidGraphNodeId || TargetId == HeadId ||
+        MemberSet.count(TargetId) == 0) {
+      return;
+    }
+    if (isSimpleLoopContinueSwitchArm(Cfg, Graph, LoopRegion, HeadId,
+                                      TargetId)) {
+      CollapsedArms.insert(TargetId);
+    }
+  };
+
+  for (BlockId Succ : Tail->Successors) {
+    TryCollectArm(Succ);
+  }
+  for (const SwitchCase &Case : Tail->Cases) {
+    TryCollectArm(Case.Target);
+  }
+
+  if (CollapsedArms.empty()) {
+    return false;
+  }
+
+  StructuredNode Sequence;
+  Sequence.Kind = StructuredNodeKind::Sequence;
+  for (BlockId Block : Head->Blocks) {
+    appendBlockLabel(Block, Sequence, Tree);
+    appendBlockBody(Cfg, Block, Sequence, Tree);
+  }
+
+  StructuredNode SwitchNode;
+  SwitchNode.Kind = StructuredNodeKind::Switch;
+  SwitchNode.Block = Tail->Id;
+  SwitchNode.Condition = Tail->Condition;
+  SwitchNode.DefaultTarget = Tail->Successors.front();
+  SwitchNode.Default =
+      buildLoopSwitchCaseBody(Cfg, Graph, LoopRegion, CollapsedArms,
+                              Tail->Successors.front(), Tree);
+  for (const SwitchCase &Case : Tail->Cases) {
+    SwitchNode.StructuredCases.push_back(
+        {Case.Value, Case.Target,
+         buildLoopSwitchCaseBody(Cfg, Graph, LoopRegion, CollapsedArms,
+                                 Case.Target, Tree)});
+  }
+  Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
+
+  std::vector<GraphNodeId> Members = {HeadId};
+  Members.insert(Members.end(), CollapsedArms.begin(), CollapsedArms.end());
+  collapseNodesAndSyncOverlay(Graph, Overlay, Members, LoopRegion.Head,
+                              Tree.addNode(std::move(Sequence)),
+                              /*SelfLoop=*/true,
+                              /*DropRefinementMarks=*/false);
+  return true;
+}
+
 bool wouldDetachAllPredecessorsOfNonFollowSuccessor(
     const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
     const std::set<GraphNodeId> &Members, BlockId FollowBlock) {
@@ -2919,6 +3070,11 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
         LoopRegion.Blocks.insert(LoopRegion.Blocks.end(),
                                  Node->Blocks.begin(), Node->Blocks.end());
       }
+    }
+
+    if (reduceLoopHeaderSwitchContinueArms(Cfg, LoopRegion, MemberSet, HeadId,
+                                           Graph, Tree, Overlay)) {
+      return true;
     }
 
     if (Successors.size() > 1 &&

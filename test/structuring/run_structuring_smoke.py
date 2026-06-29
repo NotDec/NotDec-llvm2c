@@ -175,9 +175,11 @@ exit:
 }
 """,
         "contains": ["while (1)", "switch (next())", "case 1:", "case 2:",
-                     "case -1:", "continue;", "return 0;"],
+                     "case -1:", "a();", "b();", "continue;", "return 0;"],
         "absent": ["goto case1", "goto case2", "goto head"],
         "counts": {"switch (next())": 1},
+        "ordered": [("case 1:", "a();"), ("a();", "case 2:"),
+                    ("case 2:", "b();"), ("b();", "case -1:")],
     },
     {
         "name": "lowered_if_chain_switch",
@@ -1662,7 +1664,8 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
             )
     for before, after in case.get("ordered", []):
         before_index = output.find(before)
-        after_index = output.find(after)
+        after_index = -1 if before_index == -1 else output.find(
+            after, before_index + len(before))
         if before_index == -1 or after_index == -1:
             continue
         if before_index >= after_index:
