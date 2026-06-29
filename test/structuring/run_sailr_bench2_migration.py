@@ -310,6 +310,33 @@ merge:
         "body_counts": {"xdectoumax();": 2},
     },
     {
+        "name": "return_deduplicator_void_branch_proxy",
+        "angr_test": "test_ret_dedupe_fakeret_1",
+        "semantic": "ReturnDeduplicator void branch return proxy",
+        "ir": r"""
+declare void @a()
+declare void @b()
+
+define void @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %then, label %else
+
+then:
+  call void @a()
+  ret void
+
+else:
+  call void @b()
+  ret void
+}
+""",
+        "contains": ["return;"],
+        "absent": ["goto "],
+        "counts": {"return;": 1},
+        "body_counts": {"a();": 1, "b();": 1},
+    },
+    {
         "name": "branch_common_tail_pipeline_proxy",
         "angr_test": "test_fmt_deduplication",
         "semantic": "DuplicationReverter branch common-tail pipeline proxy",
