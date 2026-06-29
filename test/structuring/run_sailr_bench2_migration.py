@@ -19,7 +19,22 @@ CASES = [
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "hexx64/function-0x1156e0/native/function-0x1156e0.ll"
         ),
+        "fallback_ir": r"""
+define i32 @main(i32 %x) {
+entry:
+  %cond = icmp eq i32 %x, 0
+  br i1 %cond, label %early_ret, label %tail
+
+early_ret:
+  ret i32 0
+
+tail:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+""",
         "contains": ["return;"],
+        "fallback_contains": ["return 0;", "return x + 1;"],
         "absent": ["goto "],
     },
     {
@@ -30,6 +45,23 @@ CASES = [
             "/sn640/NotDec-Exp/Bench2/bin2llvm-ir/"
             "python/one-_PyPegen_fill_token.cold.ll"
         ),
+        "fallback_ir": r"""
+define i32 @main(i32 %x, i32 %y) {
+entry:
+  %bad_x = icmp slt i32 %x, 0
+  br i1 %bad_x, label %fail, label %check_y
+
+check_y:
+  %bad_y = icmp slt i32 %y, 0
+  br i1 %bad_y, label %fail, label %ok
+
+ok:
+  ret i32 0
+
+fail:
+  ret i32 -1
+}
+""",
         "contains": ["return -1;"],
         "absent": ["goto "],
     },
@@ -702,7 +734,9 @@ shared:
 ]
 
 
-def case_kind(case: dict) -> str:
+def case_kind(case: dict, used_fallback: bool = False) -> str:
+    if used_fallback:
+        return "proxy-fallback"
     return case.get("kind", "real" if "input" in case else "proxy")
 
 
@@ -749,16 +783,27 @@ def summarize_failure(failure: str) -> str:
 
 def run_case(
     notdec_llvm2c: Path, work_dir: Path, case: dict, run_cache: dict
-) -> tuple[str, list[str], dict, str]:
+) -> tuple[str, list[str], dict, str, bool, list[str]]:
     input_path = case.get("input")
+    used_fallback = False
+    notes = []
     if input_path is None:
         input_path = work_dir / f"{case['name']}.ll"
         input_path.write_text(case["ir"].strip() + "\n")
     elif not input_path.is_absolute():
         input_path = REPO_ROOT / input_path
     if not input_path.exists():
-        failures = [f"{case['name']}: missing input file {input_path}"]
-        return "skip", failures, {}, classify_failures("skip", failures)
+        fallback_ir = case.get("fallback_ir")
+        if fallback_ir is None:
+            failures = [f"{case['name']}: missing input file {input_path}"]
+            classification = classify_failures("skip", failures)
+            return "skip", failures, {}, classification, False, []
+        notes.append(
+            f"{case['name']}: missing real input file {input_path}; used proxy fallback"
+        )
+        input_path = work_dir / f"{case['name']}.fallback.ll"
+        input_path.write_text(fallback_ir.strip() + "\n")
+        used_fallback = True
 
     cache_key = (
         str(input_path),
@@ -770,7 +815,7 @@ def run_case(
         return "fail", [
             f"{case['name']}: reused cached result from same input",
             *list(failures),
-        ], {}, classification
+        ], {}, classification, used_fallback, notes
 
     output_path = work_dir / f"{case['name']}.c"
     try:
@@ -795,24 +840,28 @@ def run_case(
             f"{case['name']}: command timed out after {case['timeout']}s\n{output}"
         ]
         run_cache[cache_key] = (list(failures), "timeout")
-        return "fail", failures, {}, "timeout"
+        return "fail", failures, {}, "timeout", used_fallback, notes
     if proc.returncode != 0:
         failures = [f"{case['name']}: command failed\n{proc.stdout}"]
         classification = classify_failures("fail", failures)
         run_cache[cache_key] = (list(failures), classification)
-        return "fail", failures, {}, classification
+        return "fail", failures, {}, classification, used_fallback, notes
     if not output_path.exists():
         failures = [f"{case['name']}: missing output file\n{proc.stdout}"]
         classification = classify_failures("fail", failures)
         run_cache[cache_key] = (list(failures), classification)
-        return "fail", failures, {}, classification
+        return "fail", failures, {}, classification, used_fallback, notes
 
     output = output_path.read_text()
     failures = []
     header = f"{case['name']} [{case['angr_test']}] ({case['semantic']})"
     if not output:
         failures.append(f"{header}: empty output")
-    for needle in case.get("contains", []):
+    contains = case.get(
+        "fallback_contains" if used_fallback else "contains",
+        case.get("contains", []),
+    )
+    for needle in contains:
         if needle not in output:
             failures.append(f"{header}: missing {needle!r}")
     for needle in case.get("absent", []):
@@ -844,6 +893,8 @@ def run_case(
         failures,
         metrics,
         classify_failures(status, failures),
+        used_fallback,
+        notes,
     )
     return result
 
@@ -880,7 +931,14 @@ def main() -> int:
         work_dir = Path(tmp)
         run_cache = {}
         for case in CASES:
-            status, case_failures, metrics, classification = run_case(
+            (
+                status,
+                case_failures,
+                metrics,
+                classification,
+                used_fallback,
+                case_notes,
+            ) = run_case(
                 args.notdec_llvm2c, work_dir, case, run_cache
             )
             if case.get("expected_failure"):
@@ -900,7 +958,7 @@ def main() -> int:
                 failures.extend(case_failures)
             rows.append({
                 "name": case["name"],
-                "kind": case_kind(case),
+                "kind": case_kind(case, used_fallback),
                 "angr_test": case["angr_test"],
                 "semantic": case["semantic"],
                 "status": status,
@@ -910,7 +968,8 @@ def main() -> int:
                 "goto_count": metrics.get("goto_count", ""),
                 "return_count": metrics.get("return_count", ""),
                 "failures": " | ".join(
-                    summarize_failure(failure) for failure in case_failures
+                    summarize_failure(failure)
+                    for failure in [*case_notes, *case_failures]
                 ),
             })
 
