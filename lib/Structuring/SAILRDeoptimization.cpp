@@ -4092,6 +4092,127 @@ bool deduplicateReturnArmGroup(StructuredCFG &Graph, BlockId Parent,
   return true;
 }
 
+// Angr runs ReturnDeduplicator on a supergraph, so a private arm may be a small
+// linear chain whose last block is the actual return. Keep only that shape here:
+// one predecessor per block, fallthrough edges only, and a closed return tail.
+struct LinearReturnArmChain {
+  BlockId Tail = InvalidBlockId;
+};
+
+bool collectPrivateLinearReturnArmChain(const StructuredCFG &Graph,
+                                        BlockId Parent, BlockId Head,
+                                        LinearReturnArmChain &Chain) {
+  BlockId Current = Head;
+  BlockId Pred = Parent;
+  std::set<BlockId> Seen;
+  while (true) {
+    if (!Seen.insert(Current).second) {
+      return false;
+    }
+
+    const CFGBlock *Block = Graph.getBlock(Current);
+    if (Block == nullptr) {
+      return false;
+    }
+
+    std::vector<BlockId> Preds = predecessorsOf(Graph, Current);
+    if (Preds.size() != 1 || Preds.front() != Pred) {
+      return false;
+    }
+
+    if (Block->Terminator == TerminatorKind::Return) {
+      if (!Block->Successors.empty()) {
+        return false;
+      }
+      Chain.Tail = Current;
+      return true;
+    }
+
+    if (Block->Terminator != TerminatorKind::Fallthrough ||
+        Block->Successors.size() != 1) {
+      return false;
+    }
+
+    Pred = Current;
+    Current = Block->Successors.front();
+  }
+}
+
+bool deduplicateLinearReturnArmChains(StructuredCFG &Graph, BlockId Parent,
+                                      const std::vector<BlockId> &ArmHeads) {
+  if (ArmHeads.size() < 2) {
+    return false;
+  }
+
+  std::set<BlockId> UniqueHeads(ArmHeads.begin(), ArmHeads.end());
+  if (UniqueHeads.size() != ArmHeads.size()) {
+    return false;
+  }
+
+  std::vector<LinearReturnArmChain> Chains;
+  Chains.reserve(ArmHeads.size());
+  for (BlockId Head : ArmHeads) {
+    LinearReturnArmChain Chain;
+    if (!collectPrivateLinearReturnArmChain(Graph, Parent, Head, Chain)) {
+      return false;
+    }
+    Chains.push_back(std::move(Chain));
+  }
+
+  const CFGBlock *BaseTail = Graph.getBlock(Chains.front().Tail);
+  if (BaseTail == nullptr) {
+    return false;
+  }
+  for (const LinearReturnArmChain &Chain : Chains) {
+    const CFGBlock *Tail = Graph.getBlock(Chain.Tail);
+    if (Tail == nullptr || !sameTailReturnPayload(Graph, *BaseTail, *Tail)) {
+      return false;
+    }
+  }
+
+  StructuredCFG Candidate = Graph;
+  CFGBlock *FirstTail = Candidate.getBlock(Chains.front().Tail);
+  if (FirstTail == nullptr) {
+    return false;
+  }
+
+  std::optional<PayloadRef> SharedReturn;
+  if (!FirstTail->Statements.empty()) {
+    SharedReturn = FirstTail->Statements.back();
+  }
+
+  for (const LinearReturnArmChain &Chain : Chains) {
+    CFGBlock *Tail = Candidate.getBlock(Chain.Tail);
+    if (Tail == nullptr) {
+      return false;
+    }
+    if (!Tail->Statements.empty()) {
+      Tail->Statements.pop_back();
+    }
+    Tail->Terminator = TerminatorKind::Fallthrough;
+  }
+
+  CFGBlock ReturnBlock;
+  ReturnBlock.Origin = CFGBlockOrigin::Synthetic;
+  ReturnBlock.CopyKind = CFGBlockCopyKind::None;
+  ReturnBlock.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+  if (SharedReturn.has_value()) {
+    ReturnBlock.Statements = {*SharedReturn};
+  }
+  ReturnBlock.Terminator = TerminatorKind::Return;
+  BlockId ReturnId = Candidate.addBlock(std::move(ReturnBlock));
+  for (const LinearReturnArmChain &Chain : Chains) {
+    CFGBlock *Tail = Candidate.getBlock(Chain.Tail);
+    if (Tail == nullptr) {
+      return false;
+    }
+    Tail->Successors = {ReturnId};
+  }
+
+  Graph = std::move(Candidate);
+  return true;
+}
+
 bool ReturnDeduplicator::runOnGraph(StructuredCFG &Graph,
                                     const StructuringEvaluation &Current) {
   (void)Current;
@@ -4111,10 +4232,13 @@ bool ReturnDeduplicator::runOnGraph(StructuredCFG &Graph,
 
     if (Branch->Terminator == TerminatorKind::Branch &&
         Branch->Successors.size() == 2 &&
-        Branch->Successors[0] != Branch->Successors[1] &&
-        deduplicateReturnArmGroup(
-            Graph, BranchId, {Branch->Successors[0], Branch->Successors[1]})) {
-      return true;
+        Branch->Successors[0] != Branch->Successors[1]) {
+      std::vector<BlockId> Arms = {Branch->Successors[0],
+                                   Branch->Successors[1]};
+      if (deduplicateReturnArmGroup(Graph, BranchId, Arms) ||
+          deduplicateLinearReturnArmChains(Graph, BranchId, Arms)) {
+        return true;
+      }
     }
 
     if (Branch->Terminator != TerminatorKind::Switch ||

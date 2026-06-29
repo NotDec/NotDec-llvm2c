@@ -9048,6 +9048,60 @@ void testReturnDeduplicatorSharesDuplicateVoidBranchReturns() {
   assert(SharedReturn->Statements.empty());
 }
 
+void testReturnDeduplicatorSharesLinearBranchReturnChains() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 3}));
+
+  CFGBlock ThenHead = block(1, {2});
+  ThenHead.Statements.push_back({101});
+  Cfg.addBlock(std::move(ThenHead));
+
+  CFGBlock ThenRet = block(2, {});
+  ThenRet.Statements.push_back({201});
+  ThenRet.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(ThenRet));
+
+  CFGBlock ElseHead = block(3, {4});
+  ElseHead.Statements.push_back({102});
+  Cfg.addBlock(std::move(ElseHead));
+
+  CFGBlock ElseRet = block(4, {});
+  ElseRet.Statements.push_back({301});
+  ElseRet.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(ElseRet));
+  Cfg.setPayloadOrigin(301, 201);
+
+  StructuringEvaluation Current;
+  TestReturnDeduplicator Pass(ReturnDeduplicator::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *ThenHeadAfter = Cfg.getBlock(1);
+  const CFGBlock *ThenRetAfter = Cfg.getBlock(2);
+  const CFGBlock *ElseHeadAfter = Cfg.getBlock(3);
+  const CFGBlock *ElseRetAfter = Cfg.getBlock(4);
+  assert(ThenHeadAfter != nullptr && ThenRetAfter != nullptr &&
+         ElseHeadAfter != nullptr && ElseRetAfter != nullptr);
+  assert(ThenHeadAfter->Successors == std::vector<BlockId>{2});
+  assert(ElseHeadAfter->Successors == std::vector<BlockId>{4});
+  assert(hasSinglePayload(ThenHeadAfter->Statements, 101));
+  assert(hasSinglePayload(ElseHeadAfter->Statements, 102));
+  assert(ThenRetAfter->Terminator == TerminatorKind::Fallthrough);
+  assert(ElseRetAfter->Terminator == TerminatorKind::Fallthrough);
+  assert(ThenRetAfter->Statements.empty());
+  assert(ElseRetAfter->Statements.empty());
+  assert(ThenRetAfter->Successors.size() == 1);
+  assert(ThenRetAfter->Successors == ElseRetAfter->Successors);
+
+  const CFGBlock *SharedReturn =
+      Cfg.getBlock(ThenRetAfter->Successors.front());
+  assert(SharedReturn != nullptr);
+  assert(SharedReturn->Origin == CFGBlockOrigin::Synthetic);
+  assert(SharedReturn->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(SharedReturn->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(SharedReturn->Statements, 201));
+}
+
 void testReturnDeduplicatorKeepsDivergentBranchReturns() {
   StructuredCFG Cfg;
   Cfg.addBlock(branchBlock(0, {1, 2}));
@@ -15117,6 +15171,7 @@ int main() {
   testReturnDuplicatorLowUsesGotoInReturnTail();
   testReturnDeduplicatorSharesDuplicateBranchReturns();
   testReturnDeduplicatorSharesDuplicateVoidBranchReturns();
+  testReturnDeduplicatorSharesLinearBranchReturnChains();
   testReturnDeduplicatorKeepsDivergentBranchReturns();
   testReturnDeduplicatorSharesDuplicateSwitchCaseReturns();
   testReturnDeduplicatorSharesDuplicateSwitchDefaultCaseReturns();
