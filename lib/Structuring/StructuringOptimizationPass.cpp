@@ -49,9 +49,10 @@ GotoManager StructuringOptimizationPass::getNewGotos(
 }
 
 bool StructuringOptimizationPass::needsInitialEvaluation() const {
-  return Options.RequireStructurableGraph || Options.RequireGotos ||
-         Options.PreventNewGotos || Options.StrictlyLessGotos ||
-         Options.MustImproveRelativeQuality;
+  return Options.EvaluateInputBeforeRun &&
+         (Options.RequireStructurableGraph || Options.RequireGotos ||
+          Options.PreventNewGotos || Options.StrictlyLessGotos ||
+          Options.MustImproveRelativeQuality);
 }
 
 bool StructuringOptimizationPass::acceptsFinalEvaluation(
@@ -86,10 +87,16 @@ StructuringOptimizationResult
 StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
                                      RegionStructurer &Structurer) {
   StructuringOptimizationResult Result;
+  if (Options.MaxInputBlocks != 0 &&
+      Cfg.blocks().size() > Options.MaxInputBlocks) {
+    return Result;
+  }
+
   StructuringEvaluator Evaluator;
   StructuringEvaluation Initial;
 
-  if (needsInitialEvaluation()) {
+  bool HasInitialEvaluation = needsInitialEvaluation();
+  if (HasInitialEvaluation) {
     Initial = Evaluator.evaluate(Cfg, Structurer, Options.EdgesToRemove);
   } else {
     Initial.Succeeded = true;
@@ -118,7 +125,18 @@ StructuringOptimizationPass::analyze(const StructuredCFG &Cfg,
       break;
     }
 
-    Current = Evaluator.evaluate(Candidate, Structurer, Options.EdgesToRemove);
+    if (!HasInitialEvaluation) {
+      Current = Evaluator.evaluate(Previous, Structurer,
+                                   Options.EdgesToRemove);
+      Initial = Current;
+      HasInitialEvaluation = true;
+      if (Options.RequireStructurableGraph && !Current.Succeeded) {
+        return Result;
+      }
+    }
+
+    Current =
+        Evaluator.evaluate(Candidate, Structurer, Options.EdgesToRemove);
     if (!Current.Succeeded) {
       if (!Options.RecoverStructureFails) {
         return Result;

@@ -845,7 +845,7 @@ ret:
         "contains": ["switch (x)", "case 1:", "case 2:", "if (a == b)",
                      "a + 1;", "return 7;"],
         "absent": ["goto head", "goto tail", "goto ret", "phi", "reg2mem"],
-        "counts": {"return 7;": 4},
+        "counts": {"return 7;": 2},
     },
     {
         "name": "sailr_prefixed_switch_return_region",
@@ -1284,7 +1284,7 @@ diamond_ret:
                    "goto case_tail", "goto case_ret", "goto diamond_head",
                    "goto diamond_ret", "phi", "reg2mem"],
         "counts": {"switch (a)": 2, "return 7;": 2, "return 8;": 2,
-                   "return 9;": 4},
+                   "return 9;": 2},
     },
     {
         "name": "sailr_switch_joined_diamond_return_tail",

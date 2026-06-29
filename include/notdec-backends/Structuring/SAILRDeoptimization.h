@@ -56,6 +56,24 @@ private:
   std::size_t MaxDuplicatedCalls;
 };
 
+// Narrow shared-CFG subset of Angr's return deduplication: when two private
+// branch arms end with the same return payload, move that return back to a
+// shared synthetic block and keep each arm's own prefix statements.
+class ReturnDeduplicator : public StructuringOptimizationPass {
+public:
+  static StructuringOptimizationOptions defaultOptions();
+
+  explicit ReturnDeduplicator(
+      StructuringOptimizationOptions Options = defaultOptions())
+      : StructuringOptimizationPass(Options) {}
+
+  const char *name() const override { return "ReturnDeduplicator"; }
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override;
+};
+
 class SwitchDefaultCaseDuplicator : public StructuringOptimizationPass {
 public:
   // Angr models a reused switch default as a synthetic goto block. The

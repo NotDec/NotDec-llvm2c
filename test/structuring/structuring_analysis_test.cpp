@@ -111,6 +111,12 @@ public:
   using ReturnDuplicatorLow::runOnGraph;
 };
 
+class TestReturnDeduplicator : public ReturnDeduplicator {
+public:
+  using ReturnDeduplicator::ReturnDeduplicator;
+  using ReturnDeduplicator::runOnGraph;
+};
+
 class TestCrossJumpReverter : public CrossJumpReverter {
 public:
   using CrossJumpReverter::CrossJumpReverter;
@@ -353,10 +359,13 @@ public:
 
   const char *name() const override { return "AddFirstSuccessorPass"; }
 
+  unsigned Attempts = 0;
+
 protected:
   bool runOnGraph(StructuredCFG &Graph,
                   const StructuringEvaluation &Current) override {
     (void)Current;
+    ++Attempts;
     for (CFGBlock &Block : Graph.blocks()) {
       if (Block.Id == 0 && Block.Successors.empty()) {
         Block.Successors.push_back(1);
@@ -458,6 +467,25 @@ protected:
     (void)Current;
     return GotoManager::fromGotos({StructuredGoto{0, 20},
                                    StructuredGoto{1, 30}});
+  }
+};
+
+class AddStatementPass : public StructuringOptimizationPass {
+public:
+  using StructuringOptimizationPass::StructuringOptimizationPass;
+
+  const char *name() const override { return "AddStatementPass"; }
+
+protected:
+  bool runOnGraph(StructuredCFG &Graph,
+                  const StructuringEvaluation &Current) override {
+    (void)Current;
+    CFGBlock *Block = Graph.getBlock(0);
+    if (Block == nullptr || !Block->Statements.empty()) {
+      return false;
+    }
+    Block->Statements.push_back({100});
+    return true;
   }
 };
 
@@ -8950,6 +8978,73 @@ void testReturnDuplicatorLowUsesGotoInReturnTail() {
   assert(hasSinglePayload(CopyRet1->Statements, 25));
 }
 
+void testReturnDeduplicatorSharesDuplicateBranchReturns() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {});
+  ThenBlock.Statements.push_back({101});
+  ThenBlock.Statements.push_back({201});
+  ThenBlock.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {});
+  ElseBlock.Statements.push_back({102});
+  ElseBlock.Statements.push_back({301});
+  ElseBlock.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(ElseBlock));
+  Cfg.setPayloadOrigin(301, 201);
+
+  StructuringEvaluation Current;
+  TestReturnDeduplicator Pass(ReturnDeduplicator::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *ThenAfter = Cfg.getBlock(1);
+  const CFGBlock *ElseAfter = Cfg.getBlock(2);
+  assert(ThenAfter != nullptr && ElseAfter != nullptr);
+  assert(ThenAfter->Terminator == TerminatorKind::Fallthrough);
+  assert(ElseAfter->Terminator == TerminatorKind::Fallthrough);
+  assert(hasSinglePayload(ThenAfter->Statements, 101));
+  assert(hasSinglePayload(ElseAfter->Statements, 102));
+  assert(ThenAfter->Successors.size() == 1);
+  assert(ThenAfter->Successors == ElseAfter->Successors);
+
+  const CFGBlock *SharedReturn = Cfg.getBlock(ThenAfter->Successors.front());
+  assert(SharedReturn != nullptr);
+  assert(SharedReturn->Origin == CFGBlockOrigin::Synthetic);
+  assert(SharedReturn->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(SharedReturn->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(SharedReturn->Statements, 201));
+}
+
+void testReturnDeduplicatorKeepsDivergentBranchReturns() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+
+  CFGBlock ThenBlock = block(1, {});
+  ThenBlock.Statements.push_back({101});
+  ThenBlock.Statements.push_back({201});
+  ThenBlock.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(ThenBlock));
+
+  CFGBlock ElseBlock = block(2, {});
+  ElseBlock.Statements.push_back({102});
+  ElseBlock.Statements.push_back({301});
+  ElseBlock.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(ElseBlock));
+
+  StructuringEvaluation Current;
+  TestReturnDeduplicator Pass(ReturnDeduplicator::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(!Changed);
+  assert(Cfg.getBlock(1)->Terminator == TerminatorKind::Return);
+  assert(Cfg.getBlock(2)->Terminator == TerminatorKind::Return);
+  assert(Cfg.getBlock(1)->Statements.size() == 2);
+  assert(Cfg.getBlock(2)->Statements.size() == 2);
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -11993,6 +12088,43 @@ void testStructuringOptimizationPassRejectsNewGotos() {
   assert(!Result.Succeeded);
 }
 
+void testStructuringOptimizationPassSkipsLargeInputBeforeRunning() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.RequireGotos = false;
+  Options.MaxInputBlocks = 1;
+  CFGEdgeGotoRegionStructurer Structurer;
+  AddFirstSuccessorPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(!Result.Succeeded);
+  assert(!Result.Changed);
+  assert(Pass.Attempts == 0);
+}
+
+void testStructuringOptimizationPassDelayedInputEvaluationKeepsInitialGotos() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {}));
+
+  StructuringOptimizationOptions Options;
+  Options.EvaluateInputBeforeRun = false;
+  Options.RequireGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  CFGEdgeGotoRegionStructurer Structurer;
+  AddStatementPass Pass(Options);
+  StructuringOptimizationResult Result = Pass.analyze(Cfg, Structurer);
+
+  assert(Result.Succeeded);
+  assert(Result.Changed);
+  const CFGBlock *Block0 = Result.Output.getBlock(0);
+  assert(Block0 != nullptr);
+  assert(hasSinglePayload(Block0->Statements, 100));
+}
+
 void testStructuringOptimizationPassEnforcesStrictlyLessGotos() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -12237,6 +12369,7 @@ void testSAILRDeoptimizationPipelineMatchesAngrStageOrder() {
                                       "DuplicationReverter",
                                       "LoweredSwitchSimplifier",
                                       "ReturnDuplicatorLow",
+                                      "ReturnDeduplicator",
                                       "CrossJumpReverter",
                                   }));
 }
@@ -12314,6 +12447,15 @@ void testSAILRDeoptimizationDefaultOptionsMatchAngr() {
   assert(ReturnOptions.PreventNewGotos);
   assert(ReturnOptions.MustImproveRelativeQuality);
   assert(ReturnOptions.MaxOptIters == 4);
+
+  StructuringOptimizationOptions DedupOptions =
+      ReturnDeduplicator::defaultOptions();
+  assert(!DedupOptions.RequireStructurableGraph);
+  assert(!DedupOptions.RequireGotos);
+  assert(DedupOptions.PreventNewGotos);
+  assert(!DedupOptions.MustImproveRelativeQuality);
+  assert(!DedupOptions.EvaluateInputBeforeRun);
+  assert(DedupOptions.MaxInputBlocks == 500);
 
   StructuringOptimizationOptions CrossJumpOptions =
       CrossJumpReverter::defaultOptions();
@@ -14852,6 +14994,8 @@ int main() {
   testReturnDuplicatorLowCopiesSwitchReturnRegionWithoutPredecessorRewriteSupport();
   testReturnDuplicatorLowCopiesSwitchReturnRegionWithDephicationVVars();
   testReturnDuplicatorLowUsesGotoInReturnTail();
+  testReturnDeduplicatorSharesDuplicateBranchReturns();
+  testReturnDeduplicatorKeepsDivergentBranchReturns();
   testReturnDuplicatorLowRollsBackGroupedPredecessorFailure();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();
@@ -14916,6 +15060,8 @@ int main() {
   testRelativeQualityIgnoresInfiniteLoopsForAngrParity();
   testStructuringOptimizationPassAcceptsImprovedGraph();
   testStructuringOptimizationPassRejectsNewGotos();
+  testStructuringOptimizationPassSkipsLargeInputBeforeRunning();
+  testStructuringOptimizationPassDelayedInputEvaluationKeepsInitialGotos();
   testStructuringOptimizationPassEnforcesStrictlyLessGotos();
   testStructuringOptimizationPassCanOverrideNewGotos();
   testStructuringOptimizationPassCanSkipInitialStructurableGraph();

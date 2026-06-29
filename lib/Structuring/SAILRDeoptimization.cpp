@@ -3995,6 +3995,102 @@ bool ReturnDuplicatorLow::runOnGraph(StructuredCFG &Graph,
   return Changed;
 }
 
+StructuringOptimizationOptions ReturnDeduplicator::defaultOptions() {
+  StructuringOptimizationOptions Options;
+  Options.RequireStructurableGraph = false;
+  Options.PreventNewGotos = true;
+  Options.RequireGotos = false;
+  Options.MustImproveRelativeQuality = false;
+  Options.EvaluateInputBeforeRun = false;
+  Options.MaxInputBlocks = 500;
+  return Options;
+}
+
+bool canDeduplicateReturnArm(const StructuredCFG &Graph, BlockId Branch,
+                             BlockId Arm) {
+  const CFGBlock *Block = Graph.getBlock(Arm);
+  if (Block == nullptr || Block->Terminator != TerminatorKind::Return ||
+      Block->Successors.empty() == false || Block->Statements.empty()) {
+    return false;
+  }
+
+  std::vector<BlockId> Preds = predecessorsOf(Graph, Arm);
+  return Preds.size() == 1 && Preds.front() == Branch;
+}
+
+bool sameTailReturnPayload(const StructuredCFG &Graph, const CFGBlock &Lhs,
+                           const CFGBlock &Rhs) {
+  if (Lhs.Statements.empty() || Rhs.Statements.empty()) {
+    return false;
+  }
+  return samePayload(Graph, Lhs.Statements.back(), Rhs.Statements.back());
+}
+
+bool ReturnDeduplicator::runOnGraph(StructuredCFG &Graph,
+                                    const StructuringEvaluation &Current) {
+  (void)Current;
+
+  std::vector<BlockId> BlockIds;
+  BlockIds.reserve(Graph.blocks().size());
+  for (const CFGBlock &Block : Graph.blocks()) {
+    BlockIds.push_back(Block.Id);
+  }
+  std::sort(BlockIds.begin(), BlockIds.end());
+
+  for (BlockId BranchId : BlockIds) {
+    const CFGBlock *Branch = Graph.getBlock(BranchId);
+    if (Branch == nullptr || Branch->Terminator != TerminatorKind::Branch ||
+        Branch->Successors.size() != 2 ||
+        Branch->Successors[0] == Branch->Successors[1]) {
+      continue;
+    }
+
+    BlockId LhsId = Branch->Successors[0];
+    BlockId RhsId = Branch->Successors[1];
+    const CFGBlock *Lhs = Graph.getBlock(LhsId);
+    const CFGBlock *Rhs = Graph.getBlock(RhsId);
+    if (Lhs == nullptr || Rhs == nullptr ||
+        !canDeduplicateReturnArm(Graph, BranchId, LhsId) ||
+        !canDeduplicateReturnArm(Graph, BranchId, RhsId) ||
+        !sameTailReturnPayload(Graph, *Lhs, *Rhs)) {
+      continue;
+    }
+
+    StructuredCFG Candidate = Graph;
+    CFGBlock *LhsArm = Candidate.getBlock(LhsId);
+    CFGBlock *RhsArm = Candidate.getBlock(RhsId);
+    if (LhsArm == nullptr || RhsArm == nullptr) {
+      continue;
+    }
+
+    PayloadRef SharedReturn = LhsArm->Statements.back();
+    LhsArm->Statements.pop_back();
+    RhsArm->Statements.pop_back();
+    LhsArm->Terminator = TerminatorKind::Fallthrough;
+    RhsArm->Terminator = TerminatorKind::Fallthrough;
+
+    CFGBlock ReturnBlock;
+    ReturnBlock.Origin = CFGBlockOrigin::Synthetic;
+    ReturnBlock.CopyKind = CFGBlockCopyKind::None;
+    ReturnBlock.CreatedBy = CFGBlockCreator::SAILRDeoptimization;
+    ReturnBlock.Statements = {SharedReturn};
+    ReturnBlock.Terminator = TerminatorKind::Return;
+    BlockId ReturnId = Candidate.addBlock(std::move(ReturnBlock));
+    LhsArm = Candidate.getBlock(LhsId);
+    RhsArm = Candidate.getBlock(RhsId);
+    if (LhsArm == nullptr || RhsArm == nullptr) {
+      continue;
+    }
+    LhsArm->Successors = {ReturnId};
+    RhsArm->Successors = {ReturnId};
+
+    Graph = std::move(Candidate);
+    return true;
+  }
+
+  return false;
+}
+
 StructuringOptimizationOptions CrossJumpReverter::defaultOptions() {
   StructuringOptimizationOptions Options;
   Options.StrictlyLessGotos = true;
@@ -4183,6 +4279,7 @@ StructuringOptimizationPipeline buildSAILRDeoptimizationPipeline(
   Pipeline.addPass(std::make_unique<DuplicationReverter>());
   Pipeline.addPass(std::make_unique<LoweredSwitchSimplifier>());
   Pipeline.addPass(std::make_unique<ReturnDuplicatorLow>());
+  Pipeline.addPass(std::make_unique<ReturnDeduplicator>());
   Pipeline.addPass(std::make_unique<CrossJumpReverter>());
   return Pipeline;
 }

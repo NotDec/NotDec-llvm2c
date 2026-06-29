@@ -20,7 +20,13 @@ struct StructuringOptimizationOptions {
   bool RecoverStructureFails = true;
   bool MustImproveRelativeQuality = true;
   bool RequireGotos = true;
+  // Disable only for cheap local passes that can decide "no change" without
+  // looking at structuring output. Accepted rewrites still get both evaluations.
+  bool EvaluateInputBeforeRun = true;
   std::size_t MaxOptIters = 1;
+  // Some passes are only meant for small CFG cleanup. A zero value keeps the
+  // pass enabled for every graph; a non-zero value skips before evaluation.
+  std::size_t MaxInputBlocks = 0;
   std::vector<StructuringEdge> EdgesToRemove;
 };
 
