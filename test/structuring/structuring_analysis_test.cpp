@@ -9095,6 +9095,47 @@ void testReturnDeduplicatorSharesDuplicateSwitchCaseReturns() {
   assert(hasSinglePayload(SharedReturn->Statements, 201));
 }
 
+void testReturnDeduplicatorSharesDuplicateSwitchDefaultCaseReturns() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(switchBlock(0, {1, 2}));
+
+  CFGBlock Default = block(1, {});
+  Default.Statements.push_back({101});
+  Default.Statements.push_back({201});
+  Default.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(Default));
+
+  CFGBlock Case = block(2, {});
+  Case.Statements.push_back({102});
+  Case.Statements.push_back({301});
+  Case.Terminator = TerminatorKind::Return;
+  Cfg.addBlock(std::move(Case));
+  Cfg.setPayloadOrigin(301, 201);
+
+  StructuringEvaluation Current;
+  TestReturnDeduplicator Pass(ReturnDeduplicator::defaultOptions());
+  bool Changed = Pass.runOnGraph(Cfg, Current);
+
+  assert(Changed);
+  const CFGBlock *DefaultAfter = Cfg.getBlock(1);
+  const CFGBlock *CaseAfter = Cfg.getBlock(2);
+  assert(DefaultAfter != nullptr && CaseAfter != nullptr);
+  assert(DefaultAfter->Terminator == TerminatorKind::Fallthrough);
+  assert(CaseAfter->Terminator == TerminatorKind::Fallthrough);
+  assert(hasSinglePayload(DefaultAfter->Statements, 101));
+  assert(hasSinglePayload(CaseAfter->Statements, 102));
+  assert(DefaultAfter->Successors.size() == 1);
+  assert(DefaultAfter->Successors == CaseAfter->Successors);
+
+  const CFGBlock *SharedReturn =
+      Cfg.getBlock(DefaultAfter->Successors.front());
+  assert(SharedReturn != nullptr);
+  assert(SharedReturn->Origin == CFGBlockOrigin::Synthetic);
+  assert(SharedReturn->CreatedBy == CFGBlockCreator::SAILRDeoptimization);
+  assert(SharedReturn->Terminator == TerminatorKind::Return);
+  assert(hasSinglePayload(SharedReturn->Statements, 201));
+}
+
 void testSwitchDefaultCaseDuplicatorCopiesReusedDefaultBlock() {
   StructuredCFG Cfg;
   Cfg.addBlock(switchBlock(0, {1, 2}));
@@ -15047,6 +15088,7 @@ int main() {
   testReturnDeduplicatorSharesDuplicateBranchReturns();
   testReturnDeduplicatorKeepsDivergentBranchReturns();
   testReturnDeduplicatorSharesDuplicateSwitchCaseReturns();
+  testReturnDeduplicatorSharesDuplicateSwitchDefaultCaseReturns();
   testReturnDuplicatorLowRollsBackGroupedPredecessorFailure();
   testReturnDuplicatorLowSkipsPartialGroupedCopyOnFailure();
   testSwitchReusedEntryRewriterCreatesGotoWithoutCopyingEntryTail();

@@ -4111,7 +4111,7 @@ bool ReturnDeduplicator::runOnGraph(StructuredCFG &Graph,
     }
 
     if (Branch->Terminator != TerminatorKind::Switch ||
-        Branch->Successors.size() < 3) {
+        Branch->Successors.size() < 2) {
       continue;
     }
 
