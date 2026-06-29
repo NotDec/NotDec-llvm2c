@@ -313,6 +313,7 @@ exit:
         "contains": ["a();", "b();", "c();", "return 0;"],
         "absent": ["goto structured_block_"],
         "body_counts": {"c();": 2},
+        "expected_metrics": {"goto_count": 7},
     },
     {
         "name": "branch_return_region_proxy",
@@ -830,11 +831,18 @@ def run_case(
             failures.append(
                 f"{header}: expected {expected} x {needle!r} in function body, got {actual}"
             )
+    metrics = output_metrics(output)
+    for metric, expected in case.get("expected_metrics", {}).items():
+        actual = metrics.get(metric)
+        if actual != expected:
+            failures.append(
+                f"{header}: expected {metric} {expected}, got {actual}"
+            )
     status = "fail" if failures else "pass"
     result = (
         status,
         failures,
-        output_metrics(output),
+        metrics,
         classify_failures(status, failures),
     )
     return result
