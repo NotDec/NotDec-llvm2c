@@ -79,7 +79,9 @@
       "name": "nested_loop_break_continue",
       "source": "cases/007_nested_loop_break_continue.c",
       "xfail": true,
-      "xfail_contains": ["expected goto<=0"],
+      "xfail_exact": [
+        "expected goto<=0"
+      ],
       "oracle": {
         "contains": ["while (", "break;", "continue;", "sink("],
         "min_counts": {"break": 1, "continue": 1, "while": 1},
