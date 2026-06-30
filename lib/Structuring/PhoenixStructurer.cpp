@@ -1907,6 +1907,23 @@ bool sourceContainsStructuredSwitch(const MutableRegionNode &Source,
                               StructuredNodeKind::Switch);
 }
 
+// Collapsed nodes may keep an older TailBlock after an edge is virtualized.
+// If that tail's CFG successor is already one of the collapsed blocks, rendering
+// it again would create a fake re-entry goto into the node we just emitted.
+bool isInternalFallbackTarget(const MutableRegionNode &Node, BlockId Target) {
+  return Target == InvalidBlockId || nodeContainsBlock(Node, Target);
+}
+
+bool shouldAppendVirtualFallbackTransfer(const StructuredCFG &Cfg,
+                                         const MutableRegionNode &Node,
+                                         BlockId Target) {
+  if (isInternalFallbackTarget(Node, Target)) {
+    return false;
+  }
+  return Node.StructuredRoot == InvalidNodeId ||
+         !nodeHasSuccessorTarget(Cfg, Node, Target);
+}
+
 void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
                         const std::vector<VirtualEdge> &VirtualEdges,
                         const Region &R, StructuredNode &Root,
@@ -1923,8 +1940,7 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
     if (nodeTreeContainsStructuredControl(Tree, Node.StructuredRoot) ||
         nodeTreeContainsControlTransfer(Tree, Node.StructuredRoot)) {
       for (const VirtualEdge &Edge : VirtualEdges) {
-        if (!nodeContainsBlock(Node, Edge.ToBlock) &&
-            !nodeHasSuccessorTarget(Cfg, Node, Edge.ToBlock)) {
+        if (shouldAppendVirtualFallbackTransfer(Cfg, Node, Edge.ToBlock)) {
           appendControlTransfer(Root, Tree, Edge.ToBlock,
                                 Edge.Kind == VirtualEdgeKind::Goto
                                     ? classifyNaturalLoopExit(Cfg, R,
@@ -1993,6 +2009,9 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
   }
   case TerminatorKind::Fallthrough:
     for (BlockId Succ : Tail->Successors) {
+      if (isInternalFallbackTarget(Node, Succ)) {
+        continue;
+      }
       Root.Children.push_back(Tree.addNode(
           makeControlTransfer(Succ, classifyNaturalLoopExit(Cfg, R, Succ))));
     }
@@ -2012,7 +2031,7 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
   }
 
   for (const VirtualEdge &Edge : VirtualEdges) {
-    if (!nodeContainsBlock(Node, Edge.ToBlock) &&
+    if (shouldAppendVirtualFallbackTransfer(Cfg, Node, Edge.ToBlock) &&
         !hasSuccessorTarget(*Tail, Edge.ToBlock)) {
       appendControlTransfer(Root, Tree, Edge.ToBlock,
                             Edge.Kind == VirtualEdgeKind::Goto
@@ -2022,6 +2041,9 @@ void appendFallbackNode(const StructuredCFG &Cfg, const MutableRegionNode &Node,
   }
   if (R.Kind == RegionKind::NaturalLoop) {
     for (BlockId Succ : Node.ExternalSuccs) {
+      if (isInternalFallbackTarget(Node, Succ)) {
+        continue;
+      }
       appendControlTransfer(Root, Tree, Succ,
                             classifyNaturalLoopExit(Cfg, R, Succ));
     }

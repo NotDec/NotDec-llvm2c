@@ -192,6 +192,55 @@ bool treeContainsGotoTarget(const StructuredTree &Tree, NodeId Id,
          treeContainsGotoTarget(Tree, Node->Default, Target);
 }
 
+bool treeStartsWithLoopAtBlock(const StructuredTree &Tree, NodeId Id,
+                               BlockId Block) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if ((Node->Kind == StructuredNodeKind::While ||
+       Node->Kind == StructuredNodeKind::DoWhile ||
+       Node->Kind == StructuredNodeKind::InfiniteLoop) &&
+      Node->Block == Block) {
+    return true;
+  }
+  return Node->Kind == StructuredNodeKind::Sequence &&
+         !Node->Children.empty() &&
+         treeStartsWithLoopAtBlock(Tree, Node->Children.front(), Block);
+}
+
+bool treeContainsGotoBeforeLoop(const StructuredTree &Tree, NodeId Id,
+                                BlockId Target, BlockId LoopBlock) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if (Node->Kind == StructuredNodeKind::Sequence) {
+    for (unsigned I = 0; I + 1 < Node->Children.size(); ++I) {
+      const StructuredNode *Current = Tree.getNode(Node->Children[I]);
+      if (Current != nullptr && Current->Kind == StructuredNodeKind::Goto &&
+          Current->Target == Target &&
+          treeStartsWithLoopAtBlock(Tree, Node->Children[I + 1], LoopBlock)) {
+        return true;
+      }
+    }
+  }
+  for (NodeId Child : Node->Children) {
+    if (treeContainsGotoBeforeLoop(Tree, Child, Target, LoopBlock)) {
+      return true;
+    }
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    if (treeContainsGotoBeforeLoop(Tree, Case.Body, Target, LoopBlock)) {
+      return true;
+    }
+  }
+  return treeContainsGotoBeforeLoop(Tree, Node->Then, Target, LoopBlock) ||
+         treeContainsGotoBeforeLoop(Tree, Node->Else, Target, LoopBlock) ||
+         treeContainsGotoBeforeLoop(Tree, Node->Body, Target, LoopBlock) ||
+         treeContainsGotoBeforeLoop(Tree, Node->Default, Target, LoopBlock);
+}
+
 const StructuredNode *findFirstNodeKind(const StructuredTree &Tree, NodeId Id,
                                         StructuredNodeKind Kind) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -13951,6 +14000,21 @@ void testPhoenixOverlayLastResortDetachesVirtualizedEdge() {
   assert(HasKeptEdge);
 }
 
+void testPhoenixFallbackSkipsInternalCollapsedSuccessor() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 4}));
+  Cfg.addBlock(branchBlock(1, {2, 4}));
+  Cfg.addBlock(branchBlock(2, {3, 4}));
+  Cfg.addBlock(block(3, {4}));
+  Cfg.addBlock(block(4, {5}));
+  Cfg.addBlock(block(5, {5}));
+
+  StructuredTree Tree = PhoenixStructurer().structure(Cfg);
+  assert(Tree.root() != InvalidNodeId);
+  assert(treeContainsKind(Tree, Tree.root(), StructuredNodeKind::InfiniteLoop));
+  assert(!treeContainsGotoBeforeLoop(Tree, Tree.root(), 4, 5));
+}
+
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -15284,6 +15348,7 @@ int main() {
   testPhoenixOverlayPathSyncsReducerCollapseToOverlay();
   testPhoenixOverlayPathSyncsRepeatedReducerCollapses();
   testPhoenixOverlayLastResortDetachesVirtualizedEdge();
+  testPhoenixFallbackSkipsInternalCollapsedSuccessor();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
