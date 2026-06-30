@@ -47,6 +47,11 @@ void dropGotoIntoFollowingNode(StructuredNode &Node,
                                StructuredTree &Tree);
 void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
                             NodeId Id);
+bool gotoTargetDeep(const StructuredTree &Tree, NodeId Id, BlockId &Target);
+NodeId dropIfGotoToFollowingBranch(StructuredTree &Tree, NodeId IfId,
+                                   BlockId NextEntry);
+void collectGotoTargets(const StructuredTree &Tree, NodeId Id,
+                        std::set<BlockId> &Targets);
 void syncVirtualEdgesToOverlay(const MutableRegionGraph &Graph,
                                RegionOverlay &Overlay);
 bool nodeTreeContainsKind(const StructuredTree &Tree, NodeId Id,
@@ -1447,6 +1452,15 @@ NodeId buildVirtualizedBranchSource(const CFGBlock &Tail,
   if (!RemovedTrue && !RemovedFalse) {
     return InvalidNodeId;
   }
+  if (Source.StructuredRoot != InvalidNodeId &&
+      (nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                            StructuredNodeKind::While) ||
+       nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                            StructuredNodeKind::DoWhile) ||
+       nodeTreeContainsKind(Tree, Source.StructuredRoot,
+                            StructuredNodeKind::InfiniteLoop))) {
+    return InvalidNodeId;
+  }
 
   BlockId KeptTarget = RemovedTrue ? Tail.Successors[1] : Tail.Successors[0];
   VirtualEdgeKind RenderKind =
@@ -1787,6 +1801,8 @@ bool rewriteLoopSuccessorExits(const StructuredCFG &Cfg,
         Graph.setSourceNodes(
             SourceId,
             {OverlayNodeKey::structured(Replacement, Overlay->id())});
+        Graph.virtualizeEdge(SourceId, SuccId, VirtualEdgeKind::Break);
+        detachOverlayVirtualEdge(Overlay, FromNodes, ToNodes);
       }
       Changed = true;
     }
@@ -2186,34 +2202,47 @@ bool endsWithUnconditionalRenderedTransfer(const StructuredTree &Tree,
   if (isUnconditionalRenderedTransfer(*Node)) {
     return true;
   }
+  if (Node->Kind == StructuredNodeKind::Return ||
+      Node->Kind == StructuredNodeKind::Unreachable) {
+    return true;
+  }
+  if (Node->Kind == StructuredNodeKind::If &&
+      Node->Then != InvalidNodeId && Node->Else != InvalidNodeId) {
+    return endsWithUnconditionalRenderedTransfer(Tree, Node->Then) &&
+           endsWithUnconditionalRenderedTransfer(Tree, Node->Else);
+  }
   return Node->Kind == StructuredNodeKind::Sequence &&
          !Node->Children.empty() &&
          endsWithUnconditionalRenderedTransfer(Tree, Node->Children.back());
 }
 
-bool containsEnterableNode(const StructuredTree &Tree, NodeId Id) {
+bool containsEnterableNode(const StructuredTree &Tree, NodeId Id,
+                           const std::set<BlockId> &TargetedLabels) {
   const StructuredNode *Node = Tree.getNode(Id);
   if (Node == nullptr) {
     return false;
   }
-  if (Node->Kind == StructuredNodeKind::Label ||
-      isStructuredLoopKind(Node->Kind)) {
+  if (Node->Kind == StructuredNodeKind::Label) {
+    return Node->Block != InvalidBlockId &&
+           TargetedLabels.count(Node->Block) != 0;
+  }
+  if (isStructuredLoopKind(Node->Kind)) {
     return true;
   }
   for (NodeId Child : Node->Children) {
-    if (containsEnterableNode(Tree, Child)) {
+    if (containsEnterableNode(Tree, Child, TargetedLabels)) {
       return true;
     }
   }
   for (const StructuredSwitchCase &Case : Node->StructuredCases) {
-    if (containsEnterableNode(Tree, Case.Body)) {
+    if (containsEnterableNode(Tree, Case.Body, TargetedLabels)) {
       return true;
     }
   }
-  return containsEnterableNode(Tree, Node->Then) ||
-         containsEnterableNode(Tree, Node->Else) ||
-         containsEnterableNode(Tree, Node->Body) ||
-         containsEnterableNode(Tree, Node->Default);
+  return containsEnterableNode(Tree, Node->Then, TargetedLabels) ||
+         containsEnterableNode(Tree, Node->Else, TargetedLabels) ||
+         containsEnterableNode(Tree, Node->Body, TargetedLabels) ||
+         containsEnterableNode(Tree, Node->Default, TargetedLabels);
 }
 
 void dropUnreachableAfterRenderedTransfer(StructuredNode &Node,
@@ -2222,14 +2251,18 @@ void dropUnreachableAfterRenderedTransfer(StructuredNode &Node,
     return;
   }
 
+  std::set<BlockId> TargetedLabels;
+  for (NodeId Child : Node.Children) {
+    collectGotoTargets(Tree, Child, TargetedLabels);
+  }
+
   // This only removes straight-line siblings that cannot be entered by a
   // rendered label or loop entry; it is not a general CFG reachability pass.
   std::vector<NodeId> Filtered;
   Filtered.reserve(Node.Children.size());
   bool AfterTransfer = false;
   for (NodeId Child : Node.Children) {
-    if (AfterTransfer && followingEntryBlock(Tree, Child) == InvalidBlockId &&
-        !containsEnterableNode(Tree, Child)) {
+    if (AfterTransfer && !containsEnterableNode(Tree, Child, TargetedLabels)) {
       continue;
     }
 
@@ -2260,6 +2293,9 @@ void dropGotoIntoFollowingNode(StructuredNode &Node, StructuredTree &Tree) {
         Index + 1 < Node.Children.size()
             ? followingEntryBlock(Tree, Node.Children[Index + 1])
             : InvalidBlockId;
+    Node.Children[Index] =
+        dropIfGotoToFollowingBranch(Tree, Node.Children[Index], NextEntry);
+    Current = Tree.getNode(Node.Children[Index]);
     if (Current != nullptr && Current->Kind == StructuredNodeKind::Sequence &&
         NextEntry != InvalidBlockId && !Current->Children.empty()) {
       const StructuredNode *Last = Tree.getNode(Current->Children.back());
@@ -2310,6 +2346,189 @@ bool gotoTargetDeep(const StructuredTree &Tree, NodeId Id, BlockId &Target) {
          gotoTarget(Tree, Node->Children.front(), Target);
 }
 
+NodeId dropIfGotoToFollowingBranch(StructuredTree &Tree, NodeId IfId,
+                                   BlockId NextEntry) {
+  const StructuredNode *IfNode = Tree.getNode(IfId);
+  if (IfNode == nullptr || IfNode->Kind != StructuredNodeKind::If ||
+      !IfNode->Children.empty() || NextEntry == InvalidBlockId) {
+    return IfId;
+  }
+
+  BlockId ThenTarget = InvalidBlockId;
+  BlockId ElseTarget = InvalidBlockId;
+  bool ThenGotoNext = gotoTargetDeep(Tree, IfNode->Then, ThenTarget) &&
+                      ThenTarget == NextEntry;
+  bool ElseGotoNext = gotoTargetDeep(Tree, IfNode->Else, ElseTarget) &&
+                      ElseTarget == NextEntry;
+  if (ThenGotoNext == ElseGotoNext) {
+    return IfId;
+  }
+
+  StructuredNode Copy = *IfNode;
+  if (ElseGotoNext) {
+    Copy.Else = InvalidNodeId;
+  } else if (Copy.Else != InvalidNodeId) {
+    Copy.ConditionNegated = !Copy.ConditionNegated;
+    Copy.Then = Copy.Else;
+    Copy.Else = InvalidNodeId;
+  } else {
+    return IfId;
+  }
+  return Tree.addNode(std::move(Copy));
+}
+
+void collectGotoTargets(const StructuredTree &Tree, NodeId Id,
+                        std::set<BlockId> &Targets) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return;
+  }
+  if ((Node->Kind == StructuredNodeKind::Goto ||
+       Node->Kind == StructuredNodeKind::Break ||
+       Node->Kind == StructuredNodeKind::Continue) &&
+      Node->Target != InvalidBlockId) {
+    Targets.insert(Node->Target);
+  }
+  for (NodeId Child : Node->Children) {
+    collectGotoTargets(Tree, Child, Targets);
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    collectGotoTargets(Tree, Case.Body, Targets);
+  }
+  collectGotoTargets(Tree, Node->Then, Targets);
+  collectGotoTargets(Tree, Node->Else, Targets);
+  collectGotoTargets(Tree, Node->Body, Targets);
+  collectGotoTargets(Tree, Node->Default, Targets);
+}
+
+unsigned countControlTransferTargetRefs(const StructuredTree &Tree, NodeId Id,
+                                        BlockId Target) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return 0;
+  }
+
+  unsigned Count = 0;
+  if ((Node->Kind == StructuredNodeKind::Goto ||
+       Node->Kind == StructuredNodeKind::Break ||
+       Node->Kind == StructuredNodeKind::Continue) &&
+      Node->Target == Target) {
+    ++Count;
+  }
+  for (NodeId Child : Node->Children) {
+    Count += countControlTransferTargetRefs(Tree, Child, Target);
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    Count += countControlTransferTargetRefs(Tree, Case.Body, Target);
+  }
+  Count += countControlTransferTargetRefs(Tree, Node->Then, Target);
+  Count += countControlTransferTargetRefs(Tree, Node->Else, Target);
+  Count += countControlTransferTargetRefs(Tree, Node->Body, Target);
+  Count += countControlTransferTargetRefs(Tree, Node->Default, Target);
+  return Count;
+}
+
+NodeId buildSequenceFromRange(StructuredTree &Tree,
+                              const std::vector<NodeId> &Children,
+                              unsigned Begin, unsigned End);
+
+// Fold a guard that jumps to a following terminal block before the real loop
+// entry, e.g. "if goto return; goto loop; label return; return; loop".
+bool foldGuardedTerminalIntoSequence(StructuredTree &Tree, NodeId SequenceId) {
+  const StructuredNode *OldSequence = Tree.getNode(SequenceId);
+  if (OldSequence == nullptr ||
+      OldSequence->Kind != StructuredNodeKind::Sequence ||
+      OldSequence->Children.size() < 4) {
+    return false;
+  }
+  const std::vector<NodeId> OldChildren = OldSequence->Children;
+
+  for (unsigned PrefixIndex = 0; PrefixIndex + 1 < OldChildren.size();
+       ++PrefixIndex) {
+    const StructuredNode *Prefix = Tree.getNode(OldChildren[PrefixIndex]);
+    if (Prefix == nullptr || Prefix->Kind != StructuredNodeKind::Sequence ||
+        Prefix->Children.size() < 2) {
+      continue;
+    }
+
+    BlockId FollowTarget = InvalidBlockId;
+    if (!gotoTargetDeep(Tree, Prefix->Children.back(), FollowTarget)) {
+      continue;
+    }
+
+    const StructuredNode *IfNode =
+        Tree.getNode(Prefix->Children[Prefix->Children.size() - 2]);
+    if (IfNode == nullptr || IfNode->Kind != StructuredNodeKind::If) {
+      continue;
+    }
+
+    BlockId ThenTarget = InvalidBlockId;
+    BlockId ElseTarget = InvalidBlockId;
+    bool ThenIsGoto = gotoTargetDeep(Tree, IfNode->Then, ThenTarget);
+    bool ElseIsGoto = gotoTargetDeep(Tree, IfNode->Else, ElseTarget);
+    if (ThenIsGoto == ElseIsGoto) {
+      continue;
+    }
+    bool TerminalIsThen = ThenIsGoto;
+    BlockId TerminalTarget = TerminalIsThen ? ThenTarget : ElseTarget;
+
+    unsigned TerminalLabel = PrefixIndex + 1;
+    BlockId Label = InvalidBlockId;
+    if (!labelBlock(Tree, OldChildren[TerminalLabel], Label) ||
+        Label != TerminalTarget) {
+      continue;
+    }
+    if (countControlTransferTargetRefs(Tree, SequenceId, TerminalTarget) != 1) {
+      continue;
+    }
+
+    unsigned TerminalEnd = TerminalLabel + 1;
+    while (TerminalEnd < OldChildren.size()) {
+      if (endsWithUnconditionalRenderedTransfer(
+              Tree, OldChildren[TerminalEnd])) {
+        ++TerminalEnd;
+        break;
+      }
+      ++TerminalEnd;
+    }
+    if (TerminalEnd >= OldChildren.size()) {
+      continue;
+    }
+
+    BlockId NextEntry = followingEntryBlock(Tree, OldChildren[TerminalEnd]);
+    if (NextEntry != FollowTarget) {
+      continue;
+    }
+
+    StructuredNode FoldedIf = *IfNode;
+    NodeId TerminalBody = buildSequenceFromRange(
+        Tree, OldChildren, TerminalLabel + 1, TerminalEnd);
+    if (TerminalIsThen) {
+      FoldedIf.Then = TerminalBody;
+    } else {
+      FoldedIf.Else = TerminalBody;
+    }
+    NodeId FoldedIfId = Tree.addNode(std::move(FoldedIf));
+
+    StructuredNode FoldedPrefix = *Prefix;
+    FoldedPrefix.Children[FoldedPrefix.Children.size() - 2] = FoldedIfId;
+    FoldedPrefix.Children.pop_back();
+    NodeId FoldedPrefixId = Tree.addNode(std::move(FoldedPrefix));
+
+    std::vector<NodeId> NewChildren;
+    NewChildren.insert(NewChildren.end(), OldChildren.begin(),
+                       OldChildren.begin() + PrefixIndex);
+    NewChildren.push_back(FoldedPrefixId);
+    NewChildren.insert(NewChildren.end(), OldChildren.begin() + TerminalEnd,
+                       OldChildren.end());
+
+    StructuredNode &Sequence = Tree.nodes()[SequenceId];
+    Sequence.Children = std::move(NewChildren);
+    return true;
+  }
+  return false;
+}
+
 NodeId buildSequenceFromRange(StructuredTree &Tree,
                               const std::vector<NodeId> &Children,
                               unsigned Begin, unsigned End) {
@@ -2349,9 +2568,10 @@ bool foldGotoDiamond(const StructuredCFG &Cfg, StructuredTree &Tree,
       OldSequence->Children.size() < 6) {
     return false;
   }
+  const std::vector<NodeId> OldChildren = OldSequence->Children;
 
-  for (unsigned IfIndex = 0; IfIndex < OldSequence->Children.size(); ++IfIndex) {
-    const StructuredNode *IfNode = Tree.getNode(OldSequence->Children[IfIndex]);
+  for (unsigned IfIndex = 0; IfIndex < OldChildren.size(); ++IfIndex) {
+    const StructuredNode *IfNode = Tree.getNode(OldChildren[IfIndex]);
     if (IfNode == nullptr || IfNode->Kind != StructuredNodeKind::If ||
         IfNode->Then == InvalidNodeId || IfNode->Else == InvalidNodeId) {
       continue;
@@ -2364,45 +2584,45 @@ bool foldGotoDiamond(const StructuredCFG &Cfg, StructuredTree &Tree,
       continue;
     }
 
-    unsigned ThenLabel = OldSequence->Children.size();
-    unsigned ElseLabel = OldSequence->Children.size();
-    for (unsigned I = IfIndex + 1; I < OldSequence->Children.size(); ++I) {
+    unsigned ThenLabel = OldChildren.size();
+    unsigned ElseLabel = OldChildren.size();
+    for (unsigned I = IfIndex + 1; I < OldChildren.size(); ++I) {
       BlockId Label = InvalidBlockId;
-      if (!labelBlock(Tree, OldSequence->Children[I], Label)) {
+      if (!labelBlock(Tree, OldChildren[I], Label)) {
         continue;
       }
-      if (Label == ThenTarget && ThenLabel == OldSequence->Children.size()) {
+      if (Label == ThenTarget && ThenLabel == OldChildren.size()) {
         ThenLabel = I;
       }
-      if (Label == ElseTarget && ElseLabel == OldSequence->Children.size()) {
+      if (Label == ElseTarget && ElseLabel == OldChildren.size()) {
         ElseLabel = I;
       }
     }
-    if (ThenLabel == OldSequence->Children.size() ||
-        ElseLabel == OldSequence->Children.size() || ThenLabel == ElseLabel) {
+    if (ThenLabel == OldChildren.size() || ElseLabel == OldChildren.size() ||
+        ThenLabel == ElseLabel) {
       continue;
     }
 
     unsigned FirstLabel = std::min(ThenLabel, ElseLabel);
     unsigned SecondLabel = std::max(ThenLabel, ElseLabel);
-    if (SecondLabel + 1 >= OldSequence->Children.size()) {
+    if (SecondLabel + 1 >= OldChildren.size()) {
       continue;
     }
 
-    unsigned JoinLabel = OldSequence->Children.size();
-    for (unsigned I = SecondLabel + 1; I < OldSequence->Children.size(); ++I) {
+    unsigned JoinLabel = OldChildren.size();
+    for (unsigned I = SecondLabel + 1; I < OldChildren.size(); ++I) {
       BlockId Label = InvalidBlockId;
-      if (!labelBlock(Tree, OldSequence->Children[I], Label)) {
+      if (!labelBlock(Tree, OldChildren[I], Label)) {
         continue;
       }
-      if (reachesJoinBlock(Cfg, Tree, OldSequence->Children[SecondLabel - 1],
+      if (reachesJoinBlock(Cfg, Tree, OldChildren[SecondLabel - 1],
                            Label) &&
-          reachesJoinBlock(Cfg, Tree, OldSequence->Children[I - 1], Label)) {
+          reachesJoinBlock(Cfg, Tree, OldChildren[I - 1], Label)) {
         JoinLabel = I;
         break;
       }
     }
-    if (JoinLabel == OldSequence->Children.size()) {
+    if (JoinLabel == OldChildren.size()) {
       continue;
     }
 
@@ -2412,18 +2632,18 @@ bool foldGotoDiamond(const StructuredCFG &Cfg, StructuredTree &Tree,
     unsigned ElseBegin = ElseLabel + 1;
     unsigned ElseEnd = ElseLabel == FirstLabel ? SecondLabel : JoinLabel;
     BlockId JoinBlock = InvalidBlockId;
-    if (!labelBlock(Tree, OldSequence->Children[JoinLabel], JoinBlock)) {
+    if (!labelBlock(Tree, OldChildren[JoinLabel], JoinBlock)) {
       continue;
     }
     BlockId TailTarget = InvalidBlockId;
     if (ThenEnd > ThenBegin &&
-        gotoTarget(Tree, OldSequence->Children[ThenEnd - 1], TailTarget) &&
+        gotoTarget(Tree, OldChildren[ThenEnd - 1], TailTarget) &&
         TailTarget == JoinBlock) {
       --ThenEnd;
     }
     TailTarget = InvalidBlockId;
     if (ElseEnd > ElseBegin &&
-        gotoTarget(Tree, OldSequence->Children[ElseEnd - 1], TailTarget) &&
+        gotoTarget(Tree, OldChildren[ElseEnd - 1], TailTarget) &&
         TailTarget == JoinBlock) {
       --ElseEnd;
     }
@@ -2431,18 +2651,17 @@ bool foldGotoDiamond(const StructuredCFG &Cfg, StructuredTree &Tree,
       continue;
     }
     FoldedIf.Then =
-        buildSequenceFromRange(Tree, OldSequence->Children, ThenBegin, ThenEnd);
+        buildSequenceFromRange(Tree, OldChildren, ThenBegin, ThenEnd);
     FoldedIf.Else =
-        buildSequenceFromRange(Tree, OldSequence->Children, ElseBegin, ElseEnd);
+        buildSequenceFromRange(Tree, OldChildren, ElseBegin, ElseEnd);
     NodeId FoldedIfId = Tree.addNode(std::move(FoldedIf));
 
     std::vector<NodeId> NewChildren;
-    NewChildren.insert(NewChildren.end(), OldSequence->Children.begin(),
-                       OldSequence->Children.begin() + IfIndex);
+    NewChildren.insert(NewChildren.end(), OldChildren.begin(),
+                       OldChildren.begin() + IfIndex);
     NewChildren.push_back(FoldedIfId);
-    NewChildren.insert(NewChildren.end(),
-                       OldSequence->Children.begin() + JoinLabel,
-                       OldSequence->Children.end());
+    NewChildren.insert(NewChildren.end(), OldChildren.begin() + JoinLabel,
+                       OldChildren.end());
     StructuredNode &Sequence = Tree.nodes()[SequenceId];
     Sequence.Children = std::move(NewChildren);
     return true;
@@ -2466,14 +2685,15 @@ void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
   cleanupStructuredGotos(Cfg, Tree, NodeCopy.Else);
   cleanupStructuredGotos(Cfg, Tree, NodeCopy.Body);
   cleanupStructuredGotos(Cfg, Tree, NodeCopy.Default);
+  dropGotoIntoFollowingNode(NodeCopy, Tree);
+  dropUnreachableAfterRenderedTransfer(NodeCopy, Tree);
   Tree.nodes()[Id] = std::move(NodeCopy);
-  StructuredNode &Node = Tree.nodes()[Id];
-  dropGotoIntoFollowingNode(Node, Tree);
-  dropUnreachableAfterRenderedTransfer(Node, Tree);
-  while (foldGotoDiamond(Cfg, Tree, Id)) {
-    StructuredNode &Updated = Tree.nodes()[Id];
+  while (foldGuardedTerminalIntoSequence(Tree, Id) ||
+         foldGotoDiamond(Cfg, Tree, Id)) {
+    StructuredNode Updated = Tree.nodes()[Id];
     dropGotoIntoFollowingNode(Updated, Tree);
     dropUnreachableAfterRenderedTransfer(Updated, Tree);
+    Tree.nodes()[Id] = std::move(Updated);
   }
 }
 
@@ -3145,9 +3365,8 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
         BackEdgeCount == 1
             ? findGraphDoWhileSuccessor(Cfg, Graph, LatchBlock, HeadId)
             : InvalidBlockId;
-    bool PreferDoWhile = DoWhileFollowBlock != InvalidBlockId &&
-                         WhileFollowBlock != InvalidBlockId &&
-                         DoWhileFollowBlock != WhileFollowBlock;
+    bool PreferDoWhile = WhileFollowBlock == InvalidBlockId &&
+                         DoWhileFollowBlock != InvalidBlockId;
 
     BlockId FollowBlock = PreferDoWhile ? DoWhileFollowBlock : WhileFollowBlock;
     if (FollowBlock == InvalidBlockId) {

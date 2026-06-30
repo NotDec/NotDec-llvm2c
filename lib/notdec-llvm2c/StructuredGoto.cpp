@@ -163,6 +163,13 @@ class StructuredGotoAdapter {
   std::map<clang::FunctionDecl *, st::PayloadRef> SimpleCallPayloads;
   std::set<st::BlockId> TargetedLabels;
 
+  // Some cleanup rules can leave loop-control nodes outside real loops; this
+  // tracks where break/continue can be emitted as C syntax.
+  struct RenderContext {
+    bool Breakable = false;
+    bool Continuable = false;
+  };
+
 public:
   StructuredGotoAdapter(StructuredGoto &SA)
       : Cfg(SA.getRenderCFG()), Ctx(SA.getRenderASTContext()), SA(SA) {}
@@ -181,9 +188,9 @@ public:
         /*SupportsPredecessorRewrite=*/true,
         /*SupportsGroupedPredecessorRewrite=*/true);
     st::StructuredTree Tree = Structurer->structure(SharedCfg);
-    collectGotoTargets(Tree, Tree.root());
+    collectGotoTargets(Tree, Tree.root(), {});
     std::vector<clang::Stmt *> Stmts;
-    renderNode(Tree, Tree.root(), Stmts);
+    renderNode(Tree, Tree.root(), Stmts, {});
     prependUsedCopiedDephicationDecls(Stmts);
     replaceCFG(std::move(Stmts));
   }
@@ -534,7 +541,8 @@ private:
     return getOrCreateLabelStmt(Id)->getDecl();
   }
 
-  void collectGotoTargets(const st::StructuredTree &Tree, st::NodeId Id) {
+  void collectGotoTargets(const st::StructuredTree &Tree, st::NodeId Id,
+                          RenderContext Context) {
     const st::StructuredNode *Node = Tree.getNode(Id);
     if (Node == nullptr) {
       return;
@@ -543,16 +551,37 @@ private:
         Node->Target != st::InvalidBlockId) {
       TargetedLabels.insert(Node->Target);
     }
+    if (Node->Kind == st::StructuredNodeKind::Break && !Context.Breakable &&
+        Node->Target != st::InvalidBlockId) {
+      TargetedLabels.insert(Node->Target);
+    }
+    if (Node->Kind == st::StructuredNodeKind::Continue &&
+        !Context.Continuable && Node->Target != st::InvalidBlockId) {
+      TargetedLabels.insert(Node->Target);
+    }
+
+    RenderContext ChildContext = Context;
+    if (Node->Kind == st::StructuredNodeKind::While ||
+        Node->Kind == st::StructuredNodeKind::DoWhile ||
+        Node->Kind == st::StructuredNodeKind::InfiniteLoop) {
+      ChildContext.Breakable = true;
+      ChildContext.Continuable = true;
+    }
+
     for (st::NodeId Child : Node->Children) {
-      collectGotoTargets(Tree, Child);
+      collectGotoTargets(Tree, Child, ChildContext);
+    }
+    RenderContext SwitchContext = Context;
+    if (Node->Kind == st::StructuredNodeKind::Switch) {
+      SwitchContext.Breakable = true;
     }
     for (const st::StructuredSwitchCase &Case : Node->StructuredCases) {
-      collectGotoTargets(Tree, Case.Body);
+      collectGotoTargets(Tree, Case.Body, SwitchContext);
     }
-    collectGotoTargets(Tree, Node->Then);
-    collectGotoTargets(Tree, Node->Else);
-    collectGotoTargets(Tree, Node->Body);
-    collectGotoTargets(Tree, Node->Default);
+    collectGotoTargets(Tree, Node->Then, Context);
+    collectGotoTargets(Tree, Node->Else, Context);
+    collectGotoTargets(Tree, Node->Body, ChildContext);
+    collectGotoTargets(Tree, Node->Default, SwitchContext);
   }
 
   st::StructuredCFG buildCFG() {
@@ -661,14 +690,14 @@ private:
   }
 
   void renderNode(const st::StructuredTree &Tree, st::NodeId Id,
-                  std::vector<clang::Stmt *> &Stmts) {
+                  std::vector<clang::Stmt *> &Stmts, RenderContext Context) {
     const st::StructuredNode *Node = Tree.getNode(Id);
     assert(Node != nullptr);
 
     switch (Node->Kind) {
     case st::StructuredNodeKind::Sequence:
       for (st::NodeId Child : Node->Children) {
-        renderNode(Tree, Child, Stmts);
+        renderNode(Tree, Child, Stmts, Context);
       }
       break;
     case st::StructuredNodeKind::Label:
@@ -684,7 +713,7 @@ private:
     case st::StructuredNodeKind::If:
       if (Node->Children.empty() && (Node->Then != st::InvalidNodeId ||
                                      Node->Else != st::InvalidNodeId)) {
-        renderIf(Tree, *Node, Stmts);
+        renderIf(Tree, *Node, Stmts, Context);
       } else {
         renderIf(*Node, Stmts);
       }
@@ -692,7 +721,7 @@ private:
     case st::StructuredNodeKind::Switch:
       if (Node->Children.empty() && (!Node->StructuredCases.empty() ||
                                      Node->Default != st::InvalidNodeId)) {
-        Stmts.push_back(renderSwitch(Tree, *Node));
+        Stmts.push_back(renderSwitch(Tree, *Node, Context));
       } else {
         Stmts.push_back(renderSwitch(*Node));
       }
@@ -704,10 +733,19 @@ private:
     case st::StructuredNodeKind::Unreachable:
       break;
     case st::StructuredNodeKind::Break:
-      Stmts.push_back(new (Ctx) clang::BreakStmt(clang::SourceLocation()));
+      if (!Context.Breakable && Node->Target != st::InvalidBlockId) {
+        Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
+      } else {
+        Stmts.push_back(new (Ctx) clang::BreakStmt(clang::SourceLocation()));
+      }
       break;
     case st::StructuredNodeKind::Continue:
-      Stmts.push_back(new (Ctx) clang::ContinueStmt(clang::SourceLocation()));
+      if (!Context.Continuable && Node->Target != st::InvalidBlockId) {
+        Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
+      } else {
+        Stmts.push_back(new (Ctx)
+                            clang::ContinueStmt(clang::SourceLocation()));
+      }
       break;
     case st::StructuredNodeKind::While:
       Stmts.push_back(renderWhile(Tree, *Node));
@@ -721,9 +759,10 @@ private:
     }
   }
 
-  clang::Stmt *renderCompound(const st::StructuredTree &Tree, st::NodeId Id) {
+  clang::Stmt *renderCompound(const st::StructuredTree &Tree, st::NodeId Id,
+                              RenderContext Context) {
     std::vector<clang::Stmt *> Stmts;
-    renderNode(Tree, Id, Stmts);
+    renderNode(Tree, Id, Stmts, Context);
     return clang::CompoundStmt::Create(Ctx, Stmts, clang::FPOptionsOverride(),
                                        clang::SourceLocation(),
                                        clang::SourceLocation());
@@ -773,14 +812,14 @@ private:
   }
 
   void renderIf(const st::StructuredTree &Tree, const st::StructuredNode &Node,
-                std::vector<clang::Stmt *> &Stmts) {
+                std::vector<clang::Stmt *> &Stmts, RenderContext Context) {
     auto *Cond = conditionExpr(Node);
     clang::Stmt *Then = Node.Then == st::InvalidNodeId
                             ? nullptr
-                            : renderCompound(Tree, Node.Then);
+                            : renderCompound(Tree, Node.Then, Context);
     clang::Stmt *Else = Node.Else == st::InvalidNodeId
                             ? nullptr
-                            : renderCompound(Tree, Node.Else);
+                            : renderCompound(Tree, Node.Else, Context);
     auto *If = clang::IfStmt::Create(
         Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary, nullptr,
         nullptr, Cond, clang::SourceLocation(), clang::SourceLocation(), Then,
@@ -804,9 +843,11 @@ private:
   }
 
   clang::Stmt *renderSwitch(const st::StructuredTree &Tree,
-                            const st::StructuredNode &Node) {
+                            const st::StructuredNode &Node,
+                            RenderContext Context) {
     auto *Cond = llvm::cast<clang::Expr>(getPayload(Node.Condition));
     Cond = SA.castRenderSwitchCondition(Cond);
+    Context.Breakable = true;
 
     auto *Switch = clang::SwitchStmt::Create(
         Ctx, nullptr, nullptr, Cond, clang::SourceLocation(),
@@ -867,10 +908,10 @@ private:
 
     for (const SwitchBodyLabel &BodyLabel : BodyLabels) {
       if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(BodyLabel.LastLabel)) {
-        CaseLabel->setSubStmt(renderCompound(Tree, BodyLabel.Body));
+        CaseLabel->setSubStmt(renderCompound(Tree, BodyLabel.Body, Context));
       } else {
         llvm::cast<clang::DefaultStmt>(BodyLabel.LastLabel)->setSubStmt(
-            renderCompound(Tree, BodyLabel.Body));
+            renderCompound(Tree, BodyLabel.Body, Context));
       }
     }
 
@@ -920,24 +961,29 @@ private:
 
   clang::Stmt *renderWhile(const st::StructuredTree &Tree,
                            const st::StructuredNode &Node) {
+    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true};
     return clang::WhileStmt::Create(
-        Ctx, nullptr, conditionExpr(Node), renderCompound(Tree, Node.Body),
+        Ctx, nullptr, conditionExpr(Node),
+        renderCompound(Tree, Node.Body, BodyContext),
         clang::SourceLocation(), clang::SourceLocation(),
         clang::SourceLocation());
   }
 
   clang::Stmt *renderDoWhile(const st::StructuredTree &Tree,
                              const st::StructuredNode &Node) {
+    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true};
     return new (Ctx)
-        clang::DoStmt(renderCompound(Tree, Node.Body), conditionExpr(Node),
+        clang::DoStmt(renderCompound(Tree, Node.Body, BodyContext),
+                      conditionExpr(Node),
                       clang::SourceLocation(), clang::SourceLocation(),
                       clang::SourceLocation());
   }
 
   clang::Stmt *renderInfiniteLoop(const st::StructuredTree &Tree,
                                   const st::StructuredNode &Node) {
+    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true};
     return clang::WhileStmt::Create(
-        Ctx, nullptr, trueExpr(), renderCompound(Tree, Node.Body),
+        Ctx, nullptr, trueExpr(), renderCompound(Tree, Node.Body, BodyContext),
         clang::SourceLocation(), clang::SourceLocation(),
         clang::SourceLocation());
   }
