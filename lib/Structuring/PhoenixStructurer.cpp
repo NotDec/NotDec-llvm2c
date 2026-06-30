@@ -2134,10 +2134,14 @@ BlockId structuredLoopEntryBlock(const StructuredTree &Tree, NodeId Id) {
   if (Node == nullptr) {
     return InvalidBlockId;
   }
-  if (Node->Kind == StructuredNodeKind::DoWhile) {
-    return firstRenderedBlock(Tree, Node->Body);
+  if (Node->Kind == StructuredNodeKind::DoWhile ||
+      Node->Kind == StructuredNodeKind::InfiniteLoop) {
+    // These loops render the body before any loop-owned condition block.  The
+    // node Block is only a representative for an infinite loop.
+    BlockId BodyEntry = firstRenderedBlock(Tree, Node->Body);
+    return BodyEntry != InvalidBlockId ? BodyEntry : Node->Block;
   }
-  if (isStructuredLoopKind(Node->Kind)) {
+  if (Node->Kind == StructuredNodeKind::While) {
     return Node->Block;
   }
   if (Node->Kind == StructuredNodeKind::Sequence && !Node->Children.empty()) {

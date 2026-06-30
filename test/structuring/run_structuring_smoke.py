@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,7 @@ exit:
         "contains": ["while (1)", "switch (next())", "case 1:", "case 2:",
                      "case -1:", "a();", "b();", "continue;", "return 0;"],
         "absent": ["goto case1", "goto case2", "goto head"],
+        "regex_absent": [r"goto structured_block_[0-9]+;\s*while \(1\)"],
         "counts": {"switch (next())": 1},
         "ordered": [("case 1:", "a();"), ("a();", "case 2:"),
                     ("case 2:", "b();"), ("b();", "case -1:")],
@@ -1656,6 +1658,9 @@ def run_case(notdec_llvm2c: Path, work_dir: Path, case: dict) -> list[str]:
     for needle in case.get("absent", []):
         if needle in output:
             failures.append(f"{case['name']}: unexpected {needle!r}")
+    for pattern in case.get("regex_absent", []):
+        if re.search(pattern, output, re.MULTILINE):
+            failures.append(f"{case['name']}: unexpected pattern {pattern!r}")
     for needle, expected in case.get("counts", {}).items():
         actual = output.count(needle)
         if actual != expected:
