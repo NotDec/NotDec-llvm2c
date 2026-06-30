@@ -18,6 +18,13 @@ else ()
     )
 endif ()
 
+if (TARGET binarysub_lib)
+    target_link_libraries(notdec-backend-core
+        PUBLIC
+        binarysub_lib
+    )
+endif ()
+
 target_include_directories(notdec-backend-core
     PUBLIC
     ../../include
