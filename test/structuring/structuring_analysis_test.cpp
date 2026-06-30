@@ -199,6 +199,78 @@ StructuredNode makeGotoNode(BlockId Target) {
   return Node;
 }
 
+class UnreachableSiblingStructurer : public PhoenixStructurer {
+protected:
+  bool analyzeAcyclic(const StructuredCFG &Cfg, const RegionTree &Regions,
+                      const Region &R, MutableRegionGraph &Graph,
+                      StructuredTree &Tree,
+                      RegionOverlay *Overlay = nullptr) const override {
+    (void)Cfg;
+    (void)Regions;
+    (void)R;
+    (void)Overlay;
+
+    GraphNodeId From = Graph.getNodeForBlock(1);
+    GraphNodeId To = Graph.getNodeForBlock(2);
+    assert(From != InvalidGraphNodeId);
+    assert(To != InvalidGraphNodeId);
+
+    StructuredNode Existing;
+    Existing.Kind = StructuredNodeKind::Sequence;
+    Existing.Children.push_back(Tree.addNode(makeGotoNode(4)));
+    StructuredNode Unreachable;
+    Unreachable.Kind = StructuredNodeKind::BasicBlock;
+    Unreachable.Block = 20;
+    Existing.Children.push_back(Tree.addNode(std::move(Unreachable)));
+
+    Graph.setStructuredRoot(From, Tree.addNode(std::move(Existing)));
+    Graph.removeEdge(From, To);
+    return false;
+  }
+};
+
+class NestedSequenceFallthroughStructurer : public PhoenixStructurer {
+protected:
+  bool analyzeAcyclic(const StructuredCFG &Cfg, const RegionTree &Regions,
+                      const Region &R, MutableRegionGraph &Graph,
+                      StructuredTree &Tree,
+                      RegionOverlay *Overlay = nullptr) const override {
+    (void)Cfg;
+    (void)Regions;
+    (void)R;
+    (void)Overlay;
+
+    GraphNodeId From = Graph.getNodeForBlock(1);
+    GraphNodeId To = Graph.getNodeForBlock(3);
+    assert(From != InvalidGraphNodeId);
+    assert(To != InvalidGraphNodeId);
+
+    StructuredNode Source;
+    Source.Kind = StructuredNodeKind::Sequence;
+    StructuredNode SourceBody;
+    SourceBody.Kind = StructuredNodeKind::BasicBlock;
+    SourceBody.Block = 1;
+    Source.Children.push_back(Tree.addNode(std::move(SourceBody)));
+    Source.Children.push_back(Tree.addNode(makeGotoNode(3)));
+
+    StructuredNode Target;
+    Target.Kind = StructuredNodeKind::Sequence;
+    StructuredNode TargetLabel;
+    TargetLabel.Kind = StructuredNodeKind::Label;
+    TargetLabel.Block = 3;
+    Target.Children.push_back(Tree.addNode(std::move(TargetLabel)));
+    StructuredNode TargetBody;
+    TargetBody.Kind = StructuredNodeKind::BasicBlock;
+    TargetBody.Block = 3;
+    Target.Children.push_back(Tree.addNode(std::move(TargetBody)));
+
+    Graph.setStructuredRoot(From, Tree.addNode(std::move(Source)));
+    Graph.setStructuredRoot(To, Tree.addNode(std::move(Target)));
+    Graph.removeEdge(From, To);
+    return false;
+  }
+};
+
 unsigned treeKindCount(const StructuredTree &Tree, NodeId Id,
                        StructuredNodeKind Kind) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -14113,37 +14185,40 @@ void testPhoenixFallbackSkipsInternalCollapsedSuccessor() {
 
 void testPhoenixFallbackDropsUnreachableSiblingAfterGoto() {
   StructuredCFG Cfg;
-  Cfg.addBlock(block(0, {1}));
-  Cfg.addBlock(block(1, {3}));
-  Cfg.addBlock(block(2, {3}));
-  Cfg.addBlock(block(3, {}));
+  Cfg.addBlock(block(1, {2}));
+  Cfg.addBlock(block(2, {}));
+  Cfg.addBlock(block(4, {}));
 
   Region Root;
   Root.Kind = RegionKind::Root;
-  Root.Head = 0;
-  Root.Blocks = {0, 1, 2, 3};
+  Root.Head = 1;
+  Root.Blocks = {1, 2, 4};
 
-  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
   StructuredTree Tree;
-
-  StructuredNode Existing;
-  Existing.Kind = StructuredNodeKind::Sequence;
-  Existing.Children.push_back(Tree.addNode(makeGotoNode(3)));
-  StructuredNode Unreachable;
-  Unreachable.Kind = StructuredNodeKind::BasicBlock;
-  Unreachable.Block = 20;
-  Existing.Children.push_back(Tree.addNode(std::move(Unreachable)));
-
-  GraphNodeId Source = Graph.getNodeForBlock(1);
-  assert(Source != InvalidGraphNodeId);
-  Graph.setStructuredRoot(Source, Tree.addNode(std::move(Existing)));
-
-  TestPhoenixStructurer Structurer;
+  UnreachableSiblingStructurer Structurer;
   NodeId RootNode = Structurer.structureRegion(Cfg, Root, Tree);
   assert(RootNode != InvalidNodeId);
   assert(!treeContainsBlockKind(Tree, RootNode, StructuredNodeKind::BasicBlock,
                                 20));
-  assert(treeContainsGotoTarget(Tree, RootNode, 3));
+  assert(treeContainsGotoTarget(Tree, RootNode, 4));
+}
+
+void testPhoenixFallbackDropsGotoToNestedSequenceEntry() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(3, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 1;
+  Root.Blocks = {1, 3};
+
+  StructuredTree Tree;
+  NestedSequenceFallthroughStructurer Structurer;
+  NodeId RootNode = Structurer.structureRegion(Cfg, Root, Tree);
+  assert(RootNode != InvalidNodeId);
+  assert(!treeContainsGotoTarget(Tree, RootNode, 3));
+  assert(treeContainsBlockKind(Tree, RootNode, StructuredNodeKind::Label, 3));
 }
 
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
@@ -15482,6 +15557,7 @@ int main() {
   testPhoenixOverlayLastResortDetachesVirtualizedEdge();
   testPhoenixFallbackSkipsInternalCollapsedSuccessor();
   testPhoenixFallbackDropsUnreachableSiblingAfterGoto();
+  testPhoenixFallbackDropsGotoToNestedSequenceEntry();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();

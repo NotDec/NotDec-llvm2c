@@ -2164,6 +2164,10 @@ BlockId followingEntryBlock(const StructuredTree &Tree, NodeId Id) {
   if (Node != nullptr && Node->Kind == StructuredNodeKind::Label) {
     return Node->Block;
   }
+  if (Node != nullptr && Node->Kind == StructuredNodeKind::Sequence &&
+      !Node->Children.empty()) {
+    return followingEntryBlock(Tree, Node->Children.front());
+  }
   return structuredLoopEntryBlock(Tree, Id);
 }
 
