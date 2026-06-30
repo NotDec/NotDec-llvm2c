@@ -113,10 +113,6 @@
     {
       "name": "loop_two_returns",
       "source": "cases/010_loop_two_returns.c",
-      "xfail": true,
-      "xfail_exact": [
-        "unexpected pattern 'return [^;]+;"
-      ],
       "oracle": {
         "contains": ["while (", "return"],
         "min_counts": {"while": 1},
@@ -126,10 +122,6 @@
     {
       "name": "tail_early_return",
       "source": "cases/011_tail_early_return.c",
-      "xfail": true,
-      "xfail_exact": [
-        "unexpected pattern 'return [^;]+;"
-      ],
       "oracle": {
         "contains": ["while (", "return"],
         "min_counts": {"while": 1},

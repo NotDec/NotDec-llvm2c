@@ -128,6 +128,12 @@ bool foldTrailingContinueBreakIfToDoWhile(StructuredNode &LoopNode,
 bool isTerminalBlock(const StructuredCFG &Cfg, BlockId Target);
 bool allSuccessorsAreTerminal(const StructuredCFG &Cfg, const Region &R);
 
+BlockId graphNodeEntryBlock(const MutableRegionGraph &Graph, GraphNodeId Id) {
+  const MutableRegionNode *Node = Graph.getNode(Id);
+  return Node == nullptr || Node->Blocks.empty() ? InvalidBlockId
+                                                 : Node->Blocks.front();
+}
+
 void appendBlockLabel(BlockId Id, StructuredNode &Sequence,
                       StructuredTree &Tree) {
   StructuredNode Label;
@@ -843,6 +849,7 @@ bool reduceLinearWhileOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
     StructuredNode WhileNode;
     WhileNode.Kind = StructuredNodeKind::While;
     WhileNode.Block = Tail->Id;
+    WhileNode.BreakTarget = graphNodeEntryBlock(Graph, FollowId);
     WhileNode.Condition = Tail->Condition;
     WhileNode.ConditionNegated = NegateCondition;
     WhileNode.Body = buildSequenceNode(Cfg, BodyNodes, Tree);
@@ -909,6 +916,7 @@ bool reduceLinearWhileWithBreakOnce(const StructuredCFG &Cfg,
     StructuredNode WhileNode;
     WhileNode.Kind = StructuredNodeKind::While;
     WhileNode.Block = Tail->Id;
+    WhileNode.BreakTarget = graphNodeEntryBlock(Graph, FollowId);
     WhileNode.Condition = Tail->Condition;
     WhileNode.ConditionNegated = NegateCondition;
     WhileNode.Body =
@@ -1029,6 +1037,7 @@ bool reduceLinearDoWhileOnce(const StructuredCFG &Cfg,
     StructuredNode DoWhileNode;
     DoWhileNode.Kind = StructuredNodeKind::DoWhile;
     DoWhileNode.Block = Tail->Id;
+    DoWhileNode.BreakTarget = graphNodeEntryBlock(Graph, FollowId);
     DoWhileNode.Condition = Tail->Condition;
     DoWhileNode.ConditionNegated = NegateCondition;
     DoWhileNode.Body = buildSequenceNode(Cfg, BodyNodes, Tree);
@@ -1071,11 +1080,13 @@ bool reduceSelfLoopOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
         LoopNode.Kind = HeadControlled ? StructuredNodeKind::While
                                        : StructuredNodeKind::DoWhile;
         LoopNode.Condition = Tail->Condition;
+        LoopNode.BreakTarget = Tail->Successors[1];
       } else if (Tail->Successors[1] == Header->Blocks.front()) {
         LoopNode.Kind = HeadControlled ? StructuredNodeKind::While
                                        : StructuredNodeKind::DoWhile;
         LoopNode.Condition = Tail->Condition;
         LoopNode.ConditionNegated = true;
+        LoopNode.BreakTarget = Tail->Successors[0];
       } else {
         continue;
       }
@@ -3306,6 +3317,7 @@ bool makeGraphWhileLoop(const StructuredCFG &Cfg,
 
   LoopNode.Kind = StructuredNodeKind::While;
   LoopNode.Block = HeadBlock->Id;
+  LoopNode.BreakTarget = ExitBlock;
   LoopNode.Condition = HeadBlock->Condition;
   LoopNode.ConditionNegated = !TrueInLoop;
   LoopNode.Body = Tree.addNode(std::move(Body));
@@ -3360,6 +3372,7 @@ bool makeGraphDoWhileLoop(const StructuredCFG &Cfg,
 
   LoopNode.Kind = StructuredNodeKind::DoWhile;
   LoopNode.Block = LatchBlock->Id;
+  LoopNode.BreakTarget = ExitBlock;
   LoopNode.Condition = LatchBlock->Condition;
   LoopNode.ConditionNegated = !TrueIsHead;
   dropGotoIntoFollowingNode(Body, Tree);
@@ -3385,6 +3398,9 @@ StructuredNode makeGraphInfiniteLoop(const StructuredCFG &Cfg,
   StructuredNode LoopNode;
   LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
   LoopNode.Block = LoopRegion.Head;
+  if (LoopRegion.Successors.size() == 1) {
+    LoopNode.BreakTarget = LoopRegion.Successors.front();
+  }
   LoopNode.Body = Tree.addNode(std::move(Body));
   return LoopNode;
 }
@@ -3572,6 +3588,9 @@ bool reduceNaturalLoopFallbackOnce(const StructuredCFG &Cfg,
     StructuredNode LoopNode;
     LoopNode.Kind = StructuredNodeKind::InfiniteLoop;
     LoopNode.Block = Loop->Head;
+    if (Loop->Successors.size() == 1) {
+      LoopNode.BreakTarget = Loop->Successors.front();
+    }
     LoopNode.Body = Tree.addNode(std::move(Body));
     collapseNodesAndSyncOverlay(Graph, Overlay, Members, Loop->Head,
                                 Tree.addNode(std::move(LoopNode)),

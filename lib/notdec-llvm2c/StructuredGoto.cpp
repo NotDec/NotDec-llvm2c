@@ -162,12 +162,16 @@ class StructuredGotoAdapter {
   // statements. Keep this intentionally narrow: direct zero-argument calls only.
   std::map<clang::FunctionDecl *, st::PayloadRef> SimpleCallPayloads;
   std::set<st::BlockId> TargetedLabels;
+  // A targeted break can be rendered as an early return.  Remember the original
+  // terminal block so the later sequence walk does not print that return again.
+  std::set<st::BlockId> InlinedTerminalTargets;
 
   // Some cleanup rules can leave loop-control nodes outside real loops; this
   // tracks where break/continue can be emitted as C syntax.
   struct RenderContext {
     bool Breakable = false;
     bool Continuable = false;
+    st::BlockId BreakTarget = st::InvalidBlockId;
   };
 
 public:
@@ -551,7 +555,9 @@ private:
         Node->Target != st::InvalidBlockId) {
       TargetedLabels.insert(Node->Target);
     }
-    if (Node->Kind == st::StructuredNodeKind::Break && !Context.Breakable &&
+    if (Node->Kind == st::StructuredNodeKind::Break &&
+        !canRenderBreak(Context, Node->Target) &&
+        !canInlineTerminalTarget(Node->Target) &&
         Node->Target != st::InvalidBlockId) {
       TargetedLabels.insert(Node->Target);
     }
@@ -566,6 +572,9 @@ private:
         Node->Kind == st::StructuredNodeKind::InfiniteLoop) {
       ChildContext.Breakable = true;
       ChildContext.Continuable = true;
+      if (Node->BreakTarget != st::InvalidBlockId) {
+        ChildContext.BreakTarget = Node->BreakTarget;
+      }
     }
 
     for (st::NodeId Child : Node->Children) {
@@ -706,6 +715,10 @@ private:
       }
       break;
     case st::StructuredNodeKind::BasicBlock:
+      if (InlinedTerminalTargets.count(Node->Block) != 0 &&
+          TargetedLabels.count(Node->Block) == 0) {
+        break;
+      }
       for (st::PayloadRef Ref : Node->Statements) {
         Stmts.push_back(getPayload(Ref));
       }
@@ -733,8 +746,11 @@ private:
     case st::StructuredNodeKind::Unreachable:
       break;
     case st::StructuredNodeKind::Break:
-      if (!Context.Breakable && Node->Target != st::InvalidBlockId) {
-        Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
+      if (!canRenderBreak(Context, Node->Target) &&
+          Node->Target != st::InvalidBlockId) {
+        if (!renderTargetedTerminal(Node->Target, Stmts)) {
+          Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
+        }
       } else {
         Stmts.push_back(new (Ctx) clang::BreakStmt(clang::SourceLocation()));
       }
@@ -757,6 +773,38 @@ private:
       Stmts.push_back(renderInfiniteLoop(Tree, *Node));
       break;
     }
+  }
+
+  bool canRenderBreak(RenderContext Context, st::BlockId Target) const {
+    if (!Context.Breakable) {
+      return false;
+    }
+    return Target == st::InvalidBlockId ||
+           Context.BreakTarget == st::InvalidBlockId ||
+           Target == Context.BreakTarget;
+  }
+
+  bool canInlineTerminalTarget(st::BlockId Target) const {
+    const st::CFGBlock *Block = SharedCfg.getBlock(Target);
+    return Block != nullptr && Block->Terminator == st::TerminatorKind::Return;
+  }
+
+  bool renderTargetedTerminal(st::BlockId Target,
+                              std::vector<clang::Stmt *> &Stmts) {
+    if (!canInlineTerminalTarget(Target)) {
+      return false;
+    }
+
+    const st::CFGBlock *Block = SharedCfg.getBlock(Target);
+    const st::CFGBlock *BodyBlock = SharedCfg.getBodyBlock(Target);
+    if (BodyBlock == nullptr) {
+      BodyBlock = Block;
+    }
+    for (st::PayloadRef Ref : BodyBlock->Statements) {
+      Stmts.push_back(getPayload(Ref));
+    }
+    InlinedTerminalTargets.insert(Target);
+    return true;
   }
 
   clang::Stmt *renderCompound(const st::StructuredTree &Tree, st::NodeId Id,
@@ -961,7 +1009,8 @@ private:
 
   clang::Stmt *renderWhile(const st::StructuredTree &Tree,
                            const st::StructuredNode &Node) {
-    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true};
+    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true,
+                              Node.BreakTarget};
     return clang::WhileStmt::Create(
         Ctx, nullptr, conditionExpr(Node),
         renderCompound(Tree, Node.Body, BodyContext),
@@ -971,7 +1020,8 @@ private:
 
   clang::Stmt *renderDoWhile(const st::StructuredTree &Tree,
                              const st::StructuredNode &Node) {
-    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true};
+    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true,
+                              Node.BreakTarget};
     return new (Ctx)
         clang::DoStmt(renderCompound(Tree, Node.Body, BodyContext),
                       conditionExpr(Node),
@@ -981,7 +1031,8 @@ private:
 
   clang::Stmt *renderInfiniteLoop(const st::StructuredTree &Tree,
                                   const st::StructuredNode &Node) {
-    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true};
+    RenderContext BodyContext{/*Breakable=*/true, /*Continuable=*/true,
+                              Node.BreakTarget};
     return clang::WhileStmt::Create(
         Ctx, nullptr, trueExpr(), renderCompound(Tree, Node.Body, BodyContext),
         clang::SourceLocation(), clang::SourceLocation(),
