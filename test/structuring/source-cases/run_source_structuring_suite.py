@@ -118,6 +118,28 @@ def check_oracle(case_name: str, oracle: dict, output: str) -> list[str]:
     return failures
 
 
+def is_expected_xfail(case: dict, failures: list[str]) -> bool:
+    expected = case.get("xfail_exact")
+    if expected is not None:
+        return (
+            len(failures) == len(expected)
+            and all(
+                any(needle in failure for needle in expected)
+                for failure in failures
+            )
+            and all(
+                any(needle in failure for failure in failures)
+                for needle in expected
+            )
+        )
+
+    expected = case.get("xfail_contains", [])
+    return bool(failures) and bool(expected) and all(
+        any(needle in failure for needle in expected)
+        for failure in failures
+    )
+
+
 def run_process(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -196,11 +218,7 @@ def run_case(
             oracle = merge_oracle(oracle_defaults, case.get("oracle", {}))
             case_failures = check_oracle(label, oracle, output)
             if case.get("xfail"):
-                expected = case.get("xfail_contains", [])
-                if case_failures and expected and all(
-                    any(needle in failure for needle in expected)
-                    for failure in case_failures
-                ):
+                if is_expected_xfail(case, case_failures):
                     continue
                 if not case_failures:
                     failures.append(
