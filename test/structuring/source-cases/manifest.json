@@ -10,7 +10,8 @@
       "goto structured_block_[0-9]+;\\n\\s*if \\(",
       "^    break;$",
       "^    continue;$",
-      "return [^;]+;\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do)"
+      "return [^;]+;\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do)",
+      "continue;\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do|goto)"
     ]
   },
   "cases": [
@@ -134,7 +135,8 @@
       "xfail": true,
       "xfail_exact": [
         "expected goto<=0",
-        "expected while<=1"
+        "expected while<=1",
+        "unexpected pattern 'continue;"
       ],
       "oracle": {
         "contains": ["switch (", "case 0:", "case 1:", "sink(", "return"],
