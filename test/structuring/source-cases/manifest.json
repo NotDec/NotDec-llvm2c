@@ -28,7 +28,7 @@
       "oracle": {
         "contains": ["while (", "break;", "continue;", "sink("],
         "min_counts": {"break": 1, "continue": 1},
-        "max_counts": {"goto": 1}
+        "max_counts": {"goto": 0}
       }
     },
     {
@@ -89,8 +89,6 @@
     {
       "name": "guarded_loop_skip",
       "source": "cases/008_guarded_loop_skip.c",
-      "xfail": true,
-      "xfail_contains": ["expected goto<=0"],
       "oracle": {
         "contains": ["while (", "sink(", "return"],
         "min_counts": {"while": 1},

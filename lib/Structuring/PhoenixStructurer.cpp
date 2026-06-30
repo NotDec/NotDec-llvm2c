@@ -2529,6 +2529,72 @@ bool foldGuardedTerminalIntoSequence(StructuredTree &Tree, NodeId SequenceId) {
   return false;
 }
 
+// Fold a preheader guard that only skips the immediately following loop:
+// "prefix; if (skip) goto after; loop; after:" becomes
+// "prefix; if (!skip) { loop; } after:".
+bool foldGuardedLoopSkipIntoSequence(StructuredTree &Tree, NodeId SequenceId) {
+  const StructuredNode *OldSequence = Tree.getNode(SequenceId);
+  if (OldSequence == nullptr ||
+      OldSequence->Kind != StructuredNodeKind::Sequence ||
+      OldSequence->Children.size() < 3) {
+    return false;
+  }
+  const std::vector<NodeId> OldChildren = OldSequence->Children;
+
+  for (unsigned PrefixIndex = 0; PrefixIndex + 2 < OldChildren.size();
+       ++PrefixIndex) {
+    const StructuredNode *Prefix = Tree.getNode(OldChildren[PrefixIndex]);
+    if (Prefix == nullptr || Prefix->Kind != StructuredNodeKind::Sequence ||
+        Prefix->Children.size() < 2) {
+      continue;
+    }
+
+    const StructuredNode *IfNode = Tree.getNode(Prefix->Children.back());
+    if (IfNode == nullptr || IfNode->Kind != StructuredNodeKind::If ||
+        !IfNode->Children.empty() || IfNode->Then == InvalidNodeId ||
+        IfNode->Else != InvalidNodeId) {
+      continue;
+    }
+
+    BlockId SkipTarget = InvalidBlockId;
+    if (!gotoTargetDeep(Tree, IfNode->Then, SkipTarget)) {
+      continue;
+    }
+
+    unsigned LoopIndex = PrefixIndex + 1;
+    if (!startsWithStructuredLoop(Tree, OldChildren[LoopIndex])) {
+      continue;
+    }
+
+    unsigned FollowIndex = LoopIndex + 1;
+    if (followingEntryBlock(Tree, OldChildren[FollowIndex]) != SkipTarget) {
+      continue;
+    }
+
+    StructuredNode FoldedIf = *IfNode;
+    StructuredNode FoldedPrefix = *Prefix;
+    FoldedIf.ConditionNegated = !FoldedIf.ConditionNegated;
+    FoldedIf.Then =
+        buildSequenceFromRange(Tree, OldChildren, LoopIndex, FollowIndex);
+    NodeId FoldedIfId = Tree.addNode(std::move(FoldedIf));
+
+    FoldedPrefix.Children.back() = FoldedIfId;
+    NodeId FoldedPrefixId = Tree.addNode(std::move(FoldedPrefix));
+
+    std::vector<NodeId> NewChildren;
+    NewChildren.insert(NewChildren.end(), OldChildren.begin(),
+                       OldChildren.begin() + PrefixIndex);
+    NewChildren.push_back(FoldedPrefixId);
+    NewChildren.insert(NewChildren.end(), OldChildren.begin() + FollowIndex,
+                       OldChildren.end());
+
+    StructuredNode &Sequence = Tree.nodes()[SequenceId];
+    Sequence.Children = std::move(NewChildren);
+    return true;
+  }
+  return false;
+}
+
 NodeId buildSequenceFromRange(StructuredTree &Tree,
                               const std::vector<NodeId> &Children,
                               unsigned Begin, unsigned End) {
@@ -2689,6 +2755,7 @@ void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
   dropUnreachableAfterRenderedTransfer(NodeCopy, Tree);
   Tree.nodes()[Id] = std::move(NodeCopy);
   while (foldGuardedTerminalIntoSequence(Tree, Id) ||
+         foldGuardedLoopSkipIntoSequence(Tree, Id) ||
          foldGotoDiamond(Cfg, Tree, Id)) {
     StructuredNode Updated = Tree.nodes()[Id];
     dropGotoIntoFollowingNode(Updated, Tree);
