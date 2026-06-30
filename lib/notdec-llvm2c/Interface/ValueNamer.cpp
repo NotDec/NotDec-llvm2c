@@ -1,6 +1,7 @@
 #include "notdec-llvm2c/Interface/ValueNamer.h"
 #include <iostream>
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/IR/Value.h>
 
 namespace notdec {
 
@@ -29,5 +30,17 @@ const char *ValueNamer::StackPrefix = "stack_";
 const char *ValueNamer::AllocaPrefix = "alloca_";
 const char *ValueNamer::LoadPrefix = "load_";
 const char *ValueNamer::StorePrefix = "store_";
+
+std::string ValueNamer::getNewName(Value &Val, const char *prefix,
+                                   bool Unique) {
+  auto Id = getId();
+  if (!Val.hasName()) {
+    Val.setName(prefix + std::to_string(Id));
+    return prefix + std::to_string(Id);
+  } else if (Unique) {
+    return prefix + std::to_string(Id) + "_" + Val.getName().str();
+  }
+  return Val.getName().str();
+}
 
 } // namespace notdec

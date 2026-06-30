@@ -12,10 +12,11 @@
 #include <variant>
 #include <vector>
 
-#include <llvm/ADT/StringRef.h>
-#include <llvm/IR/Module.h>
-
 #include "notdec-llvm2c/Interface/Range.h"
+
+namespace llvm {
+class Module;
+}
 
 namespace notdec::retypd {
 struct CGNode;

@@ -1,7 +1,10 @@
 #include "notdec-llvm2c/Interface/HType.h"
 #include "Interface/StructManager.h"
+#include <algorithm>
 #include <cassert>
-#include <llvm/Support/Casting.h>
+#include <ostream>
+#include <sstream>
+#include <string_view>
 
 namespace notdec::ast {
 
@@ -23,15 +26,15 @@ std::string formatIntegerTypeName(const IntegerType *Type) {
 void collectSetTerms(const HType *Type, HType::HTypeKind Kind,
                      std::vector<const HType *> &Terms) {
   if (Kind == HType::TK_SetUnion) {
-    if (auto *UT = llvm::dyn_cast<SetUnionType>(Type)) {
-      auto SetTerms = UT->getTypes();
+    if (auto *UT = Type->getAs<SetUnionType>()) {
+      const auto &SetTerms = UT->getTypes();
       Terms.insert(Terms.end(), SetTerms.begin(), SetTerms.end());
       return;
     }
   } else {
     assert(Kind == HType::TK_SetInter);
-    if (auto *IT = llvm::dyn_cast<SetInterType>(Type)) {
-      auto SetTerms = IT->getTypes();
+    if (auto *IT = Type->getAs<SetInterType>()) {
+      const auto &SetTerms = IT->getTypes();
       Terms.insert(Terms.end(), SetTerms.begin(), SetTerms.end());
       return;
     }
@@ -41,7 +44,7 @@ void collectSetTerms(const HType *Type, HType::HTypeKind Kind,
 
 template <typename RenderFn>
 std::string renderSetType(const HType *Type, HType::HTypeKind Kind,
-                          int ParentPrecedence, llvm::StringRef Separator,
+                          int ParentPrecedence, std::string_view Separator,
                           bool SortTerms, RenderFn &&Render) {
   std::vector<const HType *> Terms;
   collectSetTerms(Type, Kind, Terms);
@@ -64,7 +67,7 @@ std::string renderSetType(const HType *Type, HType::HTypeKind Kind,
   }
   for (size_t I = 0; I < Parts.size(); ++I) {
     if (I > 0) {
-      Result += Separator.str();
+      Result += Separator;
     }
     Result += Parts[I];
   }
@@ -74,7 +77,7 @@ std::string renderSetType(const HType *Type, HType::HTypeKind Kind,
   return Result;
 }
 
-void appendCommentIfPresent(llvm::raw_ostream &OS, llvm::StringRef Comment) {
+void appendCommentIfPresent(std::ostream &OS, std::string_view Comment) {
   if (Comment.empty()) {
     return;
   }
@@ -94,13 +97,13 @@ std::string getRecursiveBinderDisplayName(const RecursiveBinder *Binder) {
 // HTypeContext HTypeContext::Instance;
 
 SimpleRange getRange(const TypedDecl *Decl) {
-  if (auto *RD = llvm::dyn_cast<RecordDecl>(Decl)) {
+  if (auto *RD = Decl->getAs<RecordDecl>()) {
     return RD->getRange();
   }
-  if (auto *UD = llvm::dyn_cast<UnionDecl>(Decl)) {
+  if (auto *UD = Decl->getAs<UnionDecl>()) {
     return UD->getRange();
   }
-  if (llvm::isa<TypedefDecl>(Decl)) {
+  if (Decl->getAs<TypedefDecl>() != nullptr) {
     assert(false && "Cannot get range for typedef type");
   }
   assert(false && "Unknown Decl type");
@@ -122,7 +125,7 @@ bool HType::isVoidPtrType() const {
 
 bool HType::isCharArrayType() const {
   if (isArrayType()) {
-    if (llvm::cast<ArrayType>(this)->getElementType()->isCharType()) {
+    if (getAs<ArrayType>()->getElementType()->isCharType()) {
       return true;
     }
   }
@@ -130,8 +133,7 @@ bool HType::isCharArrayType() const {
 }
 
 bool HType::isCharType() const {
-  return getKind() == TK_Integer &&
-         llvm::cast<IntegerType>(this)->getBitSize() == 8;
+  return getKind() == TK_Integer && getAs<IntegerType>()->getBitSize() == 8;
 }
 
 TypedefDecl *TypedefDecl::Create(HTypeContext &Ctx, const std::string &Name,
@@ -158,12 +160,12 @@ UnionDecl *UnionDecl::Create(HTypeContext &Ctx, const std::string &Name) {
 
 HType *HType::getPointeeType() const {
   assert(getKind() == TK_Pointer);
-  return llvm::cast<PointerType>(this)->getPointeeType();
+  return getAs<PointerType>()->getPointeeType();
 }
 
 HType *HType::getArrayElementType() const {
   assert(getKind() == TK_Array);
-  return llvm::cast<ArrayType>(this)->getElementType();
+  return getAs<ArrayType>()->getElementType();
 }
 
 TypedDecl *HType::getAsRecordOrUnionDecl() const {
@@ -176,21 +178,21 @@ TypedDecl *HType::getAsRecordOrUnionDecl() const {
 }
 
 RecordDecl *HType::getAsRecordDecl() const {
-  if (auto *RT = llvm::dyn_cast<RecordType>(this)) {
+  if (auto *RT = getAs<RecordType>()) {
     return RT->getDecl();
   }
   return nullptr;
 }
 
 UnionDecl *HType::getAsUnionDecl() const {
-  if (auto *UT = llvm::dyn_cast<UnionType>(this)) {
+  if (auto *UT = getAs<UnionType>()) {
     return UT->getDecl();
   }
   return nullptr;
 }
 
 TypedefDecl *HType::getAsTypedefDecl() const {
-  if (auto *TT = llvm::dyn_cast<TypedefType>(this)) {
+  if (auto *TT = getAs<TypedefType>()) {
     return TT->getDecl();
   }
   return nullptr;
@@ -201,31 +203,30 @@ std::string HType::getAsString() const { return getAsString(0); }
 std::string HType::getAsString(int Precedence) const {
   switch (getKind()) {
   case TK_Top:
-    return "top:" + std::to_string(llvm::cast<TopType>(this)->getBitSize());
+    return "top:" + std::to_string(getAs<TopType>()->getBitSize());
   case TK_Bottom:
-    return "bottom:" +
-           std::to_string(llvm::cast<BottomType>(this)->getBitSize());
+    return "bottom:" + std::to_string(getAs<BottomType>()->getBitSize());
   case TK_Integer:
-    return formatIntegerTypeName(llvm::cast<IntegerType>(this));
+    return formatIntegerTypeName(getAs<IntegerType>());
   case TK_Float:
-    return "f" + std::to_string(llvm::cast<FloatingType>(this)->getBitSize());
+    return "f" + std::to_string(getAs<FloatingType>()->getBitSize());
   case TK_Pointer:
     return (getPointeeType() == nullptr ? "void"
                                         : getPointeeType()->getAsString(
                                               kAtomicPrecedence)) +
            "*";
   case TK_Record:
-    return "struct " + llvm::cast<RecordType>(this)->getDecl()->getName();
+    return "struct " + getAs<RecordType>()->getDecl()->getName();
   case TK_Union:
-    return "union " + llvm::cast<UnionType>(this)->getDecl()->getName();
+    return "union " + getAs<UnionType>()->getDecl()->getName();
   case TK_Array: {
-    auto *AT = llvm::cast<ArrayType>(this);
+    auto *AT = getAs<ArrayType>();
     bool hasSize = AT->getNumElements().has_value();
     return AT->getElementType()->getAsString(kAtomicPrecedence) + "[" +
            (!hasSize ? "" : std::to_string(*AT->getNumElements())) + "]";
   }
   case TK_Function: {
-    auto *FT = llvm::cast<FunctionType>(this);
+    auto *FT = getAs<FunctionType>();
     bool NeedParens = Precedence > kFunctionPrecedence;
     std::string Result;
     if (NeedParens) {
@@ -259,7 +260,7 @@ std::string HType::getAsString(int Precedence) const {
     return Result;
   }
   case TK_DualPointer: {
-    auto *DPT = llvm::cast<DualPointerType>(this);
+    auto *DPT = getAs<DualPointerType>();
     std::string Result = "ptr<load=";
     Result += (DPT->getLoadType() == nullptr ? "void"
                                              : DPT->getLoadType()->getAsString());
@@ -287,9 +288,9 @@ std::string HType::getAsString(int Precedence) const {
                          });
   }
   case TK_Typedef:
-    return llvm::cast<TypedefType>(this)->getDecl()->getName();
+    return getAs<TypedefType>()->getDecl()->getName();
   case TK_TypeVariable: {
-    auto *TV = llvm::cast<TypeVariableType>(this);
+    auto *TV = getAs<TypeVariableType>();
     auto SizeBits = TV->getSizeBits();
     if (!SizeBits.has_value()) {
       return TV->getName();
@@ -298,30 +299,30 @@ std::string HType::getAsString(int Precedence) const {
   }
   case TK_RecursiveBinding:
     return "struct " + getRecursiveBinderDisplayName(
-                            llvm::cast<RecursiveBindingType>(this)->getBinder());
+                            getAs<RecursiveBindingType>()->getBinder());
   case TK_RecursiveRef:
     return "struct " + getRecursiveBinderDisplayName(
-                            llvm::cast<RecursiveRefType>(this)->getBinder());
+                            getAs<RecursiveRefType>()->getBinder());
   default:
     assert(false && "Unknown HType");
   }
 }
 
-void TypedDecl::print(llvm::raw_ostream &OS) const {
+void TypedDecl::print(std::ostream &OS) const {
   switch (getKind()) {
   case DK_Record:
-    llvm::cast<RecordDecl>(this)->print(OS);
+    getAs<RecordDecl>()->print(OS);
     break;
   case DK_Union:
-    llvm::cast<UnionDecl>(this)->print(OS);
+    getAs<UnionDecl>()->print(OS);
     break;
   case DK_Typedef:
-    llvm::cast<TypedefDecl>(this)->print(OS);
+    getAs<TypedefDecl>()->print(OS);
     break;
   }
 }
 
-void RecordDecl::print(llvm::raw_ostream &OS) const {
+void RecordDecl::print(std::ostream &OS) const {
   OS << "struct " << getName() << " {\n";
   for (auto &Field : Fields) {
     OS << "  " << Field.Type->getAsString() << " " << Field.Name << ";";
@@ -333,7 +334,7 @@ void RecordDecl::print(llvm::raw_ostream &OS) const {
   OS << "\n";
 }
 
-void UnionDecl::print(llvm::raw_ostream &OS) const {
+void UnionDecl::print(std::ostream &OS) const {
   OS << "union " << getName() << " {\n";
   for (auto &Field : Members) {
     OS << "  " << Field.Type->getAsString() << " " << Field.Name << ";";
@@ -345,7 +346,7 @@ void UnionDecl::print(llvm::raw_ostream &OS) const {
   OS << "\n";
 }
 
-void TypedefDecl::print(llvm::raw_ostream &OS) const {
+void TypedefDecl::print(std::ostream &OS) const {
   OS << "typedef " << Type->getAsString() << " " << getName() << ";";
   appendCommentIfPresent(OS, getComment());
   OS << "\n";
@@ -413,7 +414,7 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
   case HType::TK_TypeVariable:
     return;
   case HType::TK_RecursiveBinding: {
-    auto *Binder = llvm::cast<RecursiveBindingType>(Type)->getBinder();
+    auto *Binder = Type->getAs<RecursiveBindingType>()->getBinder();
     if (auto *Anchor = Binder->getAnchorDecl()) {
       collectDecl(*Anchor);
       return;
@@ -422,7 +423,7 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
     return;
   }
   case HType::TK_RecursiveRef: {
-    auto *Binder = llvm::cast<RecursiveRefType>(Type)->getBinder();
+    auto *Binder = Type->getAs<RecursiveRefType>()->getBinder();
     if (auto *Anchor = Binder->getAnchorDecl()) {
       collectDecl(*Anchor);
       return;
@@ -433,16 +434,16 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
     collectType(Type->getPointeeType());
     return;
   case HType::TK_Record:
-    collectDecl(*llvm::cast<RecordType>(Type)->getDecl());
+    collectDecl(*Type->getAs<RecordType>()->getDecl());
     return;
   case HType::TK_Union:
-    collectDecl(*llvm::cast<UnionType>(Type)->getDecl());
+    collectDecl(*Type->getAs<UnionType>()->getDecl());
     return;
   case HType::TK_Array:
     collectType(Type->getArrayElementType());
     return;
   case HType::TK_Function: {
-    auto *FT = llvm::cast<FunctionType>(Type);
+    auto *FT = Type->getAs<FunctionType>();
     for (auto *Ret : FT->getReturnType()) {
       collectType(Ret);
     }
@@ -452,27 +453,27 @@ void HTypeSnapshotFormatter::collectType(const HType *Type) {
     return;
   }
   case HType::TK_DualPointer: {
-    auto *DPT = llvm::cast<DualPointerType>(Type);
+    auto *DPT = Type->getAs<DualPointerType>();
     collectType(DPT->getLoadType());
     collectType(DPT->getStoreType());
     return;
   }
   case HType::TK_SetUnion: {
-    auto *UT = llvm::cast<SetUnionType>(Type);
+    auto *UT = Type->getAs<SetUnionType>();
     for (auto *Term : UT->getTypes()) {
       collectType(Term);
     }
     return;
   }
   case HType::TK_SetInter: {
-    auto *IT = llvm::cast<SetInterType>(Type);
+    auto *IT = Type->getAs<SetInterType>();
     for (auto *Term : IT->getTypes()) {
       collectType(Term);
     }
     return;
   }
   case HType::TK_Typedef:
-    collectDecl(*llvm::cast<TypedefType>(Type)->getDecl());
+    collectDecl(*Type->getAs<TypedefType>()->getDecl());
     return;
   }
 }
@@ -483,19 +484,19 @@ void HTypeSnapshotFormatter::collectDecl(const TypedDecl &Decl) {
     return;
   }
 
-  if (auto *RD = llvm::dyn_cast<RecordDecl>(&Decl)) {
+  if (auto *RD = Decl.getAs<RecordDecl>()) {
     for (const auto &Field : RD->getFields()) {
       collectType(Field.Type);
     }
     return;
   }
-  if (auto *UD = llvm::dyn_cast<UnionDecl>(&Decl)) {
+  if (auto *UD = Decl.getAs<UnionDecl>()) {
     for (const auto &Field : UD->getMembers()) {
       collectType(Field.Type);
     }
     return;
   }
-  if (auto *TD = llvm::dyn_cast<TypedefDecl>(&Decl)) {
+  if (auto *TD = Decl.getAs<TypedefDecl>()) {
     collectType(TD->getType());
     return;
   }
@@ -517,31 +518,31 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
   case HType::TK_Simple:
     assert(false && "Unexpected abstract simple type");
   case HType::TK_Top:
-    return "top:" + std::to_string(llvm::cast<TopType>(Type)->getBitSize());
+    return "top:" + std::to_string(Type->getAs<TopType>()->getBitSize());
   case HType::TK_Bottom:
     return "bottom:" +
-           std::to_string(llvm::cast<BottomType>(Type)->getBitSize());
+           std::to_string(Type->getAs<BottomType>()->getBitSize());
   case HType::TK_Integer:
-    return formatIntegerTypeName(llvm::cast<IntegerType>(Type));
+    return formatIntegerTypeName(Type->getAs<IntegerType>());
   case HType::TK_Float:
-    return "f" + std::to_string(llvm::cast<FloatingType>(Type)->getBitSize());
+    return "f" + std::to_string(Type->getAs<FloatingType>()->getBitSize());
   case HType::TK_Pointer:
     return (Type->getPointeeType() == nullptr
                 ? "void"
                 : formatType(Type->getPointeeType(), kAtomicPrecedence)) +
            "*";
   case HType::TK_Record:
-    return getDeclName(*llvm::cast<RecordType>(Type)->getDecl());
+    return getDeclName(*Type->getAs<RecordType>()->getDecl());
   case HType::TK_Union:
-    return getDeclName(*llvm::cast<UnionType>(Type)->getDecl());
+    return getDeclName(*Type->getAs<UnionType>()->getDecl());
   case HType::TK_Array: {
-    auto *AT = llvm::cast<ArrayType>(Type);
+    auto *AT = Type->getAs<ArrayType>();
     bool HasSize = AT->getNumElements().has_value();
     return formatType(AT->getElementType(), kAtomicPrecedence) + "[" +
            (HasSize ? std::to_string(*AT->getNumElements()) : "") + "]";
   }
   case HType::TK_Function: {
-    auto *FT = llvm::cast<FunctionType>(Type);
+    auto *FT = Type->getAs<FunctionType>();
     bool NeedParens = Precedence > kFunctionPrecedence;
     std::string Result;
     if (NeedParens) {
@@ -577,7 +578,7 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
     return Result;
   }
   case HType::TK_DualPointer: {
-    auto *DPT = llvm::cast<DualPointerType>(Type);
+    auto *DPT = Type->getAs<DualPointerType>();
     std::string Result = "ptr<load=";
     Result += DPT->getLoadType() == nullptr ? "void"
                                             : formatType(DPT->getLoadType());
@@ -600,9 +601,9 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
                          });
   }
   case HType::TK_Typedef:
-    return getDeclName(*llvm::cast<TypedefType>(Type)->getDecl());
+    return getDeclName(*Type->getAs<TypedefType>()->getDecl());
   case HType::TK_TypeVariable: {
-    auto *TV = llvm::cast<TypeVariableType>(Type);
+    auto *TV = Type->getAs<TypeVariableType>();
     auto SizeBits = TV->getSizeBits();
     if (!SizeBits.has_value()) {
       return TV->getName();
@@ -610,14 +611,14 @@ std::string HTypeSnapshotFormatter::formatType(const HType *Type,
     return TV->getName() + ":" + std::to_string(*SizeBits);
   }
   case HType::TK_RecursiveBinding: {
-    auto *Binder = llvm::cast<RecursiveBindingType>(Type)->getBinder();
+    auto *Binder = Type->getAs<RecursiveBindingType>()->getBinder();
     if (auto *Anchor = Binder->getAnchorDecl()) {
       return getDeclName(*Anchor);
     }
     return Binder->getName();
   }
   case HType::TK_RecursiveRef: {
-    auto *Binder = llvm::cast<RecursiveRefType>(Type)->getBinder();
+    auto *Binder = Type->getAs<RecursiveRefType>()->getBinder();
     if (auto *Anchor = Binder->getAnchorDecl()) {
       return getDeclName(*Anchor);
     }
@@ -631,9 +632,9 @@ std::string HTypeSnapshotFormatter::formatDecl(const TypedDecl &Decl) {
   collectDecl(Decl);
 
   std::string Result;
-  llvm::raw_string_ostream OS(Result);
+  std::ostringstream OS;
 
-  if (auto *RD = llvm::dyn_cast<RecordDecl>(&Decl)) {
+  if (auto *RD = Decl.getAs<RecordDecl>()) {
     OS << "struct " << getDeclName(*RD) << " {\n";
     unsigned FieldIndex = 0;
     unsigned PaddingIndex = 0;
@@ -651,11 +652,10 @@ std::string HTypeSnapshotFormatter::formatDecl(const TypedDecl &Decl) {
     OS << "};";
     appendCommentIfPresent(OS, RD->getComment());
     OS << "\n";
-    OS.flush();
-    return Result;
+    return OS.str();
   }
 
-  if (auto *UD = llvm::dyn_cast<UnionDecl>(&Decl)) {
+  if (auto *UD = Decl.getAs<UnionDecl>()) {
     struct CanonicalUnionMember {
       std::string TypeText;
       std::string Comment;
@@ -698,17 +698,16 @@ std::string HTypeSnapshotFormatter::formatDecl(const TypedDecl &Decl) {
     OS << "};";
     appendCommentIfPresent(OS, UD->getComment());
     OS << "\n";
-    OS.flush();
-    return Result;
+    return OS.str();
   }
 
-  auto *TD = llvm::cast<TypedefDecl>(&Decl);
+  auto *TD = Decl.getAs<TypedefDecl>();
+  assert(TD != nullptr && "unknown decl kind");
   OS << "typedef " << formatType(TD->getType()) << " " << getDeclName(*TD)
      << ";";
   appendCommentIfPresent(OS, TD->getComment());
   OS << "\n";
-  OS.flush();
-  return Result;
+  return OS.str();
 }
 
 std::vector<const TypedDecl *> HTypeSnapshotFormatter::getOrderedDecls() {
@@ -733,84 +732,5 @@ const FieldDecl *RecordDecl::getFieldAt(OffsetTy Offset) const {
   }
   return Target;
 }
-
-// void RecordDecl::addPaddings() {
-// TODO
-
-// for (size_t i = 0; i < Fields.size(); i++) {
-
-//   // add padding, expand array accordingly
-//   FieldEntry *Next = nullptr;
-//   if (i + 1 < Info.Fields.size()) {
-//     Next = &Info.Fields[i + 1];
-//   }
-
-//   // expand the array size to fill up the padding
-//   auto ArraySize = Ent.R.Size;
-//   // expand the array size to fill up the padding
-//   // set to Ent.R.Size later if this is really an array.
-//   if (Next != nullptr && Ent.R.Start + Ent.R.Size < Next->R.Start) {
-//     ArraySize = Next->R.Start - Ent.R.Start;
-//   }
-
-//   auto Count = ArraySize / Ent.R.Start.access.at(0).Size;
-//   // create array type
-//   Ty = Ctx.getConstantArrayType(
-//       Ty, llvm::APInt(32, Count), nullptr,
-//       Count == 0 ? clang::ArrayType::Star : clang::ArrayType::Normal, 0);
-
-//   // set to Ent.R.Size if this is really an array.
-//   if (Ty->isArrayType()) {
-//     Ent.R.Size = ArraySize;
-//   }
-
-//   // if prev is array
-//   if (Prev != nullptr && Prev->Decl != nullptr &&
-//       Prev->Decl->getType()->isArrayType()) {
-//     auto ElemTy = Prev->Decl->getType()->getArrayElementTypeNoTypeQual();
-//     // if current ty is char
-//     if (ElemTy == Ty.getTypePtr() && Ty->isCharType()) {
-//       if (Prev->R.Start + Prev->R.Size == Ent.R.Start) {
-//         // merge to prev
-//         Prev->R.Size += Ent.R.Size;
-//         // Update array Size
-//         Prev->Decl->setType(Ctx.getConstantArrayType(
-//             Ty, llvm::APInt(32, Prev->R.Size),
-//             clang::IntegerLiteral::Create(Ctx, llvm::APInt(32,
-//             Prev->R.Size),
-//                                           Ctx.IntTy,
-//                                           clang::SourceLocation()),
-//             clang::ArrayType::Normal, 0));
-//         Info.Fields.erase(Info.Fields.begin() + i);
-//         i--;
-//         continue;
-//       }
-//       // merge to prev
-//     }
-//   }
-
-//   // add padding?
-//   auto End = Ent.R.Start + Ent.R.Size;
-//   if (Next != nullptr && End < Next->R.Start) {
-//     auto PaddingSize = Next->R.Start - End;
-//     if (PaddingSize != 0) {
-//       Ty = Ctx.getConstantArrayType(
-//           Ctx.CharTy, llvm::APInt(32, PaddingSize),
-//           clang::IntegerLiteral::Create(Ctx, llvm::APInt(32, PaddingSize),
-//                                         Ctx.IntTy,
-//                                         clang::SourceLocation()),
-//           clang::ArrayType::Normal, 0);
-
-//       auto *FII = &Ctx.Idents.get(ValueNamer::getName("padding_"));
-//       clang::FieldDecl *Field = clang::FieldDecl::Create(
-//           Ctx, Decl, clang::SourceLocation(), clang::SourceLocation(), FII,
-//           Ty, nullptr, nullptr, false, clang::ICIS_CopyInit);
-
-//       Parent.DeclComments[Field] = "at offset: " + std::to_string(End);
-//       Decl->addDecl(Field);
-//     }
-//   }
-// }
-// }
 
 } // namespace notdec::ast

@@ -37,6 +37,7 @@ struct HTypeResult {
   ast::RecordDecl *MemoryDecl = nullptr;
   HType *StorageType = nullptr;
   ast::RecordDecl *StorageDecl = nullptr;
+  bool PrintEmptyStorageSection = false;
 
   HTypeResult() = default;
   HTypeResult(HTypeResult &&Other) = default;
@@ -125,13 +126,20 @@ struct HTypeResult {
     printDeclSection(OS, Formatter);
     printValueSection(OS, "types", Formatter);
     printMemorySection(OS, Formatter);
-    printStorageSection(OS, Formatter);
+    if (hasStorageSection()) {
+      printStorageSection(OS, Formatter);
+    }
   }
   void dump() const { print(llvm::errs()); }
 
 private:
   static std::string formatValueKey(const ExtValuePtr &Value) {
     return toStableString(Value);
+  }
+
+  bool hasStorageSection() const {
+    return PrintEmptyStorageSection || StorageDecl != nullptr ||
+           StorageType != nullptr;
   }
 
   std::string formatValuePosition(const ExtValuePtr &Value) const {

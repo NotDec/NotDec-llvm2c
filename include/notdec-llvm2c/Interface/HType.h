@@ -4,9 +4,11 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <set>
 #include <string>
 #include <tuple>
@@ -14,16 +16,8 @@
 #include <variant>
 #include <vector>
 
-#include <llvm/ADT/ArrayRef.h>
-#include <llvm/Support/Casting.h>
-#include <llvm/Support/raw_ostream.h>
-
 #include "Range.h"
 #include "notdec-llvm2c/Interface/StructManager.h"
-
-namespace clang {
-class Decl;
-}
 
 namespace notdec::ast {
 
@@ -57,25 +51,25 @@ public:
   const std::string &getName() const { return Name; }
   const std::string &getComment() const { return Comment; }
   void setComment(const std::string &Comment) { this->Comment = Comment; }
-  clang::Decl *getASTDecl() const { return ASTDecl; }
-  void setASTDecl(clang::Decl *D) {
+  void *getASTDecl() const { return ASTDecl; }
+  void setASTDecl(void *D) {
     assert(D != nullptr && "setASTDecl: nullptr?");
     ASTDecl = D;
   }
 
   template <typename T> T *getAs() const {
-    if (auto *T1 = llvm::dyn_cast<T>(this)) {
-      return const_cast<T *>(T1);
+    if (T::classof(this)) {
+      return const_cast<T *>(static_cast<const T *>(this));
     }
     return nullptr;
   }
-  void print(llvm::raw_ostream &OS) const;
+  void print(std::ostream &OS) const;
 
 private:
   TypedDeclKind Kind;
   std::string Name;
   std::string Comment;
-  clang::Decl *ASTDecl = nullptr;
+  void *ASTDecl = nullptr;
 };
 
 class FieldDecl {
@@ -88,9 +82,9 @@ public:
   std::string Name;
   std::string Comment;
   bool isPadding = false;
-  clang::Decl *ASTDecl = nullptr;
+  void *ASTDecl = nullptr;
 
-  void setASTDecl(clang::Decl *D) const {
+  void setASTDecl(void *D) const {
     assert(D != nullptr && "setASTDecl: nullptr?");
     const_cast<FieldDecl *>(this)->ASTDecl = D;
   }
@@ -109,7 +103,7 @@ public:
   std::vector<FieldDecl> &getFields() { return Fields; }
   const std::vector<FieldDecl> &getFields() const { return Fields; }
   const ast::FieldDecl *getFieldAt(OffsetTy Off) const;
-  void print(llvm::raw_ostream &OS) const;
+  void print(std::ostream &OS) const;
   void setBytesManager(std::shared_ptr<BytesManager> Bytes) {
     assert(this->Bytes == nullptr && "BytesManager already exists");
     this->Bytes = Bytes;
@@ -193,7 +187,7 @@ public:
   std::vector<FieldDecl> &getMembers() { return Members; }
   const std::vector<FieldDecl> &getMembers() const { return Members; }
   void addMember(FieldDecl Field) { Members.push_back(Field); }
-  void print(llvm::raw_ostream &OS) const;
+  void print(std::ostream &OS) const;
 
   static UnionDecl *Create(HTypeContext &Ctx, const std::string &Name);
 
@@ -227,7 +221,7 @@ public:
     assert(NewType != nullptr && "Typedef type cannot be null");
     Type = NewType;
   }
-  void print(llvm::raw_ostream &OS) const;
+  void print(std::ostream &OS) const;
 
   static TypedefDecl *Create(HTypeContext &Ctx, const std::string &Name,
                              HType *Type);
@@ -339,8 +333,8 @@ public:
   UnionDecl *getAsUnionDecl() const;
   TypedefDecl *getAsTypedefDecl() const;
   template <typename T> T *getAs() const {
-    if (auto *T1 = llvm::dyn_cast<T>(this)) {
-      return const_cast<T *>(T1);
+    if (T::classof(this)) {
+      return const_cast<T *>(static_cast<const T *>(this));
     }
     return nullptr;
   }
@@ -483,7 +477,7 @@ class SetUnionType : public HType {
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_SetUnion; }
 
-  llvm::ArrayRef<HType *> getTypes() const { return Types; }
+  const std::vector<HType *> &getTypes() const { return Types; }
 };
 
 class SetInterType : public HType {
@@ -497,7 +491,7 @@ class SetInterType : public HType {
 public:
   static bool classof(const HType *T) { return T->getKind() == TK_SetInter; }
 
-  llvm::ArrayRef<HType *> getTypes() const { return Types; }
+  const std::vector<HType *> &getTypes() const { return Types; }
 };
 
 class RecordType : public HType {
@@ -838,8 +832,8 @@ public:
     std::vector<HType *> FlatTypes;
     FlatTypes.reserve(Types.size());
     for (auto *Type : Types) {
-      if (auto *Set = llvm::dyn_cast<SetUnionType>(Type)) {
-        auto Terms = Set->getTypes();
+      if (auto *Set = Type->getAs<SetUnionType>()) {
+        const auto &Terms = Set->getTypes();
         FlatTypes.insert(FlatTypes.end(), Terms.begin(), Terms.end());
         continue;
       }
@@ -876,8 +870,8 @@ public:
     std::vector<HType *> FlatTypes;
     FlatTypes.reserve(Types.size());
     for (auto *Type : Types) {
-      if (auto *Set = llvm::dyn_cast<SetInterType>(Type)) {
-        auto Terms = Set->getTypes();
+      if (auto *Set = Type->getAs<SetInterType>()) {
+        const auto &Terms = Set->getTypes();
         FlatTypes.insert(FlatTypes.end(), Terms.begin(), Terms.end());
         continue;
       }
@@ -951,7 +945,7 @@ public:
     return Entry.get();
   }
 
-  void printDecls(llvm::raw_ostream &OS) {
+  void printDecls(std::ostream &OS) {
     for (auto &Ent : Decls) {
       Ent.second->print(OS);
       OS << "\n";

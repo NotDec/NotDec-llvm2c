@@ -51,7 +51,9 @@ class ClangTypeResult {
   bool HasAnalyzedByValueCycles = false;
   clang::ClassTemplateDecl *DualPointerTemplateDecl = nullptr;
 
-  clang::Decl *getDecl(ast::TypedDecl *Decl) { return Decl->getASTDecl(); }
+  clang::Decl *getDecl(ast::TypedDecl *Decl) {
+    return static_cast<clang::Decl *>(Decl->getASTDecl());
+  }
   clang::QualType convertType(HType *T);
   clang::ClassTemplateDecl *getOrCreateDualPointerTemplateDecl();
   clang::QualType convertDualPointerTemplateType(const ast::DualPointerType *T);

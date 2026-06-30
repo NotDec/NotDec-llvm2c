@@ -40,6 +40,10 @@ std::string sanitizeSingleLine(llvm::StringRef Text);
 std::string formatIRTypeForValue(const ExtValuePtr &Val);
 bool canLowerToClangType(const HType *Ty);
 
+template <typename T> T *getClangDecl(void *Ptr) {
+  return llvm::cast<T>(static_cast<clang::Decl *>(Ptr));
+}
+
 } // namespace
 
 clang::QualType removeArrayType(clang::ASTContext &Ctx, clang::QualType Ty) {
@@ -945,7 +949,7 @@ void ClangTypeResult::defineDecls() {
     }
     Visited.insert(Decl);
 
-    auto OldDecl = Decl->getASTDecl();
+    auto *OldDecl = static_cast<clang::Decl *>(Decl->getASTDecl());
     assert(OldDecl != nullptr && "Decl not declared?");
     clang::Decl *ASTDecl = nullptr;
     if (auto *RD = llvm::dyn_cast<ast::RecordDecl>(Decl)) {
@@ -1169,7 +1173,7 @@ ClangTypeResult::decodeInitializer(std::variant<QualType, ValueDecl *> DeclOrTy,
       auto &FS = ASTDecl->getFields();
       for (size_t i = 0; i < FS.size(); i++) {
         auto &Field = FS[i];
-        auto VD = llvm::cast<clang::ValueDecl>(Field.ASTDecl);
+        auto *VD = getClangDecl<clang::ValueDecl>(Field.ASTDecl);
         llvm::SmallVector<DesignatedInitExpr::Designator> Designators;
         llvm::SmallVector<clang::Expr *> IndexExprs;
         Designators.push_back(
@@ -1318,7 +1322,7 @@ void ClangTypeResult::createMemoryDecls() {
       // handle initializer later, may depend on undeclared global.
       for (size_t i = 0; i < FS.size(); i++) {
         auto &Field = FS[i];
-        auto VD = llvm::cast<clang::VarDecl>(Field.ASTDecl);
+        auto *VD = getClangDecl<clang::VarDecl>(Field.ASTDecl);
         if (MDecl->getBytesManager()) {
           auto EndRange = std::numeric_limits<int64_t>::max();
           if (i + 1 < FS.size()) {
@@ -1334,7 +1338,7 @@ void ClangTypeResult::createMemoryDecls() {
       DeclarationCounterVisitor DCV;
       for (size_t i = 0; i < FS.size(); i++) {
         auto &Field = FS[i];
-        auto VD = llvm::cast<clang::VarDecl>(Field.ASTDecl);
+        auto *VD = getClangDecl<clang::VarDecl>(Field.ASTDecl);
         if (VD->hasInit()) {
           DCV.TraverseDecl(VD);
         }
@@ -1495,7 +1499,7 @@ std::vector<clang::Expr *> ClangTypeResult::tryAddZero(clang::Expr *Val) {
         auto ASTDecl = DeclMap.at(Decl)->getAs<ast::RecordDecl>();
         const ast::FieldDecl *Target = ASTDecl->getFieldAt(0);
         if (Target != nullptr) {
-          auto FD = llvm::cast<clang::FieldDecl>(Target->ASTDecl);
+          auto *FD = getClangDecl<clang::FieldDecl>(Target->ASTDecl);
           assert(FD != nullptr && "Field not declared?");
           auto *ME = createMemberExpr(Ctx, StructVal, FD);
           auto R = addrOf(Ctx, ME);
@@ -1697,7 +1701,7 @@ clang::Expr *ClangTypeResult::tryHandlePtrAdd(clang::Expr *Base,
           return nullptr;
         }
         assert(Target->ASTDecl != nullptr && "Field not declared?");
-        auto FD = llvm::cast<clang::FieldDecl>(Target->ASTDecl);
+        auto *FD = getClangDecl<clang::FieldDecl>(Target->ASTDecl);
 
         auto *ME = createMemberExpr(Ctx, DerefBase, FD);
 
@@ -1817,7 +1821,7 @@ clang::Expr *ClangTypeResult::getGlobal(int64_t Offset) {
     }
     if (Target != nullptr) {
       auto RemainingOffset = Offset - Target->R.Start;
-      auto Var = llvm::cast<clang::VarDecl>(Target->ASTDecl);
+      auto *Var = getClangDecl<clang::VarDecl>(Target->ASTDecl);
       if (RemainingOffset == 0) {
         return addrOf(Ctx, makeDeclRefExpr(Var));
       } else {

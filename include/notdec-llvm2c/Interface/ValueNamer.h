@@ -2,11 +2,13 @@
 #define _NOTDEC_INTERFACE_VALUENAMER_H_
 
 #include <cstddef>
+#include <iostream>
 #include <set>
 #include <string>
 
-#include <llvm/ADT/Twine.h>
-#include <llvm/IR/Value.h>
+namespace llvm {
+class Value;
+}
 
 namespace notdec {
 
@@ -16,7 +18,7 @@ extern std::set<size_t> TraceIds;
 void loadTraceStr(const char *Traces);
 
 #define PRINT_TRACE(ID)                                                        \
-  llvm::errs() << "TraceID=" << ID << " " << __FUNCTION__ << ": "
+  std::cerr << "TraceID=" << ID << " " << __FUNCTION__ << ": "
 
 struct ValueNamer {
 protected:
@@ -27,16 +29,7 @@ public:
   size_t getNewId() { return ID++; }
   std::string getNewName(Value &Val,
                          const char *prefix = ValueNamer::DefaultPrefix,
-                         bool Unique = false) {
-    auto Id = getId();
-    if (!Val.hasName()) {
-      Val.setName(prefix + std::to_string(Id));
-      return prefix + std::to_string(Id);
-    } else if (Unique) {
-      return prefix + std::to_string(Id) + "_" + Val.getName().str();
-    }
-    return Val.getName().str();
-  }
+                         bool Unique = false);
   std::string getNewName(const char *prefix = ValueNamer::DefaultPrefix) {
     return prefix + std::to_string(getId());
   }

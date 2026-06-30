@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Module.h>
 #include <llvm/Support/JSON.h>
 #include <memory>
 #include <string>
