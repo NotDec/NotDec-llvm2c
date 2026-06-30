@@ -48,6 +48,8 @@ void dropGotoIntoFollowingNode(StructuredNode &Node,
 void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
                             NodeId Id);
 bool gotoTargetDeep(const StructuredTree &Tree, NodeId Id, BlockId &Target);
+bool endsWithUnconditionalRenderedTransfer(const StructuredTree &Tree,
+                                           NodeId Id);
 NodeId dropIfGotoToFollowingBranch(StructuredTree &Tree, NodeId IfId,
                                    BlockId NextEntry);
 void collectGotoTargets(const StructuredTree &Tree, NodeId Id,
@@ -462,17 +464,28 @@ NodeId buildSwitchCaseBody(const StructuredCFG &Cfg,
                            StructuredTree &Tree) {
   StructuredNode Body;
   Body.Kind = StructuredNodeKind::Sequence;
+  bool NeedsBreak = true;
   if (CaseNode != nullptr) {
     if (CaseNode->StructuredRoot != InvalidNodeId) {
       Body.Children.push_back(CaseNode->StructuredRoot);
+      NeedsBreak =
+          !endsWithUnconditionalRenderedTransfer(Tree, CaseNode->StructuredRoot);
     } else {
       for (BlockId Block : CaseNode->Blocks) {
         appendBlockLabel(Block, Body, Tree);
         appendBlockBody(Cfg, Block, Body, Tree);
       }
+      const CFGBlock *Tail = Cfg.getBlock(CaseNode->TailBlock);
+      NeedsBreak = Tail == nullptr ||
+                   (Tail->Terminator != TerminatorKind::Return &&
+                    Tail->Terminator != TerminatorKind::Unreachable);
     }
   }
-  Body.Children.push_back(Tree.addNode(makeBreak()));
+  // A switch case normally needs an explicit C break. Terminal case bodies
+  // already leave the function, so appending break would render dead code.
+  if (NeedsBreak) {
+    Body.Children.push_back(Tree.addNode(makeBreak()));
+  }
   return Tree.addNode(std::move(Body));
 }
 
