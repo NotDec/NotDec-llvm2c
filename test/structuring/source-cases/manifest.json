@@ -11,7 +11,8 @@
       "^    break;$",
       "^    continue;$",
       "return [^;]+;\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do)",
-      "continue;\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do|goto)"
+      "continue;\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do|goto)",
+      "if \\([^\\n]+\\) \\{\\n\\s*break;\\n\\s*\\} else \\{\\n\\s*continue;\\n\\s*\\}\\n\\s*(?!\\}|//)(?:[A-Za-z_]|while|if|switch|do|goto)"
     ]
   },
   "cases": [
@@ -81,7 +82,8 @@
       "source": "cases/007_nested_loop_break_continue.c",
       "xfail": true,
       "xfail_exact": [
-        "expected goto<=0"
+        "expected goto<=0",
+        "unexpected pattern 'if \\\\("
       ],
       "oracle": {
         "contains": ["while (", "break;", "continue;", "sink("],
