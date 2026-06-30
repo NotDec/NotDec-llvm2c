@@ -6,6 +6,8 @@
 #include <set>
 #include <string>
 
+#include "binarysub/FreshName.h"
+
 namespace llvm {
 class Value;
 }
@@ -23,10 +25,9 @@ void loadTraceStr(const char *Traces);
 struct ValueNamer {
 protected:
   static ValueNamer Instance;
-  size_t ID = 1;
 
 public:
-  size_t getNewId() { return ID++; }
+  size_t getNewId() { return FreshName::getId(); }
   std::string getNewName(Value &Val,
                          const char *prefix = ValueNamer::DefaultPrefix,
                          bool Unique = false);
