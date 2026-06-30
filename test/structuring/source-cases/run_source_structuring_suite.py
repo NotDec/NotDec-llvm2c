@@ -195,6 +195,19 @@ def run_case(
             output = output_path.read_text()
             oracle = merge_oracle(oracle_defaults, case.get("oracle", {}))
             case_failures = check_oracle(label, oracle, output)
+            if case.get("xfail"):
+                expected = case.get("xfail_contains", [])
+                if case_failures and expected and all(
+                    any(needle in failure for needle in expected)
+                    for failure in case_failures
+                ):
+                    continue
+                if not case_failures:
+                    failures.append(
+                        f"{label}: unexpected pass for xfail case\n"
+                        f"output={output_path}"
+                    )
+                    continue
             for failure in case_failures:
                 failures.append(
                     f"{failure}\noutput={output_path}\n"
