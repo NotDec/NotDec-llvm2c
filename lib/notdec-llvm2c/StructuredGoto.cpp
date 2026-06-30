@@ -552,6 +552,7 @@ private:
       return;
     }
     if (Node->Kind == st::StructuredNodeKind::Goto &&
+        !canInlineTerminalTarget(Node->Target) &&
         Node->Target != st::InvalidBlockId) {
       TargetedLabels.insert(Node->Target);
     }
@@ -740,7 +741,9 @@ private:
       }
       break;
     case st::StructuredNodeKind::Goto:
-      Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
+      if (!renderTargetedTerminal(Node->Target, Stmts)) {
+        Stmts.push_back(SA.makeGotoStmt(getOrCreateLabel(Node->Target)));
+      }
       break;
     case st::StructuredNodeKind::Return:
     case st::StructuredNodeKind::Unreachable:

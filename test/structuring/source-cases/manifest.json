@@ -100,9 +100,7 @@
       "source": "cases/009_loop_switch_latch.c",
       "xfail": true,
       "xfail_exact": [
-        "unexpected pattern 'return [^;]+;",
-        "expected while<=1",
-        "expected goto<=0"
+        "expected while<=1"
       ],
       "oracle": {
         "contains": ["switch (", "case 0:", "case 1:", "return"],
