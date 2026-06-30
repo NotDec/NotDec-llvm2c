@@ -1449,6 +1449,18 @@ NodeId buildVirtualizedBranchSource(const CFGBlock &Tail,
   }
 
   BlockId KeptTarget = RemovedTrue ? Tail.Successors[1] : Tail.Successors[0];
+  VirtualEdgeKind RenderKind =
+      Edge.Kind == VirtualEdgeKind::Goto
+          ? classifyNaturalLoopExit(Cfg, R, Edge.ToBlock)
+          : Edge.Kind;
+
+  if (Source.StructuredRoot != InvalidNodeId) {
+    NodeId Rewritten = rewriteStructuredSourceTargetTransfer(
+        Tree, Source.StructuredRoot, Edge.ToBlock, RenderKind);
+    if (Rewritten != InvalidNodeId) {
+      return Rewritten;
+    }
+  }
 
   StructuredNode Sequence;
   Sequence.Kind = StructuredNodeKind::Sequence;
@@ -1459,10 +1471,7 @@ NodeId buildVirtualizedBranchSource(const CFGBlock &Tail,
   IfNode.Block = Tail.Id;
   IfNode.Condition = Tail.Condition;
   IfNode.ConditionNegated = RemovedFalse;
-  IfNode.Then = Tree.addNode(makeControlTransfer(
-      Edge.ToBlock, Edge.Kind == VirtualEdgeKind::Goto
-                        ? classifyNaturalLoopExit(Cfg, R, Edge.ToBlock)
-                        : Edge.Kind));
+  IfNode.Then = Tree.addNode(makeControlTransfer(Edge.ToBlock, RenderKind));
   Sequence.Children.push_back(Tree.addNode(std::move(IfNode)));
   Sequence.Children.push_back(Tree.addNode(makeControlTransfer(
       KeptTarget, classifyNaturalLoopExit(Cfg, R, KeptTarget))));
@@ -2158,6 +2167,77 @@ BlockId followingEntryBlock(const StructuredTree &Tree, NodeId Id) {
   return structuredLoopEntryBlock(Tree, Id);
 }
 
+bool isUnconditionalRenderedTransfer(const StructuredNode &Node) {
+  return Node.Kind == StructuredNodeKind::Goto ||
+         Node.Kind == StructuredNodeKind::Break ||
+         Node.Kind == StructuredNodeKind::Continue;
+}
+
+bool endsWithUnconditionalRenderedTransfer(const StructuredTree &Tree,
+                                           NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if (isUnconditionalRenderedTransfer(*Node)) {
+    return true;
+  }
+  return Node->Kind == StructuredNodeKind::Sequence &&
+         !Node->Children.empty() &&
+         endsWithUnconditionalRenderedTransfer(Tree, Node->Children.back());
+}
+
+bool containsEnterableNode(const StructuredTree &Tree, NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if (Node->Kind == StructuredNodeKind::Label ||
+      isStructuredLoopKind(Node->Kind)) {
+    return true;
+  }
+  for (NodeId Child : Node->Children) {
+    if (containsEnterableNode(Tree, Child)) {
+      return true;
+    }
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    if (containsEnterableNode(Tree, Case.Body)) {
+      return true;
+    }
+  }
+  return containsEnterableNode(Tree, Node->Then) ||
+         containsEnterableNode(Tree, Node->Else) ||
+         containsEnterableNode(Tree, Node->Body) ||
+         containsEnterableNode(Tree, Node->Default);
+}
+
+void dropUnreachableAfterRenderedTransfer(StructuredNode &Node,
+                                          StructuredTree &Tree) {
+  if (Node.Kind != StructuredNodeKind::Sequence || Node.Children.size() < 2) {
+    return;
+  }
+
+  // This only removes straight-line siblings that cannot be entered by a
+  // rendered label or loop entry; it is not a general CFG reachability pass.
+  std::vector<NodeId> Filtered;
+  Filtered.reserve(Node.Children.size());
+  bool AfterTransfer = false;
+  for (NodeId Child : Node.Children) {
+    if (AfterTransfer && followingEntryBlock(Tree, Child) == InvalidBlockId &&
+        !containsEnterableNode(Tree, Child)) {
+      continue;
+    }
+
+    AfterTransfer = false;
+    Filtered.push_back(Child);
+    if (endsWithUnconditionalRenderedTransfer(Tree, Child)) {
+      AfterTransfer = true;
+    }
+  }
+  Node.Children = std::move(Filtered);
+}
+
 void dropGotoIntoFollowingNode(StructuredNode &Node, StructuredTree &Tree) {
   if (Node.Kind != StructuredNodeKind::Sequence || Node.Children.size() < 2) {
     return;
@@ -2385,9 +2465,11 @@ void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
   Tree.nodes()[Id] = std::move(NodeCopy);
   StructuredNode &Node = Tree.nodes()[Id];
   dropGotoIntoFollowingNode(Node, Tree);
+  dropUnreachableAfterRenderedTransfer(Node, Tree);
   while (foldGotoDiamond(Cfg, Tree, Id)) {
     StructuredNode &Updated = Tree.nodes()[Id];
     dropGotoIntoFollowingNode(Updated, Tree);
+    dropUnreachableAfterRenderedTransfer(Updated, Tree);
   }
 }
 

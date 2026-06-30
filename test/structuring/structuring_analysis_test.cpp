@@ -192,6 +192,59 @@ bool treeContainsGotoTarget(const StructuredTree &Tree, NodeId Id,
          treeContainsGotoTarget(Tree, Node->Default, Target);
 }
 
+StructuredNode makeGotoNode(BlockId Target) {
+  StructuredNode Node;
+  Node.Kind = StructuredNodeKind::Goto;
+  Node.Target = Target;
+  return Node;
+}
+
+unsigned treeKindCount(const StructuredTree &Tree, NodeId Id,
+                       StructuredNodeKind Kind) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return 0;
+  }
+
+  unsigned Count = Node->Kind == Kind ? 1 : 0;
+  for (NodeId Child : Node->Children) {
+    Count += treeKindCount(Tree, Child, Kind);
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    Count += treeKindCount(Tree, Case.Body, Kind);
+  }
+  Count += treeKindCount(Tree, Node->Then, Kind);
+  Count += treeKindCount(Tree, Node->Else, Kind);
+  Count += treeKindCount(Tree, Node->Body, Kind);
+  Count += treeKindCount(Tree, Node->Default, Kind);
+  return Count;
+}
+
+bool treeContainsBlockKind(const StructuredTree &Tree, NodeId Id,
+                           StructuredNodeKind Kind, BlockId Block) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return false;
+  }
+  if (Node->Kind == Kind && Node->Block == Block) {
+    return true;
+  }
+  for (NodeId Child : Node->Children) {
+    if (treeContainsBlockKind(Tree, Child, Kind, Block)) {
+      return true;
+    }
+  }
+  for (const StructuredSwitchCase &Case : Node->StructuredCases) {
+    if (treeContainsBlockKind(Tree, Case.Body, Kind, Block)) {
+      return true;
+    }
+  }
+  return treeContainsBlockKind(Tree, Node->Then, Kind, Block) ||
+         treeContainsBlockKind(Tree, Node->Else, Kind, Block) ||
+         treeContainsBlockKind(Tree, Node->Body, Kind, Block) ||
+         treeContainsBlockKind(Tree, Node->Default, Kind, Block);
+}
+
 bool treeStartsWithLoopAtBlock(const StructuredTree &Tree, NodeId Id,
                                BlockId Block) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -1047,6 +1100,49 @@ void testOverlayVirtualizationReplacesSourceNode() {
       }) != Edges.end();
   assert(HasKeptEdge);
   assert(!HasRemovedEdge);
+}
+
+void testBranchVirtualizationRewritesExistingSourceRoot() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(branchBlock(0, {1, 2}));
+  Cfg.addBlock(block(1, {}));
+  Cfg.addBlock(block(2, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+
+  StructuredNode OriginalIf;
+  OriginalIf.Kind = StructuredNodeKind::If;
+  OriginalIf.Block = 0;
+  OriginalIf.Then = Tree.addNode(makeGotoNode(2));
+  StructuredNode Original;
+  Original.Kind = StructuredNodeKind::Sequence;
+  Original.Children.push_back(Tree.addNode(std::move(OriginalIf)));
+  Original.Children.push_back(Tree.addNode(makeGotoNode(1)));
+  NodeId OriginalRoot = Tree.addNode(std::move(Original));
+
+  GraphNodeId From = Graph.getNodeForBlock(0);
+  GraphNodeId To = Graph.getNodeForBlock(2);
+  assert(From != InvalidGraphNodeId);
+  assert(To != InvalidGraphNodeId);
+  Graph.setStructuredRoot(From, OriginalRoot);
+
+  HintStructurer Structurer(From, To);
+  assert(Structurer.virtualizeOneEdge(Cfg, Root, Graph, Tree));
+
+  const MutableRegionNode *Source = Graph.getNode(From);
+  assert(Source != nullptr);
+  assert(Source->StructuredRoot != InvalidNodeId);
+  assert(Source->StructuredRoot != OriginalRoot);
+  assert(treeKindCount(Tree, Source->StructuredRoot,
+                       StructuredNodeKind::If) == 1);
+  assert(treeContainsGotoTarget(Tree, Source->StructuredRoot, 1));
+  assert(treeContainsGotoTarget(Tree, Source->StructuredRoot, 2));
 }
 
 void testSwitchVirtualizationInstallsSourceRoot() {
@@ -14015,6 +14111,41 @@ void testPhoenixFallbackSkipsInternalCollapsedSuccessor() {
   assert(!treeContainsGotoBeforeLoop(Tree, Tree.root(), 4, 5));
 }
 
+void testPhoenixFallbackDropsUnreachableSiblingAfterGoto() {
+  StructuredCFG Cfg;
+  Cfg.addBlock(block(0, {1}));
+  Cfg.addBlock(block(1, {3}));
+  Cfg.addBlock(block(2, {3}));
+  Cfg.addBlock(block(3, {}));
+
+  Region Root;
+  Root.Kind = RegionKind::Root;
+  Root.Head = 0;
+  Root.Blocks = {0, 1, 2, 3};
+
+  MutableRegionGraph Graph = MutableRegionGraph::build(Cfg, Root);
+  StructuredTree Tree;
+
+  StructuredNode Existing;
+  Existing.Kind = StructuredNodeKind::Sequence;
+  Existing.Children.push_back(Tree.addNode(makeGotoNode(3)));
+  StructuredNode Unreachable;
+  Unreachable.Kind = StructuredNodeKind::BasicBlock;
+  Unreachable.Block = 20;
+  Existing.Children.push_back(Tree.addNode(std::move(Unreachable)));
+
+  GraphNodeId Source = Graph.getNodeForBlock(1);
+  assert(Source != InvalidGraphNodeId);
+  Graph.setStructuredRoot(Source, Tree.addNode(std::move(Existing)));
+
+  TestPhoenixStructurer Structurer;
+  NodeId RootNode = Structurer.structureRegion(Cfg, Root, Tree);
+  assert(RootNode != InvalidNodeId);
+  assert(!treeContainsBlockKind(Tree, RootNode, StructuredNodeKind::BasicBlock,
+                                20));
+  assert(treeContainsGotoTarget(Tree, RootNode, 3));
+}
+
 void testOverlayBlockMemberMutationsUpdateOwnersAndViews() {
   StructuredCFG Cfg;
   Cfg.addBlock(block(0, {}));
@@ -15073,6 +15204,7 @@ int main() {
   testMutableRegionGraphCheckpointRestoresMutations();
   testEdgeVirtualizationHints();
   testOverlayVirtualizationReplacesSourceNode();
+  testBranchVirtualizationRewritesExistingSourceRoot();
   testSwitchVirtualizationInstallsSourceRoot();
   testFallthroughVirtualizationInstallsSourceRoot();
   testStructurerRegistryNames();
@@ -15349,6 +15481,7 @@ int main() {
   testPhoenixOverlayPathSyncsRepeatedReducerCollapses();
   testPhoenixOverlayLastResortDetachesVirtualizedEdge();
   testPhoenixFallbackSkipsInternalCollapsedSuccessor();
+  testPhoenixFallbackDropsUnreachableSiblingAfterGoto();
   testOverlayBlockMemberMutationsUpdateOwnersAndViews();
   testChildOverlayGraphKeepsExternalFollowPlaceholder();
   testFinalizedChildSnapshotAddsParentVisibleSuccessor();
