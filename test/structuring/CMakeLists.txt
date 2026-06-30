@@ -23,6 +23,12 @@ add_test(NAME sailr-bench2-migration
           --notdec-llvm2c $<TARGET_FILE:notdec-llvm2c-exe>
 )
 
+add_test(NAME structuring-source-cases
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_LIST_DIR}/source-cases/run_source_structuring_suite.py
+          --notdec-llvm2c $<TARGET_FILE:notdec-llvm2c-exe>
+)
+
 add_executable(structuring-analysis-test
   structuring_analysis_test.cpp
 )

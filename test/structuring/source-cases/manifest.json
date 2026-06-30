@@ -1,0 +1,68 @@
+{
+  "algorithms": ["structured-sailr"],
+  "opts": ["O2"],
+  "clang_args": ["-Wno-implicit-function-declaration"],
+  "notdec_args": [],
+  "oracle": {
+    "regex_absent": [
+      "goto structured_block_([0-9]+);\\n\\s*structured_block_\\1:",
+      "goto structured_block_[0-9]+;\\n\\s*while \\(1\\)",
+      "goto structured_block_[0-9]+;\\n\\s*if \\("
+    ]
+  },
+  "cases": [
+    {
+      "name": "diamond_if_else",
+      "source": "cases/001_diamond_if_else.c",
+      "oracle": {
+        "contains": ["if (", "left_path();", "right_path();", "sink("],
+        "max_counts": {"goto": 0}
+      }
+    },
+    {
+      "name": "loop_break_continue",
+      "source": "cases/002_loop_break_continue.c",
+      "oracle": {
+        "contains": ["while (", "break;", "continue;", "sink("],
+        "min_counts": {"break": 1, "continue": 1},
+        "max_counts": {"goto": 3}
+      }
+    },
+    {
+      "name": "switch_cluster",
+      "source": "cases/003_switch_cluster.c",
+      "oracle": {
+        "contains": [
+          "switch (",
+          "case 1:",
+          "case 2:",
+          "case 7:",
+          "default:",
+          "one_path();",
+          "two_path();",
+          "seven_path();",
+          "default_path();"
+        ],
+        "max_counts": {"goto": 4},
+        "min_counts": {"switch": 1}
+      }
+    },
+    {
+      "name": "tail_merge_return",
+      "source": "cases/004_tail_merge_return.c",
+      "oracle": {
+        "contains": ["return"],
+        "max_counts": {"goto": 0}
+      }
+    },
+    {
+      "name": "nested_loop_switch",
+      "source": "cases/005_nested_loop_switch.c",
+      "oracle": {
+        "contains": ["while (", "switch (", "case 0:", "case 1:", "break;", "continue;"],
+        "max_counts": {"goto": 4},
+        "min_counts": {"switch": 1}
+      }
+    }
+  ]
+}
