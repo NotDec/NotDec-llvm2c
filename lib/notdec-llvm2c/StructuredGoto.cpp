@@ -56,6 +56,9 @@ struct SwitchBodyLabel {
   // label here; new labels are chained after it, and the body is attached last.
   clang::SwitchCase *LastLabel = nullptr;
   st::NodeId Body = st::InvalidNodeId;
+  // Original CFG target for this label chain; used to inline a case-local
+  // fallthrough body only when a structured continue points exactly there.
+  st::BlockId Target = st::InvalidBlockId;
 };
 
 class DeclRefRewriter : public StmtTransform<DeclRefRewriter> {
@@ -794,6 +797,56 @@ private:
     return Block != nullptr && Block->Terminator == st::TerminatorKind::Return;
   }
 
+  static st::BlockId singleContinueTarget(const st::StructuredTree &Tree,
+                                          st::NodeId Id) {
+    const st::StructuredNode *Node = Tree.getNode(Id);
+    if (Node == nullptr) {
+      return st::InvalidBlockId;
+    }
+    if (Node->Kind == st::StructuredNodeKind::Continue) {
+      return Node->Target;
+    }
+    if (Node->Kind != st::StructuredNodeKind::Sequence ||
+        Node->Children.size() != 1) {
+      return st::InvalidBlockId;
+    }
+    return singleContinueTarget(Tree, Node->Children.front());
+  }
+
+  clang::Stmt *renderSwitchFallthroughCaseTarget(st::BlockId Target) {
+    const st::CFGBlock *Block = SharedCfg.getBlock(Target);
+    if (Block == nullptr || Block->Terminator != st::TerminatorKind::Fallthrough ||
+        Block->Successors.size() != 1 || Block->Statements.empty() ||
+        SharedCfg.predecessorsOf(Target).size() != 1) {
+      return nullptr;
+    }
+
+    // The shared latch is rendered immediately after the switch. A C switch
+    // break preserves that fallthrough without turning the case into a goto.
+    std::vector<clang::Stmt *> Stmts;
+    for (st::PayloadRef Ref : Block->Statements) {
+      Stmts.push_back(getPayload(Ref));
+    }
+    Stmts.push_back(new (Ctx) clang::BreakStmt(clang::SourceLocation()));
+    return clang::CompoundStmt::Create(Ctx, Stmts, clang::FPOptionsOverride(),
+                                       clang::SourceLocation(),
+                                       clang::SourceLocation());
+  }
+
+  clang::Stmt *renderSwitchCaseBody(const st::StructuredTree &Tree,
+                                    const SwitchBodyLabel &BodyLabel,
+                                    RenderContext Context) {
+    st::BlockId ContinueTarget = singleContinueTarget(Tree, BodyLabel.Body);
+    if (ContinueTarget != st::InvalidBlockId &&
+        ContinueTarget == BodyLabel.Target) {
+      if (clang::Stmt *Inline =
+              renderSwitchFallthroughCaseTarget(ContinueTarget)) {
+        return Inline;
+      }
+    }
+    return renderCompound(Tree, BodyLabel.Body, Context);
+  }
+
   bool renderTargetedTerminal(st::BlockId Target,
                               std::vector<clang::Stmt *> &Stmts) {
     if (!canInlineTerminalTarget(Target)) {
@@ -1285,7 +1338,7 @@ private:
         BodyLabel.LastLabel = Label;
       } else {
         BodyLabelIndex.emplace(Key, BodyLabels.size());
-        BodyLabels.push_back({Label, Body});
+        BodyLabels.push_back({Label, Body, Target});
         Cases.push_back(Label);
       }
       Switch->addSwitchCase(Label);
@@ -1307,10 +1360,10 @@ private:
 
     for (const SwitchBodyLabel &BodyLabel : BodyLabels) {
       if (auto *CaseLabel = llvm::dyn_cast<clang::CaseStmt>(BodyLabel.LastLabel)) {
-        CaseLabel->setSubStmt(renderCompound(Tree, BodyLabel.Body, Context));
+        CaseLabel->setSubStmt(renderSwitchCaseBody(Tree, BodyLabel, Context));
       } else {
         llvm::cast<clang::DefaultStmt>(BodyLabel.LastLabel)->setSubStmt(
-            renderCompound(Tree, BodyLabel.Body, Context));
+            renderSwitchCaseBody(Tree, BodyLabel, Context));
       }
     }
 
