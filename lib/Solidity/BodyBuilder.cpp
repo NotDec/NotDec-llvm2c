@@ -331,6 +331,17 @@ std::optional<llvm::StringRef> binaryOperatorText(unsigned Opcode) {
   }
 }
 
+std::optional<llvm::StringRef> logicalOperatorText(unsigned Opcode) {
+  switch (Opcode) {
+  case llvm::Instruction::And:
+    return "&&";
+  case llvm::Instruction::Or:
+    return "||";
+  default:
+    return std::nullopt;
+  }
+}
+
 std::optional<llvm::StringRef>
 icmpPredicateText(llvm::CmpInst::Predicate Predicate) {
   switch (Predicate) {
@@ -362,6 +373,17 @@ unsigned icmpPredicatePrecedence(llvm::CmpInst::Predicate Predicate) {
     return 3;
   default:
     return 4;
+  }
+}
+
+std::optional<unsigned> logicalOperatorPrecedence(unsigned Opcode) {
+  switch (Opcode) {
+  case llvm::Instruction::Or:
+    return 1;
+  case llvm::Instruction::And:
+    return 2;
+  default:
+    return std::nullopt;
   }
 }
 
@@ -513,6 +535,26 @@ std::string formatReturnValue(const llvm::Value &V,
     if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {
       constexpr unsigned Precedence = 30;
       std::string Text = "~" + formatReturnValue(*Operand, Precedence);
+      if (needsParentheses(Precedence, ParentPrecedence,
+                           ParenthesizeSamePrecedenceOperand)) {
+        return "(" + Text + ")";
+      }
+      return Text;
+    }
+    if (std::optional<llvm::StringRef> Operator =
+            logicalOperatorText(Op->getOpcode());
+        Op->getType()->isIntegerTy(1) && Operator.has_value()) {
+      // LLVM keeps pure bool connectives as i1 and/or.
+      unsigned Precedence = *logicalOperatorPrecedence(Op->getOpcode());
+      std::string Text = formatReturnValue(*Op->getOperand(0), Precedence,
+                                           /*IsRightOperand=*/false,
+                                           leftOperandNeedsSamePrecedenceParentheses(
+                                               *Operator)) +
+                         " " + Operator->str() + " " +
+                         formatReturnValue(*Op->getOperand(1), Precedence,
+                                           /*IsRightOperand=*/true,
+                                           rightOperandNeedsSamePrecedenceParentheses(
+                                               *Operator));
       if (needsParentheses(Precedence, ParentPrecedence,
                            ParenthesizeSamePrecedenceOperand)) {
         return "(" + Text + ")";
