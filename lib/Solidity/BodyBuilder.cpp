@@ -378,6 +378,9 @@ std::optional<llvm::StringRef> evmTernaryBuiltinName(llvm::StringRef Name) {
   if (Name == "evm_addmod") {
     return "addmod";
   }
+  if (Name == "evm_mulmod") {
+    return "mulmod";
+  }
   return std::nullopt;
 }
 
