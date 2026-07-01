@@ -195,6 +195,8 @@ public:
     collectGotoTargets(Tree, Tree.root(), {});
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Tree.root(), Stmts, {});
+    while (foldGuardedGotoOverReturn(Stmts)) {
+    }
     prependUsedCopiedDephicationDecls(Stmts);
     replaceCFG(std::move(Stmts));
   }
@@ -831,6 +833,82 @@ private:
     return false;
   }
 
+  static bool isRenderedReturn(const clang::Stmt *Stmt) {
+    if (Stmt == nullptr) {
+      return false;
+    }
+    if (llvm::isa<clang::ReturnStmt>(Stmt)) {
+      return true;
+    }
+    if (const auto *Compound = llvm::dyn_cast<clang::CompoundStmt>(Stmt)) {
+      return !Compound->body_empty() &&
+             isRenderedReturn(Compound->body_back());
+    }
+    if (const auto *If = llvm::dyn_cast<clang::IfStmt>(Stmt)) {
+      return isRenderedReturn(If->getThen()) &&
+             isRenderedReturn(If->getElse());
+    }
+    return false;
+  }
+
+  static clang::GotoStmt *singleGotoStmt(clang::Stmt *Stmt) {
+    if (auto *Goto = llvm::dyn_cast_or_null<clang::GotoStmt>(Stmt)) {
+      return Goto;
+    }
+    auto *Compound = llvm::dyn_cast_or_null<clang::CompoundStmt>(Stmt);
+    if (Compound == nullptr || Compound->size() != 1) {
+      return nullptr;
+    }
+    return llvm::dyn_cast_or_null<clang::GotoStmt>(Compound->body_front());
+  }
+
+  static bool stmtContainsLabel(const clang::Stmt *Stmt,
+                                const clang::LabelDecl *Label) {
+    if (Stmt == nullptr || Label == nullptr) {
+      return false;
+    }
+    if (const auto *LabelStmt = llvm::dyn_cast<clang::LabelStmt>(Stmt)) {
+      if (LabelStmt->getDecl() == Label) {
+        return true;
+      }
+    }
+    for (const clang::Stmt *Child : Stmt->children()) {
+      if (stmtContainsLabel(Child, Label)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // SAILR can leave a forward label inside the following loop body. When the
+  // skipped path is only a return, render that as the guard instead of a goto.
+  bool foldGuardedGotoOverReturn(std::vector<clang::Stmt *> &Stmts) {
+    for (unsigned Index = 0; Index + 2 < Stmts.size(); ++Index) {
+      auto *If = llvm::dyn_cast_or_null<clang::IfStmt>(Stmts[Index]);
+      if (If == nullptr || If->getElse() != nullptr) {
+        continue;
+      }
+      clang::GotoStmt *Goto = singleGotoStmt(If->getThen());
+      if (Goto == nullptr || !isRenderedReturn(Stmts[Index + 1]) ||
+          !stmtContainsLabel(Stmts[Index + 2], Goto->getLabel())) {
+        continue;
+      }
+
+      std::vector<clang::Stmt *> ThenStmts = {Stmts[Index + 1]};
+      clang::Stmt *Then = clang::CompoundStmt::Create(
+          Ctx, ThenStmts, clang::FPOptionsOverride(), clang::SourceLocation(),
+          clang::SourceLocation());
+      auto *FoldedIf = clang::IfStmt::Create(
+          Ctx, clang::SourceLocation(), clang::IfStatementKind::Ordinary,
+          nullptr, nullptr, invertCond(If->getCond()), clang::SourceLocation(),
+          clang::SourceLocation(), Then, clang::SourceLocation(), nullptr);
+      Stmts[Index] = FoldedIf;
+      Stmts.erase(Stmts.begin() + Index + 1);
+      return true;
+    }
+    return false;
+  }
+
   static void dropUnreachableRenderedStmts(std::vector<clang::Stmt *> &Stmts) {
     std::vector<clang::Stmt *> Filtered;
     Filtered.reserve(Stmts.size());
@@ -849,6 +927,8 @@ private:
                               RenderContext Context) {
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Id, Stmts, Context);
+    while (foldGuardedGotoOverReturn(Stmts)) {
+    }
     dropUnreachableRenderedStmts(Stmts);
     return clang::CompoundStmt::Create(Ctx, Stmts, clang::FPOptionsOverride(),
                                        clang::SourceLocation(),
