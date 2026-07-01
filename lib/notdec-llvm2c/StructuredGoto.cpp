@@ -912,6 +912,21 @@ private:
     return false;
   }
 
+  static unsigned countGotoTargets(const clang::Stmt *Stmt,
+                                   const clang::LabelDecl *Label) {
+    if (Stmt == nullptr || Label == nullptr) {
+      return 0;
+    }
+    unsigned Count = 0;
+    if (const auto *Goto = llvm::dyn_cast<clang::GotoStmt>(Stmt)) {
+      Count += Goto->getLabel() == Label ? 1 : 0;
+    }
+    for (const clang::Stmt *Child : Stmt->children()) {
+      Count += countGotoTargets(Child, Label);
+    }
+    return Count;
+  }
+
   static bool stmtContainsAnyLabel(const clang::Stmt *Stmt) {
     if (Stmt == nullptr) {
       return false;
@@ -950,6 +965,43 @@ private:
     }
     for (clang::Stmt *Child : Stmt->children()) {
       collectSingleContinueCases(Child, Cases);
+    }
+  }
+
+  // Only inspect cases owned by the current switch. A nested switch may also
+  // contain a single goto, but moving this switch's tail into it is wrong.
+  static void collectTopLevelSingleGotoCases(
+      clang::Stmt *Stmt,
+      std::vector<std::pair<clang::SwitchCase *, clang::GotoStmt *>> &Cases) {
+    if (Stmt == nullptr) {
+      return;
+    }
+    if (auto *Case = llvm::dyn_cast<clang::CaseStmt>(Stmt)) {
+      if (clang::GotoStmt *Goto = singleGotoStmt(Case->getSubStmt())) {
+        Cases.push_back({Case, Goto});
+      } else if (llvm::isa_and_nonnull<clang::SwitchCase>(
+                     Case->getSubStmt())) {
+        collectTopLevelSingleGotoCases(Case->getSubStmt(), Cases);
+      }
+      return;
+    }
+    if (auto *Default = llvm::dyn_cast<clang::DefaultStmt>(Stmt)) {
+      if (clang::GotoStmt *Goto = singleGotoStmt(Default->getSubStmt())) {
+        Cases.push_back({Default, Goto});
+      } else if (llvm::isa_and_nonnull<clang::SwitchCase>(
+                     Default->getSubStmt())) {
+        collectTopLevelSingleGotoCases(Default->getSubStmt(), Cases);
+      }
+      return;
+    }
+    auto *Compound = llvm::dyn_cast<clang::CompoundStmt>(Stmt);
+    if (Compound == nullptr) {
+      return;
+    }
+    for (clang::Stmt *Child : Stmt->children()) {
+      if (llvm::isa_and_nonnull<clang::SwitchCase>(Child)) {
+        collectTopLevelSingleGotoCases(Child, Cases);
+      }
     }
   }
 
@@ -1019,6 +1071,44 @@ private:
         if (Tail.empty() || !isRenderedContinue(Tail.back())) {
           continue;
         }
+
+        std::vector<std::pair<clang::SwitchCase *, clang::GotoStmt *>>
+            GotoCases;
+        collectTopLevelSingleGotoCases(Switch->getBody(), GotoCases);
+        if (GotoCases.size() == 1 && Tail.size() >= 3 &&
+            isRenderedContinue(Tail.front())) {
+          const clang::LabelDecl *TargetLabel =
+              GotoCases.front().second->getLabel();
+          unsigned TargetGotoCount = 0;
+          for (clang::Stmt *Stmt : Stmts) {
+            TargetGotoCount += countGotoTargets(Stmt, TargetLabel);
+          }
+          auto *Label = llvm::dyn_cast_or_null<clang::LabelStmt>(Tail[1]);
+          if (Label != nullptr && Label->getDecl() == TargetLabel &&
+              TargetGotoCount == 1) {
+            std::vector<clang::Stmt *> LabelTail(Tail.begin() + 2,
+                                                 Tail.end());
+            bool LabelTailHasNestedLabel = false;
+            for (clang::Stmt *TailStmt : LabelTail) {
+              LabelTailHasNestedLabel |= stmtContainsAnyLabel(TailStmt);
+            }
+            if (!LabelTailHasNestedLabel &&
+                isRenderedContinue(LabelTail.back())) {
+              auto *MovedTail = clang::CompoundStmt::Create(
+                  Ctx, LabelTail, clang::FPOptionsOverride(),
+                  clang::SourceLocation(), clang::SourceLocation());
+              setSwitchCaseBody(GotoCases.front().first, MovedTail);
+
+              std::vector<clang::Stmt *> Replacement(
+                  BodyStmts.begin(), BodyStmts.begin() + SwitchIndex + 1);
+              Stmts.erase(Stmts.begin() + Index);
+              Stmts.insert(Stmts.begin() + Index, Replacement.begin(),
+                           Replacement.end());
+              return true;
+            }
+          }
+        }
+
         bool HasLabel = false;
         for (clang::Stmt *TailStmt : Tail) {
           HasLabel |= stmtContainsAnyLabel(TailStmt);

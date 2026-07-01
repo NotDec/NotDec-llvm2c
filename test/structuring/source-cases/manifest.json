@@ -131,9 +131,7 @@
       "source": "cases/012_switch_continue_latch.c",
       "xfail": true,
       "xfail_exact": [
-        "missing pattern '^\\\\s+sink\\\\('",
-        "expected goto<=0",
-        "expected while<=1"
+        "missing pattern '^\\\\s+sink\\\\('"
       ],
       "oracle": {
         "contains": ["switch (", "case 0:", "case 1:", "sink(", "return"],
