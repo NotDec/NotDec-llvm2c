@@ -810,10 +810,32 @@ private:
     return true;
   }
 
+  static bool isRenderedTransfer(const clang::Stmt *Stmt) {
+    return llvm::isa_and_nonnull<clang::GotoStmt>(Stmt) ||
+           llvm::isa_and_nonnull<clang::BreakStmt>(Stmt) ||
+           llvm::isa_and_nonnull<clang::ContinueStmt>(Stmt) ||
+           llvm::isa_and_nonnull<clang::ReturnStmt>(Stmt);
+  }
+
+  static void dropUnreachableRenderedStmts(std::vector<clang::Stmt *> &Stmts) {
+    std::vector<clang::Stmt *> Filtered;
+    Filtered.reserve(Stmts.size());
+    bool AfterTransfer = false;
+    for (clang::Stmt *Stmt : Stmts) {
+      if (AfterTransfer && !llvm::isa_and_nonnull<clang::LabelStmt>(Stmt)) {
+        continue;
+      }
+      Filtered.push_back(Stmt);
+      AfterTransfer = isRenderedTransfer(Stmt);
+    }
+    Stmts = std::move(Filtered);
+  }
+
   clang::Stmt *renderCompound(const st::StructuredTree &Tree, st::NodeId Id,
                               RenderContext Context) {
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Id, Stmts, Context);
+    dropUnreachableRenderedStmts(Stmts);
     return clang::CompoundStmt::Create(Ctx, Stmts, clang::FPOptionsOverride(),
                                        clang::SourceLocation(),
                                        clang::SourceLocation());
