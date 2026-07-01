@@ -447,7 +447,7 @@ std::string formatReturnValue(const llvm::Value &V,
     if (Callee != nullptr && Call->arg_size() == 2) {
       if (std::optional<llvm::StringRef> Operator =
               evmShiftOperatorText(Callee->getName())) {
-        constexpr unsigned Precedence = 15;
+        constexpr unsigned Precedence = 8;
         std::string Text = formatReturnValue(*Call->getArgOperand(1),
                                              Precedence,
                                              /*IsRightOperand=*/false,
