@@ -387,19 +387,26 @@ const llvm::Value *bitwiseNotOperand(const llvm::BinaryOperator &Op) {
   return nullptr;
 }
 
+bool rightOperandNeedsSamePrecedenceParentheses(llvm::StringRef Operator) {
+  return Operator == "-" || Operator == "/" || Operator == "%" ||
+         Operator == "<<" || Operator == ">>";
+}
+
 bool needsParentheses(unsigned ChildPrecedence, unsigned ParentPrecedence,
-                      unsigned ParentOpcode, bool IsRightOperand) {
+                      bool IsRightOperand,
+                      bool ParenthesizeSamePrecedenceRightOperand) {
   if (ChildPrecedence < ParentPrecedence) {
     return true;
   }
-  return IsRightOperand && ChildPrecedence == ParentPrecedence &&
-         ParentOpcode == llvm::Instruction::Sub;
+  return IsRightOperand && ParenthesizeSamePrecedenceRightOperand &&
+         ChildPrecedence == ParentPrecedence;
 }
 
 std::string formatReturnValue(const llvm::Value &V,
                               unsigned ParentPrecedence = 0,
-                              unsigned ParentOpcode = 0,
-                              bool IsRightOperand = false) {
+                              bool IsRightOperand = false,
+                              bool ParenthesizeSamePrecedenceRightOperand =
+                                  false) {
   if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
     return formatInteger(*Int);
   }
@@ -407,7 +414,8 @@ std::string formatReturnValue(const llvm::Value &V,
     if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {
       constexpr unsigned Precedence = 30;
       std::string Text = "~" + formatReturnValue(*Operand, Precedence);
-      if (Precedence < ParentPrecedence) {
+      if (needsParentheses(Precedence, ParentPrecedence, IsRightOperand,
+                           ParenthesizeSamePrecedenceRightOperand)) {
         return "(" + Text + ")";
       }
       return Text;
@@ -416,13 +424,14 @@ std::string formatReturnValue(const llvm::Value &V,
             binaryOperatorText(Op->getOpcode())) {
       unsigned Precedence = *binaryOperatorPrecedence(Op->getOpcode());
       std::string Text = formatReturnValue(*Op->getOperand(0), Precedence,
-                                           Op->getOpcode()) +
+                                           /*IsRightOperand=*/false) +
                          " " + Operator->str() + " " +
                          formatReturnValue(*Op->getOperand(1), Precedence,
-                                           Op->getOpcode(),
-                                           /*IsRightOperand=*/true);
-      if (needsParentheses(Precedence, ParentPrecedence, ParentOpcode,
-                           IsRightOperand)) {
+                                           /*IsRightOperand=*/true,
+                                           rightOperandNeedsSamePrecedenceParentheses(
+                                               *Operator));
+      if (needsParentheses(Precedence, ParentPrecedence, IsRightOperand,
+                           ParenthesizeSamePrecedenceRightOperand)) {
         return "(" + Text + ")";
       }
       return Text;
@@ -438,9 +447,12 @@ std::string formatReturnValue(const llvm::Value &V,
                                              Precedence) +
                            " " + Operator->str() + " " +
                            formatReturnValue(*Call->getArgOperand(0),
-                                             Precedence);
-        if (needsParentheses(Precedence, ParentPrecedence, ParentOpcode,
-                             IsRightOperand)) {
+                                             Precedence,
+                                             /*IsRightOperand=*/true,
+                                             rightOperandNeedsSamePrecedenceParentheses(
+                                                 *Operator));
+        if (needsParentheses(Precedence, ParentPrecedence, IsRightOperand,
+                             ParenthesizeSamePrecedenceRightOperand)) {
           return "(" + Text + ")";
         }
         return Text;
@@ -452,9 +464,12 @@ std::string formatReturnValue(const llvm::Value &V,
                                              Precedence) +
                            " " + Operator->str() + " " +
                            formatReturnValue(*Call->getArgOperand(1),
-                                             Precedence);
-        if (needsParentheses(Precedence, ParentPrecedence, ParentOpcode,
-                             IsRightOperand)) {
+                                             Precedence,
+                                             /*IsRightOperand=*/true,
+                                             rightOperandNeedsSamePrecedenceParentheses(
+                                                 *Operator));
+        if (needsParentheses(Precedence, ParentPrecedence, IsRightOperand,
+                             ParenthesizeSamePrecedenceRightOperand)) {
           return "(" + Text + ")";
         }
         return Text;
