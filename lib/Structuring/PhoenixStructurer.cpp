@@ -3131,13 +3131,6 @@ bool isSimpleLoopSwitchSharedLatchArm(const StructuredCFG &Cfg,
     return false;
   }
 
-  for (BlockId BlockId : Arm->Blocks) {
-    const CFGBlock *Block = Cfg.getBlock(BlockId);
-    if (Block == nullptr || Block->CallCount != 0) {
-      return false;
-    }
-  }
-
   const CFGBlock *Tail = Cfg.getBlock(Arm->TailBlock);
   return Tail != nullptr && Tail->Terminator == TerminatorKind::Fallthrough &&
          Tail->Successors.size() == 1 &&

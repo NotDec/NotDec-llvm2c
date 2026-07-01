@@ -65,7 +65,7 @@
       "source": "cases/005_nested_loop_switch.c",
       "oracle": {
         "contains": ["while (", "switch (", "case 0:", "case 1:", "break;", "continue;"],
-        "max_counts": {"goto": 2},
+        "max_counts": {"goto": 0, "while": 1},
         "min_counts": {"switch": 1}
       }
     },
