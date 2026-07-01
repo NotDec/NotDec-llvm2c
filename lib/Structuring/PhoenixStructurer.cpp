@@ -2248,6 +2248,26 @@ bool endsWithUnconditionalRenderedTransfer(const StructuredTree &Tree,
          endsWithUnconditionalRenderedTransfer(Tree, Node->Children.back());
 }
 
+void rewriteInfiniteLoopEntryGotos(StructuredNode &Node, StructuredTree &Tree) {
+  if (Node.Kind != StructuredNodeKind::InfiniteLoop ||
+      Node.Body == InvalidNodeId) {
+    return;
+  }
+
+  BlockId Entry = firstRenderedBlock(Tree, Node.Body);
+  if (Entry == InvalidBlockId) {
+    return;
+  }
+
+  bool Changed = false;
+  NodeId NewBody = copyReplacingTargetTransfer(
+      Tree, Node.Body, Entry, VirtualEdgeKind::Continue,
+      /*EnterLoops=*/false, Changed);
+  if (Changed) {
+    Node.Body = NewBody;
+  }
+}
+
 bool containsEnterableNode(const StructuredTree &Tree, NodeId Id,
                            const std::set<BlockId> &TargetedLabels) {
   const StructuredNode *Node = Tree.getNode(Id);
@@ -2783,6 +2803,7 @@ void cleanupStructuredGotos(const StructuredCFG &Cfg, StructuredTree &Tree,
   cleanupStructuredGotos(Cfg, Tree, NodeCopy.Else);
   cleanupStructuredGotos(Cfg, Tree, NodeCopy.Body);
   cleanupStructuredGotos(Cfg, Tree, NodeCopy.Default);
+  rewriteInfiniteLoopEntryGotos(NodeCopy, Tree);
   dropGotoIntoFollowingNode(NodeCopy, Tree);
   dropUnreachableAfterRenderedTransfer(NodeCopy, Tree);
   Tree.nodes()[Id] = std::move(NodeCopy);
@@ -3096,6 +3117,51 @@ NodeId buildLoopSwitchContinueArmBody(const StructuredCFG &Cfg,
   return Tree.addNode(std::move(Body));
 }
 
+bool isSimpleLoopSwitchSharedLatchArm(const StructuredCFG &Cfg,
+                                      const MutableRegionGraph &Graph,
+                                      GraphNodeId HeadId,
+                                      GraphNodeId LatchId,
+                                      GraphNodeId ArmId) {
+  const MutableRegionNode *Arm = Graph.getNode(ArmId);
+  const MutableRegionNode *Latch = Graph.getNode(LatchId);
+  if (Arm == nullptr || Latch == nullptr || Arm->ExternalPlaceholder ||
+      Arm->Blocks.empty() || Latch->Blocks.empty() || ArmId == LatchId ||
+      Arm->Preds.size() != 1 || Arm->Preds[0] != HeadId ||
+      Arm->Succs.size() != 1 || Arm->Succs[0] != LatchId) {
+    return false;
+  }
+
+  for (BlockId BlockId : Arm->Blocks) {
+    const CFGBlock *Block = Cfg.getBlock(BlockId);
+    if (Block == nullptr || Block->CallCount != 0) {
+      return false;
+    }
+  }
+
+  const CFGBlock *Tail = Cfg.getBlock(Arm->TailBlock);
+  return Tail != nullptr && Tail->Terminator == TerminatorKind::Fallthrough &&
+         Tail->Successors.size() == 1 &&
+         Tail->Successors.front() == Latch->Blocks.front();
+}
+
+NodeId buildLoopSwitchSharedLatchArmBody(const StructuredCFG &Cfg,
+                                         const MutableRegionNode &Arm,
+                                         StructuredTree &Tree) {
+  StructuredNode Body;
+  Body.Kind = StructuredNodeKind::Sequence;
+  if (Arm.StructuredRoot != InvalidNodeId) {
+    Body.Children.push_back(Arm.StructuredRoot);
+  } else {
+    for (BlockId Block : Arm.Blocks) {
+      appendBlockBody(Cfg, Block, Body, Tree);
+    }
+  }
+  // This break only exits the switch. The shared latch is emitted as the next
+  // loop-body node, so the case must not target the loop break block.
+  Body.Children.push_back(Tree.addNode(makeBreak()));
+  return Tree.addNode(std::move(Body));
+}
+
 NodeId buildLoopSwitchCaseBody(const StructuredCFG &Cfg,
                                const MutableRegionGraph &Graph,
                                const Region &LoopRegion,
@@ -3116,6 +3182,120 @@ NodeId buildLoopSwitchCaseBody(const StructuredCFG &Cfg,
 
   return Tree.addNode(makeControlTransfer(
       Target, classifyNaturalLoopExit(Cfg, LoopRegion, Target)));
+}
+
+NodeId buildLoopSwitchSharedLatchCaseBody(
+    const StructuredCFG &Cfg, const MutableRegionGraph &Graph,
+    GraphNodeId LatchId, const std::set<GraphNodeId> &CollapsedArms,
+    BlockId Target, StructuredTree &Tree) {
+  GraphNodeId TargetId = Graph.getNodeForBlock(Target);
+  if (TargetId == LatchId) {
+    return Tree.addNode(makeBreak());
+  }
+
+  if (CollapsedArms.count(TargetId) != 0) {
+    const MutableRegionNode *Arm = Graph.getNode(TargetId);
+    if (Arm != nullptr) {
+      return buildLoopSwitchSharedLatchArmBody(Cfg, *Arm, Tree);
+    }
+  }
+
+  if (NodeId TerminalBody = buildTerminalBlockBody(Cfg, Target, Tree);
+      TerminalBody != InvalidNodeId) {
+    return TerminalBody;
+  }
+
+  return InvalidNodeId;
+}
+
+bool reduceLoopHeaderSwitchSharedLatchArms(
+    const StructuredCFG &Cfg, const Region &LoopRegion,
+    const std::set<GraphNodeId> &MemberSet, GraphNodeId HeadId,
+    MutableRegionGraph &Graph, StructuredTree &Tree, RegionOverlay *Overlay) {
+  const MutableRegionNode *Head = Graph.getNode(HeadId);
+  if (Head == nullptr || Head->Blocks.empty() ||
+      Head->Blocks.front() != LoopRegion.Head ||
+      Head->StructuredRoot != InvalidNodeId ||
+      LoopRegion.Latch == InvalidBlockId) {
+    return false;
+  }
+
+  GraphNodeId LatchId = Graph.getNodeForBlock(LoopRegion.Latch);
+  if (LatchId == InvalidGraphNodeId || LatchId == HeadId ||
+      MemberSet.count(LatchId) == 0) {
+    return false;
+  }
+
+  const CFGBlock *Tail = Cfg.getBlock(Head->TailBlock);
+  if (Tail == nullptr || Tail->Terminator != TerminatorKind::Switch ||
+      Tail->Successors.empty()) {
+    return false;
+  }
+
+  std::set<GraphNodeId> CollapsedArms;
+  bool Valid = true;
+  auto CheckTarget = [&](BlockId Target) {
+    GraphNodeId TargetId = Graph.getNodeForBlock(Target);
+    if (TargetId == LatchId) {
+      return;
+    }
+    if (TargetId != InvalidGraphNodeId &&
+        MemberSet.count(TargetId) != 0 &&
+        isSimpleLoopSwitchSharedLatchArm(Cfg, Graph, HeadId, LatchId,
+                                         TargetId)) {
+      CollapsedArms.insert(TargetId);
+      return;
+    }
+    if (isTerminalBlock(Cfg, Target)) {
+      return;
+    }
+    Valid = false;
+  };
+
+  for (BlockId Succ : Tail->Successors) {
+    CheckTarget(Succ);
+  }
+  for (const SwitchCase &Case : Tail->Cases) {
+    CheckTarget(Case.Target);
+  }
+  if (!Valid || CollapsedArms.empty()) {
+    return false;
+  }
+
+  StructuredNode Sequence;
+  Sequence.Kind = StructuredNodeKind::Sequence;
+  for (BlockId Block : Head->Blocks) {
+    appendBlockLabel(Block, Sequence, Tree);
+    appendBlockBody(Cfg, Block, Sequence, Tree);
+  }
+
+  StructuredNode SwitchNode;
+  SwitchNode.Kind = StructuredNodeKind::Switch;
+  SwitchNode.Block = Tail->Id;
+  SwitchNode.Condition = Tail->Condition;
+  SwitchNode.DefaultTarget = Tail->Successors.front();
+  SwitchNode.Default = buildLoopSwitchSharedLatchCaseBody(
+      Cfg, Graph, LatchId, CollapsedArms, Tail->Successors.front(), Tree);
+  if (SwitchNode.Default == InvalidNodeId) {
+    return false;
+  }
+  for (const SwitchCase &Case : Tail->Cases) {
+    NodeId CaseBody = buildLoopSwitchSharedLatchCaseBody(
+        Cfg, Graph, LatchId, CollapsedArms, Case.Target, Tree);
+    if (CaseBody == InvalidNodeId) {
+      return false;
+    }
+    SwitchNode.StructuredCases.push_back({Case.Value, Case.Target, CaseBody});
+  }
+  Sequence.Children.push_back(Tree.addNode(std::move(SwitchNode)));
+
+  std::vector<GraphNodeId> Members = {HeadId};
+  Members.insert(Members.end(), CollapsedArms.begin(), CollapsedArms.end());
+  collapseNodesAndSyncOverlay(Graph, Overlay, Members, LoopRegion.Head,
+                              Tree.addNode(std::move(Sequence)),
+                              /*SelfLoop=*/true,
+                              /*DropRefinementMarks=*/false);
+  return true;
 }
 
 bool reduceLoopHeaderSwitchContinueArms(
@@ -3509,6 +3689,10 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
 
     if (reduceLoopHeaderSwitchContinueArms(Cfg, LoopRegion, MemberSet, HeadId,
                                            Graph, Tree, Overlay)) {
+      return true;
+    }
+    if (reduceLoopHeaderSwitchSharedLatchArms(Cfg, LoopRegion, MemberSet,
+                                              HeadId, Graph, Tree, Overlay)) {
       return true;
     }
 
