@@ -2553,6 +2553,7 @@ bool foldGuardedTerminalIntoSequence(StructuredTree &Tree, NodeId SequenceId) {
     }
 
     StructuredNode FoldedIf = *IfNode;
+    StructuredNode FoldedPrefix = *Prefix;
     NodeId TerminalBody = buildSequenceFromRange(
         Tree, OldChildren, TerminalLabel + 1, TerminalEnd);
     if (TerminalIsThen) {
@@ -2562,7 +2563,6 @@ bool foldGuardedTerminalIntoSequence(StructuredTree &Tree, NodeId SequenceId) {
     }
     NodeId FoldedIfId = Tree.addNode(std::move(FoldedIf));
 
-    StructuredNode FoldedPrefix = *Prefix;
     FoldedPrefix.Children[FoldedPrefix.Children.size() - 2] = FoldedIfId;
     FoldedPrefix.Children.pop_back();
     NodeId FoldedPrefixId = Tree.addNode(std::move(FoldedPrefix));
