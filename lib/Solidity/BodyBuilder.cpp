@@ -310,6 +310,9 @@ std::optional<std::string> evmEnvBuiltinName(llvm::StringRef Name) {
   if (Name == "evm_basefee") {
     return "block.basefee";
   }
+  if (Name == "evm_caller") {
+    return "msg.sender";
+  }
   return std::nullopt;
 }
 
@@ -954,6 +957,22 @@ BodyBuilder::getEventName(const llvm::Instruction &I, llvm::StringRef Kind) {
   return sanitizeIdentifier(Name);
 }
 
+std::vector<std::string>
+BodyBuilder::getEventTopicArguments(const llvm::Instruction &I) {
+  const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+  if (Call == nullptr || !Call->getCalledFunction() ||
+      !Call->getCalledFunction()->getName().starts_with("evm_log") ||
+      Call->arg_size() <= 4) {
+    return {};
+  }
+
+  std::vector<std::string> Args;
+  for (unsigned Arg = 4; Arg < Call->arg_size(); ++Arg) {
+    Args.push_back(formatReturnValue(*Call->getArgOperand(Arg)));
+  }
+  return Args;
+}
+
 std::string BodyBuilder::formatRevertStatement(const llvm::Instruction &I,
                                                llvm::StringRef Kind) {
   if (Kind == "error_string") {
@@ -990,7 +1009,15 @@ std::string BodyBuilder::formatEventStatement(const llvm::Instruction &I,
                                               llvm::StringRef Kind) {
   std::string Name =
       getEventName(I, Kind).value_or(sanitizeIdentifier(("Event_" + Kind).str()));
-  return "emit " + Name + "(); // TODO: recover event signature";
+  std::vector<std::string> Args = getEventTopicArguments(I);
+  std::string Text = "emit " + Name + "(";
+  for (std::size_t Index = 0; Index < Args.size(); ++Index) {
+    if (Index != 0) {
+      Text += ", ";
+    }
+    Text += Args[Index];
+  }
+  return Text + "); // TODO: recover event signature";
 }
 
 std::string BodyBuilder::sanitizeIdentifier(llvm::StringRef Name) {

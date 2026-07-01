@@ -18,6 +18,7 @@ struct TypeRef {
 struct Parameter {
   TypeRef Type;
   std::string Name;
+  bool Indexed = false;
 };
 
 struct StateVariable {

@@ -100,6 +100,9 @@ void Printer::printParameters(const std::vector<Parameter> &Params) {
       OS << ", ";
     }
     printType(Params[I].Type);
+    if (Params[I].Indexed) {
+      OS << " indexed";
+    }
     if (!Params[I].Name.empty()) {
       OS << " " << Params[I].Name;
     }

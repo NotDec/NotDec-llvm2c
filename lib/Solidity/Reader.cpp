@@ -37,6 +37,28 @@ std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
   return std::nullopt;
 }
 
+bool isEvmCallerValue(const llvm::Value *V) {
+  const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(V);
+  return Call != nullptr && Call->getCalledFunction() != nullptr &&
+         Call->getCalledFunction()->getName() == "evm_caller";
+}
+
+std::vector<Parameter> eventTopicParameters(const llvm::CallBase &Call) {
+  std::vector<Parameter> Params;
+  if (Call.arg_size() <= 4) {
+    return Params;
+  }
+
+  for (unsigned Arg = 4; Arg < Call.arg_size(); ++Arg) {
+    std::string Type = isEvmCallerValue(Call.getArgOperand(Arg)) ? "address"
+                                                                 : "uint256";
+    Params.push_back(Parameter{TypeRef{Type},
+                               "arg" + std::to_string(Params.size()),
+                               /*Indexed=*/true});
+  }
+  return Params;
+}
+
 bool isAbiBoolWord(const llvm::Value *V) {
   if (V == nullptr) {
     return false;
@@ -217,7 +239,7 @@ void Reader::readEvents(const llvm::Module &M, Contract &Result) {
           continue;
         }
         Names.push_back(*Name);
-        Result.Events.push_back(EventDecl{*Name, {}});
+        Result.Events.push_back(EventDecl{*Name, eventTopicParameters(*Call)});
       }
     }
   }

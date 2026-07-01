@@ -35,6 +35,8 @@ public:
                                                       llvm::StringRef Kind);
   static std::optional<std::string>
   getEventName(const llvm::Instruction &I, llvm::StringRef Kind);
+  static std::vector<std::string>
+  getEventTopicArguments(const llvm::Instruction &I);
 
 private:
   static std::string formatRevertStatement(const llvm::Instruction &I,
