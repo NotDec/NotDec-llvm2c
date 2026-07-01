@@ -48,13 +48,24 @@ bool isAbiBoolWord(const llvm::Value *V) {
   return Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1);
 }
 
-bool isSignedResultWord(const llvm::Value *V) {
+std::optional<std::string> signedReturnTypeForWord(const llvm::Value *V) {
   const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(V);
   if (Call == nullptr || Call->getCalledFunction() == nullptr) {
-    return false;
+    return std::nullopt;
   }
   llvm::StringRef Name = Call->getCalledFunction()->getName();
-  return Name == "evm_sdiv" || Name == "evm_smod" || Name == "evm_sar";
+  if (Name == "evm_sdiv" || Name == "evm_smod" || Name == "evm_sar") {
+    return "int256";
+  }
+  if (Name != "evm_signextend" || Call->arg_size() < 2) {
+    return std::nullopt;
+  }
+  std::optional<llvm::APInt> ByteIndex =
+      constantIntValue(Call->getArgOperand(0));
+  if (!ByteIndex.has_value() || ByteIndex->ugt(31)) {
+    return std::nullopt;
+  }
+  return "int" + std::to_string((ByteIndex->getZExtValue() + 1) * 8);
 }
 
 const llvm::Value *findStoredReturnValue(const llvm::CallBase &Call,
@@ -110,8 +121,8 @@ bool returnsSingleBoolWord(const llvm::Function &F) {
   return SawReturn;
 }
 
-bool returnsSingleSignedResultWord(const llvm::Function &F) {
-  bool SawReturn = false;
+std::optional<std::string> singleSignedReturnType(const llvm::Function &F) {
+  std::optional<std::string> SignedType;
   for (const llvm::BasicBlock &BB : F) {
     for (const llvm::Instruction &I : BB) {
       const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
@@ -129,19 +140,21 @@ bool returnsSingleSignedResultWord(const llvm::Function &F) {
           constantIntValue(Call->getArgOperand(2));
       if (!ReturnOffset.has_value() || !ReturnLength.has_value() ||
           *ReturnLength != 32) {
-        return false;
+        return std::nullopt;
       }
 
-      // Signed EVM helpers come from signed Solidity operations. Keep the
-      // printable return type signed when this value is ABI-encoded.
       const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
-      if (!isSignedResultWord(Stored)) {
-        return false;
+      std::optional<std::string> CurrentType = signedReturnTypeForWord(Stored);
+      if (!CurrentType.has_value()) {
+        return std::nullopt;
       }
-      SawReturn = true;
+      if (SignedType.has_value() && *SignedType != *CurrentType) {
+        return std::nullopt;
+      }
+      SignedType = *CurrentType;
     }
   }
-  return SawReturn;
+  return SignedType;
 }
 
 } // namespace
@@ -303,8 +316,10 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
   std::string ReturnType = "uint256";
   if (Count == 1 && returnsSingleBoolWord(F)) {
     ReturnType = "bool";
-  } else if (Count == 1 && returnsSingleSignedResultWord(F)) {
-    ReturnType = "int256";
+  } else if (Count == 1) {
+    if (std::optional<std::string> SignedType = singleSignedReturnType(F)) {
+      ReturnType = *SignedType;
+    }
   }
   for (std::uint64_t I = 0; I < Count; ++I) {
     Result.push_back(Parameter{TypeRef{ReturnType},

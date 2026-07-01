@@ -444,6 +444,14 @@ std::optional<llvm::StringRef> evmShiftOperatorText(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+std::optional<std::string> evmSignExtendType(const llvm::Value *ByteIndex) {
+  std::optional<llvm::APInt> Index = constantIntValue(ByteIndex);
+  if (!Index.has_value() || Index->ugt(31)) {
+    return std::nullopt;
+  }
+  return "int" + std::to_string((Index->getZExtValue() + 1) * 8);
+}
+
 std::optional<llvm::StringRef> evmTernaryBuiltinName(llvm::StringRef Name) {
   if (Name == "evm_addmod") {
     return "addmod";
@@ -618,6 +626,19 @@ std::string formatReturnValue(const llvm::Value &V,
       }
     }
     if (Callee != nullptr && Call->arg_size() == 2) {
+      if (Callee->getName() == "evm_signextend") {
+        if (std::optional<std::string> Type =
+                evmSignExtendType(Call->getArgOperand(0))) {
+          constexpr unsigned Precedence = 30;
+          std::string Text =
+              *Type + "(" + formatReturnValue(*Call->getArgOperand(1)) + ")";
+          if (needsParentheses(Precedence, ParentPrecedence,
+                               ParenthesizeSamePrecedenceOperand)) {
+            return "(" + Text + ")";
+          }
+          return Text;
+        }
+      }
       if (std::optional<llvm::StringRef> Operator =
               evmShiftOperatorText(Callee->getName())) {
         constexpr unsigned Precedence = 8;
