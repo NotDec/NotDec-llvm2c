@@ -415,6 +415,9 @@ std::optional<llvm::StringRef> evmBinaryOperatorText(llvm::StringRef Name) {
   if (Name == "evm_mod") {
     return "%";
   }
+  if (Name == "evm_smod") {
+    return "%";
+  }
   if (Name == "evm_exp") {
     return "**";
   }

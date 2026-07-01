@@ -48,12 +48,13 @@ bool isAbiBoolWord(const llvm::Value *V) {
   return Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1);
 }
 
-bool isSignedDivisionWord(const llvm::Value *V) {
+bool isSignedArithmeticWord(const llvm::Value *V) {
   const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(V);
   if (Call == nullptr || Call->getCalledFunction() == nullptr) {
     return false;
   }
-  return Call->getCalledFunction()->getName() == "evm_sdiv";
+  llvm::StringRef Name = Call->getCalledFunction()->getName();
+  return Name == "evm_sdiv" || Name == "evm_smod";
 }
 
 const llvm::Value *findStoredReturnValue(const llvm::CallBase &Call,
@@ -109,7 +110,7 @@ bool returnsSingleBoolWord(const llvm::Function &F) {
   return SawReturn;
 }
 
-bool returnsSingleSignedDivisionWord(const llvm::Function &F) {
+bool returnsSingleSignedArithmeticWord(const llvm::Function &F) {
   bool SawReturn = false;
   for (const llvm::BasicBlock &BB : F) {
     for (const llvm::Instruction &I : BB) {
@@ -131,10 +132,10 @@ bool returnsSingleSignedDivisionWord(const llvm::Function &F) {
         return false;
       }
 
-      // SDIV comes from signed Solidity integer division. Keep the printable
+      // SDIV/SMOD come from signed Solidity integer arithmetic. Keep the printable
       // return type signed when this is the value ABI-encoded into the word.
       const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
-      if (!isSignedDivisionWord(Stored)) {
+      if (!isSignedArithmeticWord(Stored)) {
         return false;
       }
       SawReturn = true;
@@ -302,7 +303,7 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
   std::string ReturnType = "uint256";
   if (Count == 1 && returnsSingleBoolWord(F)) {
     ReturnType = "bool";
-  } else if (Count == 1 && returnsSingleSignedDivisionWord(F)) {
+  } else if (Count == 1 && returnsSingleSignedArithmeticWord(F)) {
     ReturnType = "int256";
   }
   for (std::uint64_t I = 0; I < Count; ++I) {
