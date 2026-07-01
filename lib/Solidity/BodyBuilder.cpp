@@ -351,7 +351,17 @@ std::optional<llvm::StringRef> evmBinaryOperatorText(llvm::StringRef Name) {
   if (Name == "evm_mod") {
     return "%";
   }
+  if (Name == "evm_exp") {
+    return "**";
+  }
   return std::nullopt;
+}
+
+unsigned evmBinaryOperatorPrecedence(llvm::StringRef Name) {
+  if (Name == "evm_exp") {
+    return 25;
+  }
+  return 20;
 }
 
 std::optional<llvm::StringRef> evmShiftOperatorText(llvm::StringRef Name) {
@@ -437,7 +447,7 @@ std::string formatReturnValue(const llvm::Value &V,
       }
       if (std::optional<llvm::StringRef> Operator =
               evmBinaryOperatorText(Callee->getName())) {
-        constexpr unsigned Precedence = 20;
+        unsigned Precedence = evmBinaryOperatorPrecedence(Callee->getName());
         std::string Text = formatReturnValue(*Call->getArgOperand(0),
                                              Precedence) +
                            " " + Operator->str() + " " +
