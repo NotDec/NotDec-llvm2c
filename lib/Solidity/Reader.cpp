@@ -48,6 +48,14 @@ bool isAbiBoolWord(const llvm::Value *V) {
   return Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1);
 }
 
+bool isSignedDivisionWord(const llvm::Value *V) {
+  const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(V);
+  if (Call == nullptr || Call->getCalledFunction() == nullptr) {
+    return false;
+  }
+  return Call->getCalledFunction()->getName() == "evm_sdiv";
+}
+
 const llvm::Value *findStoredReturnValue(const llvm::CallBase &Call,
                                          const llvm::APInt &ReturnOffset) {
   for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
@@ -93,6 +101,40 @@ bool returnsSingleBoolWord(const llvm::Function &F) {
       // produced from an i1 comparison result.
       const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
       if (!isAbiBoolWord(Stored)) {
+        return false;
+      }
+      SawReturn = true;
+    }
+  }
+  return SawReturn;
+}
+
+bool returnsSingleSignedDivisionWord(const llvm::Function &F) {
+  bool SawReturn = false;
+  for (const llvm::BasicBlock &BB : F) {
+    for (const llvm::Instruction &I : BB) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (Call == nullptr) {
+        continue;
+      }
+      const llvm::Function *Callee = Call->getCalledFunction();
+      if (Callee == nullptr || Callee->getName() != "evm_return" ||
+          Call->arg_size() < 3) {
+        continue;
+      }
+      std::optional<llvm::APInt> ReturnOffset =
+          constantIntValue(Call->getArgOperand(1));
+      std::optional<llvm::APInt> ReturnLength =
+          constantIntValue(Call->getArgOperand(2));
+      if (!ReturnOffset.has_value() || !ReturnLength.has_value() ||
+          *ReturnLength != 32) {
+        return false;
+      }
+
+      // SDIV comes from signed Solidity integer division. Keep the printable
+      // return type signed when this is the value ABI-encoded into the word.
+      const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
+      if (!isSignedDivisionWord(Stored)) {
         return false;
       }
       SawReturn = true;
@@ -257,8 +299,12 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
     return Result;
   }
   std::uint64_t Count = *StaticReturnBytes / 32;
-  std::string ReturnType =
-      Count == 1 && returnsSingleBoolWord(F) ? "bool" : "uint256";
+  std::string ReturnType = "uint256";
+  if (Count == 1 && returnsSingleBoolWord(F)) {
+    ReturnType = "bool";
+  } else if (Count == 1 && returnsSingleSignedDivisionWord(F)) {
+    ReturnType = "int256";
+  }
   for (std::uint64_t I = 0; I < Count; ++I) {
     Result.push_back(Parameter{TypeRef{ReturnType},
                                "ret" + std::to_string(I)});
