@@ -306,6 +306,13 @@ std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
   return std::nullopt;
 }
 
+std::optional<std::string> evmEnvBuiltinName(llvm::StringRef Name) {
+  if (Name == "evm_basefee") {
+    return "block.basefee";
+  }
+  return std::nullopt;
+}
+
 std::string formatInteger(const llvm::APInt &Value) {
   llvm::SmallString<64> Text;
   Value.toString(Text, 10, /*isSigned=*/false);
@@ -609,6 +616,12 @@ std::string formatReturnValue(const llvm::Value &V,
   }
   if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
     const llvm::Function *Callee = Call->getCalledFunction();
+    if (Callee != nullptr && Call->arg_size() == 1) {
+      if (std::optional<std::string> Builtin =
+              evmEnvBuiltinName(Callee->getName())) {
+        return *Builtin;
+      }
+    }
     if (Callee != nullptr && Call->arg_size() == 3) {
       if (std::optional<llvm::StringRef> Builtin =
               evmTernaryBuiltinName(Callee->getName())) {
@@ -684,6 +697,43 @@ std::string formatReturnValue(const llvm::Value &V,
   return llvmValueName(V, "ret0");
 }
 
+const llvm::Value *ptrToIntPointerValue(const llvm::Value *V) {
+  if (const auto *Inst = llvm::dyn_cast_or_null<llvm::PtrToIntInst>(V)) {
+    return Inst->getOperand(0);
+  }
+  if (const auto *Expr = llvm::dyn_cast_or_null<llvm::ConstantExpr>(V);
+      Expr != nullptr && Expr->getOpcode() == llvm::Instruction::PtrToInt &&
+      Expr->getNumOperands() == 1) {
+    return Expr->getOperand(0);
+  }
+  return nullptr;
+}
+
+const llvm::Value *findStoredValueBeforeReturn(const llvm::CallBase &Call,
+                                               const llvm::Value *StorePointer) {
+  if (StorePointer == nullptr) {
+    return nullptr;
+  }
+  for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
+                                                      Call.getParent()->begin();
+       It != Begin;) {
+    --It;
+    const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+    if (Store != nullptr && Store->getPointerOperand() == StorePointer) {
+      return Store->getValueOperand();
+    }
+  }
+  return nullptr;
+}
+
+const llvm::Value *findAllocatedSingleWordReturnValue(const llvm::CallBase &Call) {
+  // MemoryBufferAnalysis rewrites dynamic ABI buffers to calloc-backed
+  // pointers before Solidity printing.  For one-word returns, the returned
+  // pointer and preceding store identify the high-level return expression.
+  const llvm::Value *StorePointer = ptrToIntPointerValue(Call.getArgOperand(1));
+  return findStoredValueBeforeReturn(Call, StorePointer);
+}
+
 std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
   const llvm::Function *Callee = Call.getCalledFunction();
   if (Callee == nullptr || Callee->getName() != "evm_return" ||
@@ -694,8 +744,16 @@ std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
       constantIntValue(Call.getArgOperand(1));
   std::optional<llvm::APInt> ReturnLength =
       constantIntValue(Call.getArgOperand(2));
-  if (!ReturnOffset.has_value() || !ReturnLength.has_value() ||
-      *ReturnLength != 32) {
+  if (!ReturnLength.has_value()) {
+    return std::nullopt;
+  }
+  if (*ReturnLength != 32) {
+    return std::nullopt;
+  }
+  if (!ReturnOffset.has_value()) {
+    if (const llvm::Value *Stored = findAllocatedSingleWordReturnValue(Call)) {
+      return "return " + formatReturnValue(*Stored) + ";";
+    }
     return std::nullopt;
   }
 
