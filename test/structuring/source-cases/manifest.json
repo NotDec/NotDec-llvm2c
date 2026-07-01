@@ -170,6 +170,20 @@
         "min_counts": {"switch": 1},
         "max_counts": {"goto": 0}
       }
+    },
+    {
+      "name": "nested_loop_break_only",
+      "source": "cases/016_nested_loop_break_only.c",
+      "xfail": true,
+      "xfail_exact": [
+        "expected goto<=0",
+        "unexpected pattern 'return "
+      ],
+      "oracle": {
+        "contains": ["while (", "break;", "sink(", "return"],
+        "min_counts": {"while": 1, "break": 1},
+        "max_counts": {"goto": 0}
+      }
     }
   ]
 }
