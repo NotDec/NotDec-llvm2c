@@ -315,15 +315,49 @@ std::optional<llvm::StringRef> binaryOperatorText(unsigned Opcode) {
   }
 }
 
-std::string formatReturnValue(const llvm::Value &V) {
+std::optional<unsigned> binaryOperatorPrecedence(unsigned Opcode) {
+  switch (Opcode) {
+  case llvm::Instruction::Add:
+  case llvm::Instruction::Sub:
+    return 10;
+  case llvm::Instruction::Mul:
+    return 20;
+  default:
+    return std::nullopt;
+  }
+}
+
+bool needsParentheses(unsigned ChildPrecedence, unsigned ParentPrecedence,
+                      unsigned ParentOpcode, bool IsRightOperand) {
+  if (ChildPrecedence < ParentPrecedence) {
+    return true;
+  }
+  return IsRightOperand && ChildPrecedence == ParentPrecedence &&
+         ParentOpcode == llvm::Instruction::Sub;
+}
+
+std::string formatReturnValue(const llvm::Value &V,
+                              unsigned ParentPrecedence = 0,
+                              unsigned ParentOpcode = 0,
+                              bool IsRightOperand = false) {
   if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
     return formatInteger(*Int);
   }
   if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
     if (std::optional<llvm::StringRef> Operator =
             binaryOperatorText(Op->getOpcode())) {
-      return formatReturnValue(*Op->getOperand(0)) + " " + Operator->str() +
-             " " + formatReturnValue(*Op->getOperand(1));
+      unsigned Precedence = *binaryOperatorPrecedence(Op->getOpcode());
+      std::string Text = formatReturnValue(*Op->getOperand(0), Precedence,
+                                           Op->getOpcode()) +
+                         " " + Operator->str() + " " +
+                         formatReturnValue(*Op->getOperand(1), Precedence,
+                                           Op->getOpcode(),
+                                           /*IsRightOperand=*/true);
+      if (needsParentheses(Precedence, ParentPrecedence, ParentOpcode,
+                           IsRightOperand)) {
+        return "(" + Text + ")";
+      }
+      return Text;
     }
   }
   return llvmValueName(V, "ret0");
