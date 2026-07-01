@@ -388,7 +388,8 @@ const llvm::Value *bitwiseNotOperand(const llvm::BinaryOperator &Op) {
 }
 
 bool rightOperandNeedsSamePrecedenceParentheses(llvm::StringRef Operator) {
-  return Operator == "-" || Operator == "/" || Operator == "%" ||
+  return Operator == "-" || Operator == "*" || Operator == "/" ||
+         Operator == "%" ||
          Operator == "<<" || Operator == ">>";
 }
 
