@@ -93,6 +93,15 @@ std::string todoCondition(llvm::StringRef Text) {
   return "false /* TODO: " + Comment + " */";
 }
 
+// This is only a print-time guard for statements the Solidity backend already
+// emitted as unconditional exits. It should not guess structured control flow.
+bool isTerminalStatement(llvm::StringRef Text) {
+  Text = Text.trim();
+  return Text == "return;" || Text.starts_with("return ") ||
+         Text.starts_with("revert();") ||
+         Text.starts_with("require(false,");
+}
+
 std::string solidityStringLiteral(llvm::StringRef Text) {
   std::string Result = "\"";
   for (char C : Text) {
@@ -365,8 +374,12 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
   StructuredTree Tree = Structurer->structure(Cfg);
   std::vector<std::string> Result = renderStructuredBody(Tree, Payloads);
 
-  Result.push_back(Payloads.empty() ? "// TODO: recover body"
-                                    : "// TODO: recover remaining body");
+  if (Payloads.empty()) {
+    return Result;
+  }
+  if (!Result.empty() && !isTerminalStatement(Result.back())) {
+    Result.push_back("// TODO: recover remaining body");
+  }
   return Result;
 }
 
