@@ -277,6 +277,74 @@ std::string llvmValueName(const llvm::Value &V, llvm::StringRef Prefix) {
   return Prefix.str();
 }
 
+std::optional<llvm::APInt> constantIntValue(const llvm::Value *V) {
+  if (const auto *Int = llvm::dyn_cast_or_null<llvm::ConstantInt>(V)) {
+    return Int->getValue();
+  }
+  return std::nullopt;
+}
+
+std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
+  if (const auto *Inst = llvm::dyn_cast_or_null<llvm::IntToPtrInst>(V)) {
+    return constantIntValue(Inst->getOperand(0));
+  }
+  if (const auto *Expr = llvm::dyn_cast_or_null<llvm::ConstantExpr>(V);
+      Expr != nullptr && Expr->getOpcode() == llvm::Instruction::IntToPtr &&
+      Expr->getNumOperands() == 1) {
+    return constantIntValue(Expr->getOperand(0));
+  }
+  return std::nullopt;
+}
+
+std::string formatInteger(const llvm::APInt &Value) {
+  llvm::SmallString<64> Text;
+  Value.toString(Text, 10, /*isSigned=*/false);
+  return Text.str().str();
+}
+
+std::string formatReturnValue(const llvm::Value &V) {
+  if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
+    return formatInteger(*Int);
+  }
+  return llvmValueName(V, "ret0");
+}
+
+std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (Callee == nullptr || Callee->getName() != "evm_return" ||
+      Call.arg_size() < 3) {
+    return std::nullopt;
+  }
+  std::optional<llvm::APInt> ReturnOffset =
+      constantIntValue(Call.getArgOperand(1));
+  std::optional<llvm::APInt> ReturnLength =
+      constantIntValue(Call.getArgOperand(2));
+  if (!ReturnOffset.has_value() || !ReturnLength.has_value() ||
+      *ReturnLength != 32) {
+    return std::nullopt;
+  }
+
+  // Solidity ABI returns a single static word by storing it in memory and
+  // returning that 32-byte range. Keep this first rule local to the same block.
+  for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
+                                                      Call.getParent()->begin();
+       It != Begin;) {
+    --It;
+    const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+    if (Store == nullptr) {
+      continue;
+    }
+    std::optional<llvm::APInt> StoreOffset =
+        constantIntToPtrValue(Store->getPointerOperand());
+    if (!StoreOffset.has_value() || *StoreOffset != *ReturnOffset) {
+      continue;
+    }
+    return "return " + formatReturnValue(*Store->getValueOperand()) + ";";
+  }
+
+  return std::nullopt;
+}
+
 } // namespace
 
 std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
@@ -295,6 +363,13 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
                 Payloads, "return " + llvmValueName(*Value, "ret") + ";"));
           }
           continue;
+        }
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
+          if (std::optional<std::string> Return =
+                  formatSingleWordReturn(*Call)) {
+            Out.push_back(addPayload(Payloads, *Return));
+            continue;
+          }
         }
         if (std::optional<std::string> Kind =
                 BodyBuilder::getStringMetadata(I, "notdec.solidity.revert")) {
