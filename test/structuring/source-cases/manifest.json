@@ -171,6 +171,15 @@
         "min_counts": {"switch": 1},
         "max_counts": {"goto": 0}
       }
+    },
+    {
+      "name": "switch_shared_return_tail",
+      "source": "cases/015_switch_shared_return_tail.c",
+      "oracle": {
+        "contains": ["switch (", "case 1:", "case 2:", "default:", "sink(", "return"],
+        "min_counts": {"switch": 1},
+        "max_counts": {"goto": 0}
+      }
     }
   ]
 }
