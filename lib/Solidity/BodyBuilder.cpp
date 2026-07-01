@@ -302,9 +302,29 @@ std::string formatInteger(const llvm::APInt &Value) {
   return Text.str().str();
 }
 
+std::optional<llvm::StringRef> binaryOperatorText(unsigned Opcode) {
+  switch (Opcode) {
+  case llvm::Instruction::Add:
+    return "+";
+  case llvm::Instruction::Sub:
+    return "-";
+  case llvm::Instruction::Mul:
+    return "*";
+  default:
+    return std::nullopt;
+  }
+}
+
 std::string formatReturnValue(const llvm::Value &V) {
   if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
     return formatInteger(*Int);
+  }
+  if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
+    if (std::optional<llvm::StringRef> Operator =
+            binaryOperatorText(Op->getOpcode())) {
+      return formatReturnValue(*Op->getOperand(0)) + " " + Operator->str() +
+             " " + formatReturnValue(*Op->getOperand(1));
+    }
   }
   return llvmValueName(V, "ret0");
 }
