@@ -491,8 +491,9 @@ std::string formatReturnValue(const llvm::Value &V,
                              ParenthesizeSamePrecedenceOperand);
   }
   if (const auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(&V)) {
-    if (Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ) {
-      // EVM bool conjunctions can be optimized to `(x | y) == 0`.
+    if (Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ ||
+        Cmp->getPredicate() == llvm::CmpInst::ICMP_NE) {
+      // EVM zero checks around OR represent all-zero / any-nonzero bools.
       const llvm::Value *Compared = nullptr;
       if (isZeroConstant(Cmp->getOperand(0))) {
         Compared = Cmp->getOperand(1);
@@ -501,14 +502,23 @@ std::string formatReturnValue(const llvm::Value &V,
       }
       const auto *Or = llvm::dyn_cast_or_null<llvm::BinaryOperator>(Compared);
       if (Or != nullptr && Or->getOpcode() == llvm::Instruction::Or) {
-        constexpr unsigned LogicalAndPrecedence = 2;
         constexpr unsigned EqualityPrecedence = 3;
-        std::string Text =
-            formatReturnValue(*Or->getOperand(0), EqualityPrecedence) +
-            " == 0 && " +
-            formatReturnValue(*Or->getOperand(1), EqualityPrecedence) +
-            " == 0";
-        if (needsParentheses(LogicalAndPrecedence, ParentPrecedence,
+        unsigned LogicalPrecedence = Cmp->getPredicate() ==
+                                             llvm::CmpInst::ICMP_EQ
+                                         ? 2
+                                         : 1;
+        llvm::StringRef CompareOp =
+            Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ ? "==" : "!=";
+        llvm::StringRef LogicalOp =
+            Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ ? "&&" : "||";
+        std::string Text = formatReturnValue(*Or->getOperand(0),
+                                             EqualityPrecedence) +
+                           " " + CompareOp.str() + " 0 " +
+                           LogicalOp.str() + " " +
+                           formatReturnValue(*Or->getOperand(1),
+                                             EqualityPrecedence) +
+                           " " + CompareOp.str() + " 0";
+        if (needsParentheses(LogicalPrecedence, ParentPrecedence,
                              ParenthesizeSamePrecedenceOperand)) {
           return "(" + Text + ")";
         }
