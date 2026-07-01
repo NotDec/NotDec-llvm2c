@@ -48,13 +48,13 @@ bool isAbiBoolWord(const llvm::Value *V) {
   return Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1);
 }
 
-bool isSignedArithmeticWord(const llvm::Value *V) {
+bool isSignedResultWord(const llvm::Value *V) {
   const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(V);
   if (Call == nullptr || Call->getCalledFunction() == nullptr) {
     return false;
   }
   llvm::StringRef Name = Call->getCalledFunction()->getName();
-  return Name == "evm_sdiv" || Name == "evm_smod";
+  return Name == "evm_sdiv" || Name == "evm_smod" || Name == "evm_sar";
 }
 
 const llvm::Value *findStoredReturnValue(const llvm::CallBase &Call,
@@ -110,7 +110,7 @@ bool returnsSingleBoolWord(const llvm::Function &F) {
   return SawReturn;
 }
 
-bool returnsSingleSignedArithmeticWord(const llvm::Function &F) {
+bool returnsSingleSignedResultWord(const llvm::Function &F) {
   bool SawReturn = false;
   for (const llvm::BasicBlock &BB : F) {
     for (const llvm::Instruction &I : BB) {
@@ -132,10 +132,10 @@ bool returnsSingleSignedArithmeticWord(const llvm::Function &F) {
         return false;
       }
 
-      // SDIV/SMOD come from signed Solidity integer arithmetic. Keep the printable
-      // return type signed when this is the value ABI-encoded into the word.
+      // Signed EVM helpers come from signed Solidity operations. Keep the
+      // printable return type signed when this value is ABI-encoded.
       const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
-      if (!isSignedArithmeticWord(Stored)) {
+      if (!isSignedResultWord(Stored)) {
         return false;
       }
       SawReturn = true;
@@ -303,7 +303,7 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
   std::string ReturnType = "uint256";
   if (Count == 1 && returnsSingleBoolWord(F)) {
     ReturnType = "bool";
-  } else if (Count == 1 && returnsSingleSignedArithmeticWord(F)) {
+  } else if (Count == 1 && returnsSingleSignedResultWord(F)) {
     ReturnType = "int256";
   }
   for (std::uint64_t I = 0; I < Count; ++I) {
