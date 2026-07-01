@@ -313,6 +313,9 @@ std::optional<std::string> evmEnvBuiltinName(llvm::StringRef Name) {
   if (Name == "evm_blobbasefee") {
     return "block.blobbasefee";
   }
+  if (Name == "evm_gas") {
+    return "gasleft()";
+  }
   if (Name == "evm_caller") {
     return "msg.sender";
   }
