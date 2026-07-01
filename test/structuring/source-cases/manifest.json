@@ -133,11 +133,13 @@
       "source": "cases/012_switch_continue_latch.c",
       "xfail": true,
       "xfail_exact": [
-        "missing pattern '^\\\\s+sink\\\\('"
+        "missing pattern '^\\\\s+sink\\\\('",
+        "unexpected pattern 'default:"
       ],
       "oracle": {
         "contains": ["switch (", "case 0:", "case 1:", "sink(", "return"],
         "regex_contains": ["^\\s+sink\\("],
+        "regex_absent": ["default:\\n\\s*\\{\\n\\s*continue;\\n\\s*\\}"],
         "min_counts": {"switch": 1, "while": 1},
         "max_counts": {"goto": 0, "while": 1}
       }
