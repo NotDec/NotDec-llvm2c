@@ -289,6 +289,11 @@ bool isAllOnesConstant(const llvm::Value *V) {
   return Int.has_value() && Int->isAllOnes();
 }
 
+bool isZeroConstant(const llvm::Value *V) {
+  std::optional<llvm::APInt> Int = constantIntValue(V);
+  return Int.has_value() && Int->isZero();
+}
+
 std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
   if (const auto *Inst = llvm::dyn_cast_or_null<llvm::IntToPtrInst>(V)) {
     return constantIntValue(Inst->getOperand(0));
@@ -464,6 +469,30 @@ std::string formatReturnValue(const llvm::Value &V,
                              ParenthesizeSamePrecedenceOperand);
   }
   if (const auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(&V)) {
+    if (Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ) {
+      // EVM bool conjunctions can be optimized to `(x | y) == 0`.
+      const llvm::Value *Compared = nullptr;
+      if (isZeroConstant(Cmp->getOperand(0))) {
+        Compared = Cmp->getOperand(1);
+      } else if (isZeroConstant(Cmp->getOperand(1))) {
+        Compared = Cmp->getOperand(0);
+      }
+      const auto *Or = llvm::dyn_cast_or_null<llvm::BinaryOperator>(Compared);
+      if (Or != nullptr && Or->getOpcode() == llvm::Instruction::Or) {
+        constexpr unsigned LogicalAndPrecedence = 2;
+        constexpr unsigned EqualityPrecedence = 3;
+        std::string Text =
+            formatReturnValue(*Or->getOperand(0), EqualityPrecedence) +
+            " == 0 && " +
+            formatReturnValue(*Or->getOperand(1), EqualityPrecedence) +
+            " == 0";
+        if (needsParentheses(LogicalAndPrecedence, ParentPrecedence,
+                             ParenthesizeSamePrecedenceOperand)) {
+          return "(" + Text + ")";
+        }
+        return Text;
+      }
+    }
     if (std::optional<llvm::StringRef> Operator =
             icmpPredicateText(Cmp->getPredicate())) {
       unsigned Precedence = icmpPredicatePrecedence(Cmp->getPredicate());
