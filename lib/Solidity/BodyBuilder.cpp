@@ -341,6 +341,9 @@ std::optional<llvm::StringRef> evmShiftOperatorText(llvm::StringRef Name) {
   if (Name == "evm_shl") {
     return "<<";
   }
+  if (Name == "evm_shr") {
+    return ">>";
+  }
   return std::nullopt;
 }
 
