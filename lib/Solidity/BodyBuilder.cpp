@@ -327,6 +327,13 @@ std::optional<unsigned> binaryOperatorPrecedence(unsigned Opcode) {
   }
 }
 
+std::optional<llvm::StringRef> evmBinaryOperatorText(llvm::StringRef Name) {
+  if (Name == "evm_div") {
+    return "/";
+  }
+  return std::nullopt;
+}
+
 bool needsParentheses(unsigned ChildPrecedence, unsigned ParentPrecedence,
                       unsigned ParentOpcode, bool IsRightOperand) {
   if (ChildPrecedence < ParentPrecedence) {
@@ -358,6 +365,25 @@ std::string formatReturnValue(const llvm::Value &V,
         return "(" + Text + ")";
       }
       return Text;
+    }
+  }
+  if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
+    const llvm::Function *Callee = Call->getCalledFunction();
+    if (Callee != nullptr && Call->arg_size() == 2) {
+      if (std::optional<llvm::StringRef> Operator =
+              evmBinaryOperatorText(Callee->getName())) {
+        constexpr unsigned Precedence = 20;
+        std::string Text = formatReturnValue(*Call->getArgOperand(0),
+                                             Precedence) +
+                           " " + Operator->str() + " " +
+                           formatReturnValue(*Call->getArgOperand(1),
+                                             Precedence);
+        if (needsParentheses(Precedence, ParentPrecedence, ParentOpcode,
+                             IsRightOperand)) {
+          return "(" + Text + ")";
+        }
+        return Text;
+      }
     }
   }
   return llvmValueName(V, "ret0");
