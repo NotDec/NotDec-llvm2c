@@ -80,11 +80,6 @@
     {
       "name": "nested_loop_break_continue",
       "source": "cases/007_nested_loop_break_continue.c",
-      "xfail": true,
-      "xfail_exact": [
-        "missing pattern '^\\\\s+sink\\\\('",
-        "expected goto<=0"
-      ],
       "oracle": {
         "contains": ["while (", "break;", "continue;", "sink("],
         "regex_contains": ["^\\s+sink\\("],

@@ -2855,6 +2855,17 @@ bool regionAlreadyStructured(const MutableRegionGraph &Graph,
   return false;
 }
 
+bool regionContainsSwitchTerminator(const StructuredCFG &Cfg,
+                                    const Region &R) {
+  for (BlockId Id : R.Blocks) {
+    const CFGBlock *Block = Cfg.getBlock(Id);
+    if (Block != nullptr && Block->Terminator == TerminatorKind::Switch) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool collectNaturalLoopMembers(const MutableRegionGraph &Graph,
                                const MutableRegionGraphAnalysis &Analysis,
                                GraphNodeId HeadId, GraphNodeId LatchId,
@@ -3603,9 +3614,17 @@ bool reduceGraphNaturalLoopOnce(const StructuredCFG &Cfg, const Region &R,
                                 MutableRegionGraph &Graph,
                                 StructuredTree &Tree, RegionOverlay *Overlay) {
   MutableRegionGraphAnalysis Analysis = Graph.analyze();
+  bool HasSwitchTerminator = regionContainsSwitchTerminator(Cfg, R);
   for (GraphNodeId HeadId : Graph.activeNodes()) {
     const MutableRegionNode *Head = Graph.getNode(HeadId);
     if (Head == nullptr || Head->Blocks.empty()) {
+      continue;
+    }
+    if (R.Kind == RegionKind::NaturalLoop && Head->Blocks.front() != R.Head &&
+        !HasSwitchTerminator) {
+      // Child loops have already been handled by the overlay recursion. Inside
+      // a non-switch natural-loop region, reducing a different head can invert
+      // the parent loop and hide the real latch body.
       continue;
     }
 
