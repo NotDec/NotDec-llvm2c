@@ -310,6 +310,8 @@ std::optional<llvm::StringRef> binaryOperatorText(unsigned Opcode) {
     return "-";
   case llvm::Instruction::Mul:
     return "*";
+  case llvm::Instruction::And:
+    return "&";
   default:
     return std::nullopt;
   }
@@ -322,6 +324,8 @@ std::optional<unsigned> binaryOperatorPrecedence(unsigned Opcode) {
     return 10;
   case llvm::Instruction::Mul:
     return 20;
+  case llvm::Instruction::And:
+    return 7;
   default:
     return std::nullopt;
   }
