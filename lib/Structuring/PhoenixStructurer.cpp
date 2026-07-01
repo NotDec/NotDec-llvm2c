@@ -566,11 +566,19 @@ bool reduceSwitchOnce(const StructuredCFG &Cfg, MutableRegionGraph &Graph,
         continue;
       }
       const MutableRegionNode *Target = Graph.getNode(TargetId);
+      const CFGBlock *TargetTail =
+          Target == nullptr ? nullptr : Cfg.getBlock(Target->TailBlock);
+      bool TargetIsTerminal =
+          TargetTail != nullptr &&
+          (TargetTail->Terminator == TerminatorKind::Return ||
+           TargetTail->Terminator == TerminatorKind::Unreachable);
       if (Target == nullptr || Target->Preds.size() != 1 ||
           Target->Preds[0] != HeaderId ||
           (HasTerminalCasesOnly
                ? !Target->Succs.empty()
-               : (Target->Succs.size() != 1 || Target->Succs[0] != FollowId))) {
+               : (!TargetIsTerminal &&
+                  (Target->Succs.size() != 1 ||
+                   Target->Succs[0] != FollowId)))) {
         Valid = false;
         break;
       }

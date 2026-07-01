@@ -162,10 +162,6 @@
     {
       "name": "switch_early_return",
       "source": "cases/014_switch_early_return.c",
-      "xfail": true,
-      "xfail_exact": [
-        "expected goto<=0"
-      ],
       "oracle": {
         "contains": ["switch (", "case 0:", "case 1:", "case 2:", "default:", "return", "sink("],
         "min_counts": {"switch": 1},
