@@ -326,6 +326,40 @@ std::optional<llvm::StringRef> binaryOperatorText(unsigned Opcode) {
   }
 }
 
+std::optional<llvm::StringRef>
+icmpPredicateText(llvm::CmpInst::Predicate Predicate) {
+  switch (Predicate) {
+  case llvm::CmpInst::ICMP_EQ:
+    return "==";
+  case llvm::CmpInst::ICMP_NE:
+    return "!=";
+  case llvm::CmpInst::ICMP_ULT:
+  case llvm::CmpInst::ICMP_SLT:
+    return "<";
+  case llvm::CmpInst::ICMP_ULE:
+  case llvm::CmpInst::ICMP_SLE:
+    return "<=";
+  case llvm::CmpInst::ICMP_UGT:
+  case llvm::CmpInst::ICMP_SGT:
+    return ">";
+  case llvm::CmpInst::ICMP_UGE:
+  case llvm::CmpInst::ICMP_SGE:
+    return ">=";
+  default:
+    return std::nullopt;
+  }
+}
+
+unsigned icmpPredicatePrecedence(llvm::CmpInst::Predicate Predicate) {
+  switch (Predicate) {
+  case llvm::CmpInst::ICMP_EQ:
+  case llvm::CmpInst::ICMP_NE:
+    return 3;
+  default:
+    return 4;
+  }
+}
+
 std::optional<unsigned> binaryOperatorPrecedence(unsigned Opcode) {
   switch (Opcode) {
   case llvm::Instruction::Add:
@@ -422,6 +456,29 @@ std::string formatReturnValue(const llvm::Value &V,
                               bool ParenthesizeSamePrecedenceOperand = false) {
   if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
     return formatInteger(*Int);
+  }
+  if (const auto *Cast = llvm::dyn_cast<llvm::ZExtInst>(&V);
+      Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1)) {
+    return formatReturnValue(*Cast->getOperand(0), ParentPrecedence,
+                             IsRightOperand,
+                             ParenthesizeSamePrecedenceOperand);
+  }
+  if (const auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(&V)) {
+    if (std::optional<llvm::StringRef> Operator =
+            icmpPredicateText(Cmp->getPredicate())) {
+      unsigned Precedence = icmpPredicatePrecedence(Cmp->getPredicate());
+      std::string Text =
+          formatReturnValue(*Cmp->getOperand(0), Precedence) + " " +
+          Operator->str() + " " +
+          formatReturnValue(*Cmp->getOperand(1), Precedence,
+                            /*IsRightOperand=*/true,
+                            /*ParenthesizeSamePrecedenceOperand=*/true);
+      if (needsParentheses(Precedence, ParentPrecedence,
+                           ParenthesizeSamePrecedenceOperand)) {
+        return "(" + Text + ")";
+      }
+      return Text;
+    }
   }
   if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
     if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {

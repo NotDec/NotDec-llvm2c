@@ -16,6 +16,93 @@
 
 namespace notdec::backend::solidity {
 
+namespace {
+
+std::optional<llvm::APInt> constantIntValue(const llvm::Value *V) {
+  if (const auto *Int = llvm::dyn_cast_or_null<llvm::ConstantInt>(V)) {
+    return Int->getValue();
+  }
+  return std::nullopt;
+}
+
+std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
+  if (const auto *Inst = llvm::dyn_cast_or_null<llvm::IntToPtrInst>(V)) {
+    return constantIntValue(Inst->getOperand(0));
+  }
+  if (const auto *Expr = llvm::dyn_cast_or_null<llvm::ConstantExpr>(V);
+      Expr != nullptr && Expr->getOpcode() == llvm::Instruction::IntToPtr &&
+      Expr->getNumOperands() == 1) {
+    return constantIntValue(Expr->getOperand(0));
+  }
+  return std::nullopt;
+}
+
+bool isAbiBoolWord(const llvm::Value *V) {
+  if (V == nullptr) {
+    return false;
+  }
+  if (V->getType()->isIntegerTy(1)) {
+    return true;
+  }
+  const auto *Cast = llvm::dyn_cast<llvm::ZExtInst>(V);
+  return Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1);
+}
+
+const llvm::Value *findStoredReturnValue(const llvm::CallBase &Call,
+                                         const llvm::APInt &ReturnOffset) {
+  for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
+                                                      Call.getParent()->begin();
+       It != Begin;) {
+    --It;
+    const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+    if (Store == nullptr) {
+      continue;
+    }
+    std::optional<llvm::APInt> StoreOffset =
+        constantIntToPtrValue(Store->getPointerOperand());
+    if (StoreOffset.has_value() && *StoreOffset == ReturnOffset) {
+      return Store->getValueOperand();
+    }
+  }
+  return nullptr;
+}
+
+bool returnsSingleBoolWord(const llvm::Function &F) {
+  bool SawReturn = false;
+  for (const llvm::BasicBlock &BB : F) {
+    for (const llvm::Instruction &I : BB) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (Call == nullptr) {
+        continue;
+      }
+      const llvm::Function *Callee = Call->getCalledFunction();
+      if (Callee == nullptr || Callee->getName() != "evm_return" ||
+          Call->arg_size() < 3) {
+        continue;
+      }
+      std::optional<llvm::APInt> ReturnOffset =
+          constantIntValue(Call->getArgOperand(1));
+      std::optional<llvm::APInt> ReturnLength =
+          constantIntValue(Call->getArgOperand(2));
+      if (!ReturnOffset.has_value() || !ReturnLength.has_value() ||
+          *ReturnLength != 32) {
+        return false;
+      }
+
+      // A Solidity bool is ABI-encoded as one 32-byte word whose value is
+      // produced from an i1 comparison result.
+      const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
+      if (!isAbiBoolWord(Stored)) {
+        return false;
+      }
+      SawReturn = true;
+    }
+  }
+  return SawReturn;
+}
+
+} // namespace
+
 SourceUnit Reader::read(const llvm::Module &M,
                         const ::notdec::llvm2c::HTypeResult *HT) {
   SourceUnit Unit;
@@ -170,8 +257,10 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
     return Result;
   }
   std::uint64_t Count = *StaticReturnBytes / 32;
+  std::string ReturnType =
+      Count == 1 && returnsSingleBoolWord(F) ? "bool" : "uint256";
   for (std::uint64_t I = 0; I < Count; ++I) {
-    Result.push_back(Parameter{TypeRef{"uint256"},
+    Result.push_back(Parameter{TypeRef{ReturnType},
                                "ret" + std::to_string(I)});
   }
   return Result;
