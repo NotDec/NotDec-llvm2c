@@ -284,6 +284,11 @@ std::optional<llvm::APInt> constantIntValue(const llvm::Value *V) {
   return std::nullopt;
 }
 
+bool isAllOnesConstant(const llvm::Value *V) {
+  std::optional<llvm::APInt> Int = constantIntValue(V);
+  return Int.has_value() && Int->isAllOnes();
+}
+
 std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
   if (const auto *Inst = llvm::dyn_cast_or_null<llvm::IntToPtrInst>(V)) {
     return constantIntValue(Inst->getOperand(0));
@@ -359,6 +364,19 @@ std::optional<llvm::StringRef> evmShiftOperatorText(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+const llvm::Value *bitwiseNotOperand(const llvm::BinaryOperator &Op) {
+  if (Op.getOpcode() != llvm::Instruction::Xor) {
+    return nullptr;
+  }
+  if (isAllOnesConstant(Op.getOperand(0))) {
+    return Op.getOperand(1);
+  }
+  if (isAllOnesConstant(Op.getOperand(1))) {
+    return Op.getOperand(0);
+  }
+  return nullptr;
+}
+
 bool needsParentheses(unsigned ChildPrecedence, unsigned ParentPrecedence,
                       unsigned ParentOpcode, bool IsRightOperand) {
   if (ChildPrecedence < ParentPrecedence) {
@@ -376,6 +394,14 @@ std::string formatReturnValue(const llvm::Value &V,
     return formatInteger(*Int);
   }
   if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
+    if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {
+      constexpr unsigned Precedence = 30;
+      std::string Text = "~" + formatReturnValue(*Operand, Precedence);
+      if (Precedence < ParentPrecedence) {
+        return "(" + Text + ")";
+      }
+      return Text;
+    }
     if (std::optional<llvm::StringRef> Operator =
             binaryOperatorText(Op->getOpcode())) {
       unsigned Precedence = *binaryOperatorPrecedence(Op->getOpcode());
