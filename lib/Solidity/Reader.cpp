@@ -6,6 +6,7 @@
 #include <cctype>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <llvm/ADT/StringRef.h>
@@ -105,7 +106,7 @@ void Reader::readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
     }
     Names.push_back(UniqueName);
     StateVariable Var;
-    Var.Type = TypePrinter::formatType(Field.Type);
+    Var.Type = TypeRef{TypePrinter::formatType(Field.Type)};
     Var.Name = UniqueName;
     Var.Visibility = "public";
     Result.StateVariables.push_back(std::move(Var));
@@ -128,8 +129,12 @@ Function Reader::readFunction(const llvm::Function &F) {
   return Result;
 }
 
-std::vector<std::string> Reader::readBody(const llvm::Function &F) {
-  return BodyBuilder::readBody(F);
+Block Reader::readBody(const llvm::Function &F) {
+  Block Result;
+  for (std::string Text : BodyBuilder::readBody(F)) {
+    Result.Statements.push_back(RawStatement{std::move(Text)});
+  }
+  return Result;
 }
 
 std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
@@ -166,7 +171,8 @@ std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
   }
   std::uint64_t Count = *StaticReturnBytes / 32;
   for (std::uint64_t I = 0; I < Count; ++I) {
-    Result.push_back(Parameter{"uint256", "ret" + std::to_string(I)});
+    Result.push_back(Parameter{TypeRef{"uint256"},
+                               "ret" + std::to_string(I)});
   }
   return Result;
 }
@@ -231,7 +237,7 @@ std::vector<Parameter> Reader::parseAbiParameters(llvm::StringRef Encoded) {
     if (!isKnownAbiType(Part)) {
       continue;
     }
-    Result.push_back(Parameter{Part.str(),
+    Result.push_back(Parameter{TypeRef{Part.str()},
                                "arg" + std::to_string(Result.size())});
   }
   return Result;

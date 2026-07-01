@@ -21,7 +21,11 @@ private:
   void printEvent(const EventDecl &Event);
   void printStateVariable(const StateVariable &Var);
   void printFunction(const Function &Func);
+  void printBlock(const Block &Block);
+  void printStatement(const Statement &Stmt);
+  void printRawStatement(const RawStatement &Stmt);
   void printParameters(const std::vector<Parameter> &Params);
+  void printType(const TypeRef &Type);
   void printIndent();
 };
 

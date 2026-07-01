@@ -39,7 +39,7 @@ void Printer::printContract(const Contract &Contract) {
 
 void Printer::printStateVariable(const StateVariable &Var) {
   printIndent();
-  OS << Var.Type;
+  printType(Var.Type);
   if (!Var.Visibility.empty()) {
     OS << " " << Var.Visibility;
   }
@@ -72,14 +72,26 @@ void Printer::printFunction(const Function &Func) {
     printIndent();
     OS << "return slot_0;\n";
   } else {
-    for (const auto &Stmt : Func.Body) {
-      printIndent();
-      OS << Stmt << "\n";
-    }
+    printBlock(Func.Body);
   }
   --Indent;
   printIndent();
   OS << "}\n";
+}
+
+void Printer::printBlock(const Block &Block) {
+  for (const Statement &Stmt : Block.Statements) {
+    printStatement(Stmt);
+  }
+}
+
+void Printer::printStatement(const Statement &Stmt) {
+  std::visit([this](const auto &Node) { printRawStatement(Node); }, Stmt);
+}
+
+void Printer::printRawStatement(const RawStatement &Stmt) {
+  printIndent();
+  OS << Stmt.Text << "\n";
 }
 
 void Printer::printParameters(const std::vector<Parameter> &Params) {
@@ -87,12 +99,14 @@ void Printer::printParameters(const std::vector<Parameter> &Params) {
     if (I != 0) {
       OS << ", ";
     }
-    OS << Params[I].Type;
+    printType(Params[I].Type);
     if (!Params[I].Name.empty()) {
       OS << " " << Params[I].Name;
     }
   }
 }
+
+void Printer::printType(const TypeRef &Type) { OS << Type.Name; }
 
 void Printer::printIndent() {
   for (unsigned I = 0; I < Indent; ++I) {

@@ -21,7 +21,7 @@ private:
                                  Contract &Result);
   static bool isPublicEntryFunction(const llvm::Function &F);
   static Function readFunction(const llvm::Function &F);
-  static std::vector<std::string> readBody(const llvm::Function &F);
+  static Block readBody(const llvm::Function &F);
   static std::vector<Parameter> readReturns(const llvm::Function &F);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,
                                          Function &Result);
