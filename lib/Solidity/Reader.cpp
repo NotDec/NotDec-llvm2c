@@ -59,6 +59,49 @@ std::vector<Parameter> eventTopicParameters(const llvm::CallBase &Call) {
   return Params;
 }
 
+bool isFreeMemoryPointerInit(const llvm::Instruction &I) {
+  const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I);
+  if (Store == nullptr) {
+    return false;
+  }
+  std::optional<llvm::APInt> Pointer =
+      constantIntToPtrValue(Store->getPointerOperand());
+  std::optional<llvm::APInt> Value = constantIntValue(Store->getValueOperand());
+  return Pointer.has_value() && Value.has_value() && *Pointer == 64 &&
+         *Value == 128;
+}
+
+bool isDemoteSSAAllocaPoint(const llvm::Instruction &I) {
+  return llvm::isa<llvm::BitCastInst>(I) &&
+         I.getName() == "reg2mem alloca point";
+}
+
+bool isEmptyPayableFallbackSelector(const llvm::Function &F) {
+  if (F.isDeclaration() ||
+      !F.getName().starts_with("public___function_selector")) {
+    return false;
+  }
+  if (F.size() != 1) {
+    return false;
+  }
+
+  bool SawMemoryInit = false;
+  for (const llvm::Instruction &I : F.front()) {
+    if (llvm::isa<llvm::ReturnInst>(I)) {
+      continue;
+    }
+    if (isDemoteSSAAllocaPoint(I)) {
+      continue;
+    }
+    if (isFreeMemoryPointerInit(I)) {
+      SawMemoryInit = true;
+      continue;
+    }
+    return false;
+  }
+  return SawMemoryInit;
+}
+
 bool isAbiBoolWord(const llvm::Value *V) {
   if (V == nullptr) {
     return false;
@@ -197,9 +240,19 @@ Contract Reader::readContract(const llvm::Module &M,
   }
 
   std::vector<const llvm::Function *> PublicFunctions;
+  const llvm::Function *EmptyPayableFallback = nullptr;
+  bool MultipleEmptyPayableFallbacks = false;
   for (const llvm::Function &F : M.functions()) {
     if (isPublicEntryFunction(F)) {
       PublicFunctions.push_back(&F);
+      continue;
+    }
+    if (isEmptyPayableFallbackSelector(F)) {
+      if (EmptyPayableFallback != nullptr) {
+        MultipleEmptyPayableFallbacks = true;
+      } else {
+        EmptyPayableFallback = &F;
+      }
     }
   }
   std::sort(PublicFunctions.begin(), PublicFunctions.end(),
@@ -209,6 +262,13 @@ Contract Reader::readContract(const llvm::Module &M,
 
   for (const llvm::Function *F : PublicFunctions) {
     Result.Functions.push_back(readFunction(*F));
+  }
+  if (PublicFunctions.empty() && EmptyPayableFallback != nullptr &&
+      !MultipleEmptyPayableFallbacks) {
+    Function Fallback;
+    Fallback.Name = "fallback";
+    Fallback.Visibility = "public payable";
+    Result.Functions.push_back(std::move(Fallback));
   }
 
   return Result;
