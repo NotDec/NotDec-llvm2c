@@ -851,6 +851,29 @@ private:
     return false;
   }
 
+  static bool isRenderedContinue(const clang::Stmt *Stmt) {
+    if (Stmt == nullptr) {
+      return false;
+    }
+    if (llvm::isa<clang::ContinueStmt>(Stmt)) {
+      return true;
+    }
+    if (const auto *Compound = llvm::dyn_cast<clang::CompoundStmt>(Stmt)) {
+      return !Compound->body_empty() &&
+             isRenderedContinue(Compound->body_back());
+    }
+    if (const auto *If = llvm::dyn_cast<clang::IfStmt>(Stmt)) {
+      return isRenderedContinue(If->getThen()) &&
+             isRenderedContinue(If->getElse());
+    }
+    return false;
+  }
+
+  static bool isTrueLiteral(const clang::Expr *Expr) {
+    const auto *Literal = llvm::dyn_cast_or_null<clang::IntegerLiteral>(Expr);
+    return Literal != nullptr && Literal->getValue().isOne();
+  }
+
   static clang::GotoStmt *singleGotoStmt(clang::Stmt *Stmt) {
     if (auto *Goto = llvm::dyn_cast_or_null<clang::GotoStmt>(Stmt)) {
       return Goto;
@@ -860,6 +883,15 @@ private:
       return nullptr;
     }
     return llvm::dyn_cast_or_null<clang::GotoStmt>(Compound->body_front());
+  }
+
+  static bool singleContinueStmt(const clang::Stmt *Stmt) {
+    if (llvm::isa_and_nonnull<clang::ContinueStmt>(Stmt)) {
+      return true;
+    }
+    const auto *Compound = llvm::dyn_cast_or_null<clang::CompoundStmt>(Stmt);
+    return Compound != nullptr && Compound->size() == 1 &&
+           llvm::isa<clang::ContinueStmt>(Compound->body_front());
   }
 
   static bool stmtContainsLabel(const clang::Stmt *Stmt,
@@ -878,6 +910,55 @@ private:
       }
     }
     return false;
+  }
+
+  static bool stmtContainsAnyLabel(const clang::Stmt *Stmt) {
+    if (Stmt == nullptr) {
+      return false;
+    }
+    if (llvm::isa<clang::LabelStmt>(Stmt)) {
+      return true;
+    }
+    for (const clang::Stmt *Child : Stmt->children()) {
+      if (stmtContainsAnyLabel(Child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void collectSingleContinueCases(
+      clang::Stmt *Stmt, std::vector<clang::SwitchCase *> &Cases) {
+    if (Stmt == nullptr) {
+      return;
+    }
+    if (auto *Case = llvm::dyn_cast<clang::CaseStmt>(Stmt)) {
+      if (singleContinueStmt(Case->getSubStmt())) {
+        Cases.push_back(Case);
+      } else {
+        collectSingleContinueCases(Case->getSubStmt(), Cases);
+      }
+      return;
+    }
+    if (auto *Default = llvm::dyn_cast<clang::DefaultStmt>(Stmt)) {
+      if (singleContinueStmt(Default->getSubStmt())) {
+        Cases.push_back(Default);
+      } else {
+        collectSingleContinueCases(Default->getSubStmt(), Cases);
+      }
+      return;
+    }
+    for (clang::Stmt *Child : Stmt->children()) {
+      collectSingleContinueCases(Child, Cases);
+    }
+  }
+
+  void setSwitchCaseBody(clang::SwitchCase *Case, clang::Stmt *Body) {
+    if (auto *CaseStmt = llvm::dyn_cast<clang::CaseStmt>(Case)) {
+      CaseStmt->setSubStmt(Body);
+      return;
+    }
+    llvm::cast<clang::DefaultStmt>(Case)->setSubStmt(Body);
   }
 
   // SAILR can leave a forward label inside the following loop body. When the
@@ -909,6 +990,65 @@ private:
     return false;
   }
 
+  // A loop-header switch can render as an inner while whose case-local latch
+  // sits immediately after the switch. Move that latch into the only continue
+  // case, then let the outer loop own the real iteration.
+  bool foldSwitchContinueLatchIntoCase(std::vector<clang::Stmt *> &Stmts) {
+    for (unsigned Index = 0; Index < Stmts.size(); ++Index) {
+      auto *While = llvm::dyn_cast_or_null<clang::WhileStmt>(Stmts[Index]);
+      if (While == nullptr || !isTrueLiteral(While->getCond())) {
+        continue;
+      }
+      auto *Body = llvm::dyn_cast_or_null<clang::CompoundStmt>(While->getBody());
+      if (Body == nullptr || Body->size() < 2) {
+        continue;
+      }
+
+      std::vector<clang::Stmt *> BodyStmts(Body->body_begin(),
+                                           Body->body_end());
+      for (unsigned SwitchIndex = 0; SwitchIndex + 1 < BodyStmts.size();
+           ++SwitchIndex) {
+        auto *Switch =
+            llvm::dyn_cast_or_null<clang::SwitchStmt>(BodyStmts[SwitchIndex]);
+        if (Switch == nullptr) {
+          continue;
+        }
+
+        std::vector<clang::Stmt *> Tail(BodyStmts.begin() + SwitchIndex + 1,
+                                        BodyStmts.end());
+        if (Tail.empty() || !isRenderedContinue(Tail.back())) {
+          continue;
+        }
+        bool HasLabel = false;
+        for (clang::Stmt *TailStmt : Tail) {
+          HasLabel |= stmtContainsAnyLabel(TailStmt);
+        }
+        if (HasLabel) {
+          continue;
+        }
+
+        std::vector<clang::SwitchCase *> ContinueCases;
+        collectSingleContinueCases(Switch->getBody(), ContinueCases);
+        if (ContinueCases.size() != 1) {
+          continue;
+        }
+
+        auto *MovedTail = clang::CompoundStmt::Create(
+            Ctx, Tail, clang::FPOptionsOverride(), clang::SourceLocation(),
+            clang::SourceLocation());
+        setSwitchCaseBody(ContinueCases.front(), MovedTail);
+
+        std::vector<clang::Stmt *> Replacement(
+            BodyStmts.begin(), BodyStmts.begin() + SwitchIndex + 1);
+        Stmts.erase(Stmts.begin() + Index);
+        Stmts.insert(Stmts.begin() + Index, Replacement.begin(),
+                     Replacement.end());
+        return true;
+      }
+    }
+    return false;
+  }
+
   static void dropUnreachableRenderedStmts(std::vector<clang::Stmt *> &Stmts) {
     std::vector<clang::Stmt *> Filtered;
     Filtered.reserve(Stmts.size());
@@ -928,6 +1068,8 @@ private:
     std::vector<clang::Stmt *> Stmts;
     renderNode(Tree, Id, Stmts, Context);
     while (foldGuardedGotoOverReturn(Stmts)) {
+    }
+    while (foldSwitchContinueLatchIntoCase(Stmts)) {
     }
     dropUnreachableRenderedStmts(Stmts);
     return clang::CompoundStmt::Create(Ctx, Stmts, clang::FPOptionsOverride(),

@@ -102,10 +102,6 @@
     {
       "name": "loop_switch_latch",
       "source": "cases/009_loop_switch_latch.c",
-      "xfail": true,
-      "xfail_exact": [
-        "expected while<=1"
-      ],
       "oracle": {
         "contains": ["switch (", "case 0:", "case 1:", "return"],
         "min_counts": {"switch": 1, "while": 1},
