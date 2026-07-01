@@ -811,10 +811,24 @@ private:
   }
 
   static bool isRenderedTransfer(const clang::Stmt *Stmt) {
-    return llvm::isa_and_nonnull<clang::GotoStmt>(Stmt) ||
-           llvm::isa_and_nonnull<clang::BreakStmt>(Stmt) ||
-           llvm::isa_and_nonnull<clang::ContinueStmt>(Stmt) ||
-           llvm::isa_and_nonnull<clang::ReturnStmt>(Stmt);
+    if (Stmt == nullptr) {
+      return false;
+    }
+    if (llvm::isa<clang::GotoStmt>(Stmt) ||
+        llvm::isa<clang::BreakStmt>(Stmt) ||
+        llvm::isa<clang::ContinueStmt>(Stmt) ||
+        llvm::isa<clang::ReturnStmt>(Stmt)) {
+      return true;
+    }
+    if (const auto *Compound = llvm::dyn_cast<clang::CompoundStmt>(Stmt)) {
+      return !Compound->body_empty() &&
+             isRenderedTransfer(Compound->body_back());
+    }
+    if (const auto *If = llvm::dyn_cast<clang::IfStmt>(Stmt)) {
+      return isRenderedTransfer(If->getThen()) &&
+             isRenderedTransfer(If->getElse());
+    }
+    return false;
   }
 
   static void dropUnreachableRenderedStmts(std::vector<clang::Stmt *> &Stmts) {
