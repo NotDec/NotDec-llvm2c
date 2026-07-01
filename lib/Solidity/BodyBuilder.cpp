@@ -374,6 +374,13 @@ std::optional<llvm::StringRef> evmShiftOperatorText(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+std::optional<llvm::StringRef> evmTernaryBuiltinName(llvm::StringRef Name) {
+  if (Name == "evm_addmod") {
+    return "addmod";
+  }
+  return std::nullopt;
+}
+
 const llvm::Value *bitwiseNotOperand(const llvm::BinaryOperator &Op) {
   if (Op.getOpcode() != llvm::Instruction::Xor) {
     return nullptr;
@@ -444,6 +451,22 @@ std::string formatReturnValue(const llvm::Value &V,
   }
   if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
     const llvm::Function *Callee = Call->getCalledFunction();
+    if (Callee != nullptr && Call->arg_size() == 3) {
+      if (std::optional<llvm::StringRef> Builtin =
+              evmTernaryBuiltinName(Callee->getName())) {
+        constexpr unsigned Precedence = 30;
+        std::string Text =
+            Builtin->str() + "(" +
+            formatReturnValue(*Call->getArgOperand(0)) + ", " +
+            formatReturnValue(*Call->getArgOperand(1)) + ", " +
+            formatReturnValue(*Call->getArgOperand(2)) + ")";
+        if (needsParentheses(Precedence, ParentPrecedence,
+                             ParenthesizeSamePrecedenceOperand)) {
+          return "(" + Text + ")";
+        }
+        return Text;
+      }
+    }
     if (Callee != nullptr && Call->arg_size() == 2) {
       if (std::optional<llvm::StringRef> Operator =
               evmShiftOperatorText(Callee->getName())) {
