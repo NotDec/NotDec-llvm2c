@@ -718,8 +718,6 @@ void Printer::printExpression(const Expression &Expr, unsigned ParentPrecedence,
       if (!Node.SubDenomination.empty()) {
         OS << " " << Node.SubDenomination;
       }
-    } else if constexpr (std::is_same_v<T, UnknownExpr>) {
-      OS << Node.Text;
     } else if constexpr (std::is_same_v<T, TodoConditionExpr>) {
       OS << "false /* TODO: " << Node.Text << " */";
     } else if constexpr (std::is_same_v<T, MemberAccessExpr>) {

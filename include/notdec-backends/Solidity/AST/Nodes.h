@@ -90,10 +90,6 @@ struct LiteralExpr {
   std::string SubDenomination;
 };
 
-struct UnknownExpr {
-  std::string Text;
-};
-
 struct TodoConditionExpr {
   std::string Text;
 };
@@ -174,11 +170,11 @@ struct MetaTypeExpr {
 // binary operators, conditional/assignment expressions, new, tuples, arrays,
 // and meta-type expressions.
 using ExpressionNode =
-    std::variant<IdentifierExpr, TypeNameExpr, LiteralExpr, UnknownExpr,
-                 TodoConditionExpr, MemberAccessExpr, IndexAccessExpr,
-                 IndexRangeAccessExpr, FunctionCallOptionsExpr, UnaryExpr,
-                 BinaryExpr, ConditionalExpr, AssignmentExpr, CallExpr, NewExpr,
-                 TupleExpr, InlineArrayExpr, MetaTypeExpr>;
+    std::variant<IdentifierExpr, TypeNameExpr, LiteralExpr, TodoConditionExpr,
+                 MemberAccessExpr, IndexAccessExpr, IndexRangeAccessExpr,
+                 FunctionCallOptionsExpr, UnaryExpr, BinaryExpr,
+                 ConditionalExpr, AssignmentExpr, CallExpr, NewExpr, TupleExpr,
+                 InlineArrayExpr, MetaTypeExpr>;
 
 struct Expression {
   ExpressionNode Node;

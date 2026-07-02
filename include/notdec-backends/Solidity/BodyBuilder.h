@@ -40,8 +40,7 @@ public:
                                                       llvm::StringRef Kind);
   static std::optional<std::string>
   getEventName(const llvm::Instruction &I, llvm::StringRef Kind);
-  static std::vector<std::string>
-  getEventTopicArguments(const llvm::Instruction &I);
+  static std::vector<ExprPtr> getEventTopicArguments(const llvm::Instruction &I);
 
 private:
   static Statement formatRevertStatement(const llvm::Instruction &I,

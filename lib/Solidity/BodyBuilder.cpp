@@ -60,53 +60,293 @@ std::string copiedVVarName(llvm::StringRef SourceName, VVarId Copy) {
   return (SourceName + "_copy" + std::to_string(Copy)).str();
 }
 
-template <typename Fn>
-BodyBuilder::Payload mapPayloadText(const BodyBuilder::Payload &Payload,
-                                    Fn RewriteText) {
-  return std::visit([&](const auto &Node) -> BodyBuilder::Payload {
-    using T = std::decay_t<decltype(Node)>;
-    if constexpr (std::is_same_v<T, Expression>) {
-      if (const auto *Unknown = std::get_if<UnknownExpr>(&Node.Node)) {
-        return Expression{UnknownExpr{RewriteText(Unknown->Text)}};
-      }
-      if (const auto *Todo = std::get_if<TodoConditionExpr>(&Node.Node)) {
-        return Expression{TodoConditionExpr{RewriteText(Todo->Text)}};
-      }
-      return Node;
-    } else {
-      if (const auto *Comment = std::get_if<CommentStatement>(&Node.Node)) {
-        return Statement{CommentStatement{RewriteText(Comment->Text)}};
-      }
-      return Node;
+std::string replaceIdentifierText(
+    std::string Text,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  for (const auto &Copy : Copies) {
+    llvm::StringRef From = Copy.first;
+    llvm::StringRef To = Copy.second;
+    if (From.empty() || From == To) {
+      continue;
     }
-  }, Payload);
+    std::size_t Pos = 0;
+    while ((Pos = Text.find(From.str(), Pos)) != std::string::npos) {
+      bool HasLeft = Pos > 0 && isIdentifierChar(Text[Pos - 1]);
+      std::size_t End = Pos + From.size();
+      bool HasRight = End < Text.size() && isIdentifierChar(Text[End]);
+      if (HasLeft || HasRight) {
+        Pos = End;
+        continue;
+      }
+      Text.replace(Pos, From.size(), To.str());
+      Pos += To.size();
+    }
+  }
+  return Text;
+}
+
+ExprPtr rewriteExpr(const ExprPtr &Expr,
+                    const std::vector<std::pair<std::string, std::string>> &Copies);
+Statement rewriteStatement(
+    const Statement &Stmt,
+    const std::vector<std::pair<std::string, std::string>> &Copies);
+
+NamedArgument rewriteNamedArgument(
+    const NamedArgument &Arg,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  return NamedArgument{Arg.Name, rewriteExpr(Arg.Value, Copies)};
+}
+
+std::vector<ExprPtr> rewriteExprs(
+    const std::vector<ExprPtr> &Exprs,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  std::vector<ExprPtr> Result;
+  Result.reserve(Exprs.size());
+  for (const ExprPtr &Expr : Exprs) {
+    Result.push_back(rewriteExpr(Expr, Copies));
+  }
+  return Result;
+}
+
+std::vector<NamedArgument> rewriteNamedArguments(
+    const std::vector<NamedArgument> &Args,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  std::vector<NamedArgument> Result;
+  Result.reserve(Args.size());
+  for (const NamedArgument &Arg : Args) {
+    Result.push_back(rewriteNamedArgument(Arg, Copies));
+  }
+  return Result;
+}
+
+Expression rewriteExpression(
+    const Expression &Expr,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  return std::visit([&](const auto &Node) -> Expression {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, IdentifierExpr>) {
+      std::string Name = Node.Name;
+      for (const auto &Copy : Copies) {
+        if (Name == Copy.first) {
+          Name = Copy.second;
+          break;
+        }
+      }
+      return Expression{IdentifierExpr{std::move(Name)}};
+    } else if constexpr (std::is_same_v<T, TodoConditionExpr>) {
+      return Expression{TodoConditionExpr{
+          replaceIdentifierText(Node.Text, Copies)}};
+    } else if constexpr (std::is_same_v<T, MemberAccessExpr>) {
+      return Expression{MemberAccessExpr{rewriteExpr(Node.Base, Copies),
+                                         Node.Member}};
+    } else if constexpr (std::is_same_v<T, IndexAccessExpr>) {
+      return Expression{IndexAccessExpr{rewriteExpr(Node.Base, Copies),
+                                        rewriteExpr(Node.Index, Copies)}};
+    } else if constexpr (std::is_same_v<T, IndexRangeAccessExpr>) {
+      return Expression{IndexRangeAccessExpr{rewriteExpr(Node.Base, Copies),
+                                             rewriteExpr(Node.Start, Copies),
+                                             rewriteExpr(Node.End, Copies)}};
+    } else if constexpr (std::is_same_v<T, FunctionCallOptionsExpr>) {
+      return Expression{FunctionCallOptionsExpr{
+          rewriteExpr(Node.Callee, Copies),
+          rewriteNamedArguments(Node.Options, Copies)}};
+    } else if constexpr (std::is_same_v<T, UnaryExpr>) {
+      return Expression{UnaryExpr{Node.Operator,
+                                  rewriteExpr(Node.Operand, Copies),
+                                  Node.Prefix, Node.Precedence}};
+    } else if constexpr (std::is_same_v<T, BinaryExpr>) {
+      return Expression{BinaryExpr{rewriteExpr(Node.Left, Copies),
+                                   Node.Operator,
+                                   rewriteExpr(Node.Right, Copies),
+                                   Node.Precedence,
+                                   Node.ParenthesizeLeftOnEqual,
+                                   Node.ParenthesizeRightOnEqual}};
+    } else if constexpr (std::is_same_v<T, ConditionalExpr>) {
+      return Expression{ConditionalExpr{rewriteExpr(Node.Condition, Copies),
+                                        rewriteExpr(Node.TrueValue, Copies),
+                                        rewriteExpr(Node.FalseValue, Copies)}};
+    } else if constexpr (std::is_same_v<T, AssignmentExpr>) {
+      return Expression{AssignmentExpr{rewriteExpr(Node.Left, Copies),
+                                       Node.Operator,
+                                       rewriteExpr(Node.Right, Copies)}};
+    } else if constexpr (std::is_same_v<T, CallExpr>) {
+      return Expression{CallExpr{rewriteExpr(Node.Callee, Copies),
+                                 rewriteExprs(Node.Arguments, Copies),
+                                 rewriteNamedArguments(Node.NamedArguments,
+                                                       Copies)}};
+    } else if constexpr (std::is_same_v<T, TupleExpr>) {
+      return Expression{TupleExpr{rewriteExprs(Node.Elements, Copies)}};
+    } else if constexpr (std::is_same_v<T, InlineArrayExpr>) {
+      return Expression{InlineArrayExpr{rewriteExprs(Node.Elements, Copies)}};
+    } else {
+      return Expr;
+    }
+  }, Expr.Node);
+}
+
+ExprPtr rewriteExpr(
+    const ExprPtr &Expr,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  if (!Expr) {
+    return nullptr;
+  }
+  return std::make_shared<Expression>(rewriteExpression(*Expr, Copies));
+}
+
+BlockPtr rewriteBlockPtr(
+    const BlockPtr &Body,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  if (!Body) {
+    return nullptr;
+  }
+  Block Result;
+  Result.Statements.reserve(Body->Statements.size());
+  for (const Statement &Stmt : Body->Statements) {
+    Result.Statements.push_back(rewriteStatement(Stmt, Copies));
+  }
+  return makeBlock(std::move(Result));
+}
+
+StmtPtr rewriteStmtPtr(
+    const StmtPtr &Stmt,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  if (!Stmt) {
+    return nullptr;
+  }
+  return std::make_shared<Statement>(rewriteStatement(*Stmt, Copies));
+}
+
+Statement rewriteStatement(
+    const Statement &Stmt,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  return std::visit([&](const auto &Node) -> Statement {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, CommentStatement>) {
+      return Statement{CommentStatement{
+          replaceIdentifierText(Node.Text, Copies)}};
+    } else if constexpr (std::is_same_v<T, ReturnStatement>) {
+      return makeStmt(ReturnStatement{rewriteExpr(Node.Value, Copies)});
+    } else if constexpr (std::is_same_v<T, ExpressionStatement>) {
+      return makeStmt(ExpressionStatement{rewriteExpr(Node.Value, Copies)});
+    } else if constexpr (std::is_same_v<T, VariableDeclarationStatement>) {
+      return makeStmt(VariableDeclarationStatement{
+          Node.Variables, rewriteExpr(Node.InitialValue, Copies)});
+    } else if constexpr (std::is_same_v<T, RevertStatement>) {
+      return makeStmt(RevertStatement{
+          rewriteExpr(Node.Error, Copies), rewriteExprs(Node.Arguments, Copies),
+          Node.Comment});
+    } else if constexpr (std::is_same_v<T, RequireStatement>) {
+      return makeStmt(RequireStatement{
+          rewriteExpr(Node.Condition, Copies),
+          rewriteExprs(Node.Arguments, Copies)});
+    } else if constexpr (std::is_same_v<T, EmitStatement>) {
+      return makeStmt(EmitStatement{
+          rewriteExpr(Node.Event, Copies), rewriteExprs(Node.Arguments, Copies),
+          Node.Comment});
+    } else if constexpr (std::is_same_v<T, IfStatement>) {
+      return makeStmt(IfStatement{
+          rewriteExpr(Node.Condition, Copies), rewriteBlockPtr(Node.Then, Copies),
+          rewriteBlockPtr(Node.Else, Copies)});
+    } else if constexpr (std::is_same_v<T, ForStatement>) {
+      return makeStmt(ForStatement{
+          rewriteStmtPtr(Node.Init, Copies), rewriteExpr(Node.Condition, Copies),
+          rewriteExpr(Node.Loop, Copies), rewriteStmtPtr(Node.Body, Copies)});
+    } else if constexpr (std::is_same_v<T, WhileStatement>) {
+      return makeStmt(WhileStatement{
+          rewriteExpr(Node.Condition, Copies), rewriteBlockPtr(Node.Body, Copies)});
+    } else if constexpr (std::is_same_v<T, DoWhileStatement>) {
+      return makeStmt(DoWhileStatement{
+          rewriteStmtPtr(Node.Body, Copies),
+          rewriteExpr(Node.Condition, Copies)});
+    } else if constexpr (std::is_same_v<T, TryStatement>) {
+      TryStatement Result = Node;
+      Result.ExternalCall = rewriteExpr(Node.ExternalCall, Copies);
+      Result.Body = rewriteBlockPtr(Node.Body, Copies);
+      for (TryCatchClause &Catch : Result.Catches) {
+        Catch.Body = rewriteBlockPtr(Catch.Body, Copies);
+      }
+      return makeStmt(std::move(Result));
+    } else if constexpr (std::is_same_v<T, UncheckedBlockStatement>) {
+      return makeStmt(UncheckedBlockStatement{
+          rewriteBlockPtr(Node.Body, Copies)});
+    } else if constexpr (std::is_same_v<T, BlockStatement>) {
+      return makeStmt(BlockStatement{rewriteBlockPtr(Node.Body, Copies)});
+    } else {
+      return Statement{Node};
+    }
+  }, Stmt.Node);
 }
 
 BodyBuilder::Payload replaceIdentifiers(
     const BodyBuilder::Payload &Payload,
     const std::vector<std::pair<std::string, std::string>> &Copies) {
-  return mapPayloadText(Payload, [&](std::string Text) {
-    for (const auto &Copy : Copies) {
-      llvm::StringRef From = Copy.first;
-      llvm::StringRef To = Copy.second;
-      if (From.empty() || From == To) {
-        continue;
-      }
-      std::size_t Pos = 0;
-      while ((Pos = Text.find(From.str(), Pos)) != std::string::npos) {
-        bool HasLeft = Pos > 0 && isIdentifierChar(Text[Pos - 1]);
-        std::size_t End = Pos + From.size();
-        bool HasRight = End < Text.size() && isIdentifierChar(Text[End]);
-        if (HasLeft || HasRight) {
-          Pos = End;
-          continue;
-        }
-        Text.replace(Pos, From.size(), To.str());
-        Pos += To.size();
-      }
+  return std::visit([&](const auto &Node) -> BodyBuilder::Payload {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, Expression>) {
+      return rewriteExpression(Node, Copies);
+    } else {
+      return rewriteStatement(Node, Copies);
     }
-    return Text;
-  });
+  }, Payload);
+}
+
+std::string exprDebugText(const ExprPtr &Expr);
+
+std::string expressionDebugText(const Expression &Expr) {
+  return std::visit([](const auto &Node) -> std::string {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, IdentifierExpr>) {
+      return Node.Name;
+    } else if constexpr (std::is_same_v<T, TypeNameExpr>) {
+      return Node.Type.Name;
+    } else if constexpr (std::is_same_v<T, LiteralExpr>) {
+      if (Node.SubDenomination.empty()) {
+        return Node.Text;
+      }
+      return Node.Text + " " + Node.SubDenomination;
+    } else if constexpr (std::is_same_v<T, TodoConditionExpr>) {
+      return Node.Text;
+    } else if constexpr (std::is_same_v<T, MemberAccessExpr>) {
+      return exprDebugText(Node.Base) + "." + Node.Member;
+    } else if constexpr (std::is_same_v<T, IndexAccessExpr>) {
+      return exprDebugText(Node.Base) + "[" + exprDebugText(Node.Index) + "]";
+    } else if constexpr (std::is_same_v<T, IndexRangeAccessExpr>) {
+      return exprDebugText(Node.Base) + "[" + exprDebugText(Node.Start) + ":" +
+             exprDebugText(Node.End) + "]";
+    } else if constexpr (std::is_same_v<T, FunctionCallOptionsExpr>) {
+      return exprDebugText(Node.Callee) + "{...}";
+    } else if constexpr (std::is_same_v<T, UnaryExpr>) {
+      if (Node.Prefix) {
+        return Node.Operator + exprDebugText(Node.Operand);
+      }
+      return exprDebugText(Node.Operand) + Node.Operator;
+    } else if constexpr (std::is_same_v<T, BinaryExpr>) {
+      return exprDebugText(Node.Left) + " " + Node.Operator + " " +
+             exprDebugText(Node.Right);
+    } else if constexpr (std::is_same_v<T, ConditionalExpr>) {
+      return exprDebugText(Node.Condition) + " ? " +
+             exprDebugText(Node.TrueValue) + " : " +
+             exprDebugText(Node.FalseValue);
+    } else if constexpr (std::is_same_v<T, AssignmentExpr>) {
+      return exprDebugText(Node.Left) + " " + Node.Operator + " " +
+             exprDebugText(Node.Right);
+    } else if constexpr (std::is_same_v<T, CallExpr>) {
+      return exprDebugText(Node.Callee) + "(...)";
+    } else if constexpr (std::is_same_v<T, NewExpr>) {
+      return "new " + Node.Type.Name;
+    } else if constexpr (std::is_same_v<T, MetaTypeExpr>) {
+      return "type(" + Node.Type.Name + ")";
+    } else {
+      return "expr";
+    }
+  }, Expr.Node);
+}
+
+std::string exprDebugText(const ExprPtr &Expr) {
+  if (!Expr) {
+    return "expr";
+  }
+  return expressionDebugText(*Expr);
 }
 
 std::string payloadDebugText(const std::vector<BodyBuilder::Payload> &Payloads,
@@ -118,19 +358,7 @@ std::string payloadDebugText(const std::vector<BodyBuilder::Payload> &Payloads,
   return std::visit([](const auto &Node) -> std::string {
     using T = std::decay_t<decltype(Node)>;
     if constexpr (std::is_same_v<T, Expression>) {
-      if (const auto *Unknown = std::get_if<UnknownExpr>(&Node.Node)) {
-        return Unknown->Text;
-      }
-      if (const auto *Todo = std::get_if<TodoConditionExpr>(&Node.Node)) {
-        return Todo->Text;
-      }
-      if (const auto *Ident = std::get_if<IdentifierExpr>(&Node.Node)) {
-        return Ident->Name;
-      }
-      if (const auto *Literal = std::get_if<LiteralExpr>(&Node.Node)) {
-        return Literal->Text;
-      }
-      return "expr";
+      return expressionDebugText(Node);
     } else {
       if (const auto *Comment = std::get_if<CommentStatement>(&Node.Node)) {
         return Comment->Text;
@@ -403,18 +631,21 @@ std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
   return std::nullopt;
 }
 
-std::optional<std::string> evmEnvBuiltinName(llvm::StringRef Name) {
+std::optional<ExprPtr> evmEnvBuiltinExpr(llvm::StringRef Name) {
   if (Name == "evm_basefee") {
-    return "block.basefee";
+    return makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"block"}),
+                                     "basefee"});
   }
   if (Name == "evm_blobbasefee") {
-    return "block.blobbasefee";
+    return makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"block"}),
+                                     "blobbasefee"});
   }
   if (Name == "evm_gas") {
-    return "gasleft()";
+    return makeExpr(CallExpr{makeExpr(IdentifierExpr{"gasleft"}), {}, {}});
   }
   if (Name == "evm_caller") {
-    return "msg.sender";
+    return makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"msg"}),
+                                     "sender"});
   }
   return std::nullopt;
 }
@@ -598,27 +829,37 @@ bool leftOperandNeedsSamePrecedenceParentheses(llvm::StringRef Operator) {
   return Operator == "**";
 }
 
-bool needsParentheses(unsigned ChildPrecedence, unsigned ParentPrecedence,
-                      bool ParenthesizeSamePrecedenceOperand) {
-  if (ChildPrecedence < ParentPrecedence) {
-    return true;
-  }
-  return ParenthesizeSamePrecedenceOperand &&
-         ChildPrecedence == ParentPrecedence;
+ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName = "ret0");
+
+ExprPtr makeBinaryExpr(ExprPtr Left, llvm::StringRef Operator, ExprPtr Right,
+                       unsigned Precedence) {
+  return makeExpr(BinaryExpr{std::move(Left), Operator.str(), std::move(Right),
+                             Precedence,
+                             leftOperandNeedsSamePrecedenceParentheses(Operator),
+                             rightOperandNeedsSamePrecedenceParentheses(Operator)});
 }
 
-std::string formatReturnValue(const llvm::Value &V,
-                              unsigned ParentPrecedence = 0,
-                              bool IsRightOperand = false,
-                              bool ParenthesizeSamePrecedenceOperand = false) {
+ExprPtr makeZeroCompareExpr(const llvm::Value &V, llvm::StringRef Operator) {
+  return makeBinaryExpr(valueExpr(V), Operator, makeExpr(LiteralExpr{"0", ""}),
+                        3);
+}
+
+std::vector<ExprPtr> callArgExprs(const llvm::CallBase &Call) {
+  std::vector<ExprPtr> Args;
+  Args.reserve(Call.arg_size());
+  for (const llvm::Use &Arg : Call.args()) {
+    Args.push_back(valueExpr(*Arg.get()));
+  }
+  return Args;
+}
+
+ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
   if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
-    return formatInteger(*Int);
+    return makeExpr(LiteralExpr{formatInteger(*Int), ""});
   }
   if (const auto *Cast = llvm::dyn_cast<llvm::ZExtInst>(&V);
       Cast != nullptr && Cast->getSrcTy()->isIntegerTy(1)) {
-    return formatReturnValue(*Cast->getOperand(0), ParentPrecedence,
-                             IsRightOperand,
-                             ParenthesizeSamePrecedenceOperand);
+    return valueExpr(*Cast->getOperand(0), FallbackName);
   }
   if (const auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(&V)) {
     if (Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ ||
@@ -632,7 +873,6 @@ std::string formatReturnValue(const llvm::Value &V,
       }
       const auto *Or = llvm::dyn_cast_or_null<llvm::BinaryOperator>(Compared);
       if (Or != nullptr && Or->getOpcode() == llvm::Instruction::Or) {
-        constexpr unsigned EqualityPrecedence = 3;
         unsigned LogicalPrecedence = Cmp->getPredicate() ==
                                              llvm::CmpInst::ICMP_EQ
                                          ? 2
@@ -641,170 +881,78 @@ std::string formatReturnValue(const llvm::Value &V,
             Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ ? "==" : "!=";
         llvm::StringRef LogicalOp =
             Cmp->getPredicate() == llvm::CmpInst::ICMP_EQ ? "&&" : "||";
-        std::string Text = formatReturnValue(*Or->getOperand(0),
-                                             EqualityPrecedence) +
-                           " " + CompareOp.str() + " 0 " +
-                           LogicalOp.str() + " " +
-                           formatReturnValue(*Or->getOperand(1),
-                                             EqualityPrecedence) +
-                           " " + CompareOp.str() + " 0";
-        if (needsParentheses(LogicalPrecedence, ParentPrecedence,
-                             ParenthesizeSamePrecedenceOperand)) {
-          return "(" + Text + ")";
-        }
-        return Text;
+        return makeBinaryExpr(makeZeroCompareExpr(*Or->getOperand(0), CompareOp),
+                              LogicalOp,
+                              makeZeroCompareExpr(*Or->getOperand(1), CompareOp),
+                              LogicalPrecedence);
       }
     }
     if (std::optional<llvm::StringRef> Operator =
             icmpPredicateText(Cmp->getPredicate())) {
       unsigned Precedence = icmpPredicatePrecedence(Cmp->getPredicate());
-      std::string Text =
-          formatReturnValue(*Cmp->getOperand(0), Precedence) + " " +
-          Operator->str() + " " +
-          formatReturnValue(*Cmp->getOperand(1), Precedence,
-                            /*IsRightOperand=*/true,
-                            /*ParenthesizeSamePrecedenceOperand=*/true);
-      if (needsParentheses(Precedence, ParentPrecedence,
-                           ParenthesizeSamePrecedenceOperand)) {
-        return "(" + Text + ")";
-      }
-      return Text;
+      return makeExpr(BinaryExpr{valueExpr(*Cmp->getOperand(0)),
+                                 Operator->str(),
+                                 valueExpr(*Cmp->getOperand(1)), Precedence,
+                                 false, true});
     }
   }
   if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
     if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {
-      constexpr unsigned Precedence = 30;
-      std::string Text = "~" + formatReturnValue(*Operand, Precedence);
-      if (needsParentheses(Precedence, ParentPrecedence,
-                           ParenthesizeSamePrecedenceOperand)) {
-        return "(" + Text + ")";
-      }
-      return Text;
+      return makeExpr(UnaryExpr{"~", valueExpr(*Operand), true, 30});
     }
     if (std::optional<llvm::StringRef> Operator =
             logicalOperatorText(Op->getOpcode());
         Op->getType()->isIntegerTy(1) && Operator.has_value()) {
       // LLVM keeps pure bool connectives as i1 and/or.
       unsigned Precedence = *logicalOperatorPrecedence(Op->getOpcode());
-      std::string Text = formatReturnValue(*Op->getOperand(0), Precedence,
-                                           /*IsRightOperand=*/false,
-                                           leftOperandNeedsSamePrecedenceParentheses(
-                                               *Operator)) +
-                         " " + Operator->str() + " " +
-                         formatReturnValue(*Op->getOperand(1), Precedence,
-                                           /*IsRightOperand=*/true,
-                                           rightOperandNeedsSamePrecedenceParentheses(
-                                               *Operator));
-      if (needsParentheses(Precedence, ParentPrecedence,
-                           ParenthesizeSamePrecedenceOperand)) {
-        return "(" + Text + ")";
-      }
-      return Text;
+      return makeBinaryExpr(valueExpr(*Op->getOperand(0)), *Operator,
+                            valueExpr(*Op->getOperand(1)), Precedence);
     }
     if (std::optional<llvm::StringRef> Operator =
             binaryOperatorText(Op->getOpcode())) {
       unsigned Precedence = *binaryOperatorPrecedence(Op->getOpcode());
-      std::string Text = formatReturnValue(*Op->getOperand(0), Precedence,
-                                           /*IsRightOperand=*/false,
-                                           leftOperandNeedsSamePrecedenceParentheses(
-                                               *Operator)) +
-                         " " + Operator->str() + " " +
-                         formatReturnValue(*Op->getOperand(1), Precedence,
-                                           /*IsRightOperand=*/true,
-                                           rightOperandNeedsSamePrecedenceParentheses(
-                                               *Operator));
-      if (needsParentheses(Precedence, ParentPrecedence,
-                           ParenthesizeSamePrecedenceOperand)) {
-        return "(" + Text + ")";
-      }
-      return Text;
+      return makeBinaryExpr(valueExpr(*Op->getOperand(0)), *Operator,
+                            valueExpr(*Op->getOperand(1)), Precedence);
     }
   }
   if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
     const llvm::Function *Callee = Call->getCalledFunction();
     if (Callee != nullptr && Call->arg_size() == 1) {
-      if (std::optional<std::string> Builtin =
-              evmEnvBuiltinName(Callee->getName())) {
+      if (std::optional<ExprPtr> Builtin =
+              evmEnvBuiltinExpr(Callee->getName())) {
         return *Builtin;
       }
     }
     if (Callee != nullptr && Call->arg_size() == 3) {
       if (std::optional<llvm::StringRef> Builtin =
               evmTernaryBuiltinName(Callee->getName())) {
-        constexpr unsigned Precedence = 30;
-        std::string Text =
-            Builtin->str() + "(" +
-            formatReturnValue(*Call->getArgOperand(0)) + ", " +
-            formatReturnValue(*Call->getArgOperand(1)) + ", " +
-            formatReturnValue(*Call->getArgOperand(2)) + ")";
-        if (needsParentheses(Precedence, ParentPrecedence,
-                             ParenthesizeSamePrecedenceOperand)) {
-          return "(" + Text + ")";
-        }
-        return Text;
+        return makeExpr(CallExpr{makeExpr(IdentifierExpr{Builtin->str()}),
+                                 callArgExprs(*Call), {}});
       }
     }
     if (Callee != nullptr && Call->arg_size() == 2) {
       if (Callee->getName() == "evm_signextend") {
         if (std::optional<std::string> Type =
                 evmSignExtendType(Call->getArgOperand(0))) {
-          constexpr unsigned Precedence = 30;
-          std::string Text =
-              *Type + "(" + formatReturnValue(*Call->getArgOperand(1)) + ")";
-          if (needsParentheses(Precedence, ParentPrecedence,
-                               ParenthesizeSamePrecedenceOperand)) {
-            return "(" + Text + ")";
-          }
-          return Text;
+          return makeExpr(CallExpr{makeExpr(IdentifierExpr{std::move(*Type)}),
+                                   {valueExpr(*Call->getArgOperand(1))}, {}});
         }
       }
       if (std::optional<llvm::StringRef> Operator =
               evmShiftOperatorText(Callee->getName())) {
         constexpr unsigned Precedence = 8;
-        std::string Text = formatReturnValue(*Call->getArgOperand(1),
-                                             Precedence,
-                                             /*IsRightOperand=*/false,
-                                             leftOperandNeedsSamePrecedenceParentheses(
-                                                 *Operator)) +
-                           " " + Operator->str() + " " +
-                           formatReturnValue(*Call->getArgOperand(0),
-                                             Precedence,
-                                             /*IsRightOperand=*/true,
-                                             rightOperandNeedsSamePrecedenceParentheses(
-                                                 *Operator));
-        if (needsParentheses(Precedence, ParentPrecedence,
-                             ParenthesizeSamePrecedenceOperand)) {
-          return "(" + Text + ")";
-        }
-        return Text;
+        return makeBinaryExpr(valueExpr(*Call->getArgOperand(1)), *Operator,
+                              valueExpr(*Call->getArgOperand(0)), Precedence);
       }
       if (std::optional<llvm::StringRef> Operator =
               evmBinaryOperatorText(Callee->getName())) {
         unsigned Precedence = evmBinaryOperatorPrecedence(Callee->getName());
-        std::string Text = formatReturnValue(*Call->getArgOperand(0),
-                                             Precedence,
-                                             /*IsRightOperand=*/false,
-                                             leftOperandNeedsSamePrecedenceParentheses(
-                                                 *Operator)) +
-                           " " + Operator->str() + " " +
-                           formatReturnValue(*Call->getArgOperand(1),
-                                             Precedence,
-                                             /*IsRightOperand=*/true,
-                                             rightOperandNeedsSamePrecedenceParentheses(
-                                                 *Operator));
-        if (needsParentheses(Precedence, ParentPrecedence,
-                             ParenthesizeSamePrecedenceOperand)) {
-          return "(" + Text + ")";
-        }
-        return Text;
+        return makeBinaryExpr(valueExpr(*Call->getArgOperand(0)), *Operator,
+                              valueExpr(*Call->getArgOperand(1)), Precedence);
       }
     }
   }
-  return llvmValueName(V, "ret0");
-}
-
-ExprPtr formatReturnExpr(const llvm::Value &V) {
-  return makeExpr(UnknownExpr{formatReturnValue(V)});
+  return makeExpr(IdentifierExpr{llvmValueName(V, FallbackName)});
 }
 
 const llvm::Value *ptrToIntPointerValue(const llvm::Value *V) {
@@ -862,7 +1010,7 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
   }
   if (!ReturnOffset.has_value()) {
     if (const llvm::Value *Stored = findAllocatedSingleWordReturnValue(Call)) {
-      return makeStmt(ReturnStatement{formatReturnExpr(*Stored)});
+      return makeStmt(ReturnStatement{valueExpr(*Stored)});
     }
     return std::nullopt;
   }
@@ -882,7 +1030,7 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
     if (!StoreOffset.has_value() || *StoreOffset != *ReturnOffset) {
       continue;
     }
-    return makeStmt(ReturnStatement{formatReturnExpr(*Store->getValueOperand())});
+    return makeStmt(ReturnStatement{valueExpr(*Store->getValueOperand())});
   }
 
   return std::nullopt;
@@ -904,8 +1052,7 @@ Block BodyBuilder::readBody(const llvm::Function &F) {
           if (const llvm::Value *Value = Ret->getReturnValue()) {
             Out.push_back(addPayload(Payloads,
                                       makeStmt(ReturnStatement{
-                                          makeExpr(UnknownExpr{
-                                              llvmValueName(*Value, "ret")})})));
+                                          valueExpr(*Value, "ret")})));
           }
           continue;
         }
@@ -932,8 +1079,9 @@ Block BodyBuilder::readBody(const llvm::Function &F) {
 
     PayloadRef getCondition(const llvm::Value &V,
                             llvm::StringRef FallbackName) override {
-      return addPayload(Payloads,
-                        Expression{UnknownExpr{llvmValueName(V, FallbackName)}});
+      return addPayload(
+          Payloads,
+          Expression{TodoConditionExpr{llvmValueName(V, FallbackName)}});
     }
 
     PayloadRef getSwitchCase(const llvm::ConstantInt &V) override {
@@ -1066,7 +1214,7 @@ BodyBuilder::getEventName(const llvm::Instruction &I, llvm::StringRef Kind) {
   return sanitizeIdentifier(Name);
 }
 
-std::vector<std::string>
+std::vector<ExprPtr>
 BodyBuilder::getEventTopicArguments(const llvm::Instruction &I) {
   const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
   if (Call == nullptr || !Call->getCalledFunction() ||
@@ -1075,9 +1223,9 @@ BodyBuilder::getEventTopicArguments(const llvm::Instruction &I) {
     return {};
   }
 
-  std::vector<std::string> Args;
+  std::vector<ExprPtr> Args;
   for (unsigned Arg = 4; Arg < Call->arg_size(); ++Arg) {
-    Args.push_back(formatReturnValue(*Call->getArgOperand(Arg)));
+    Args.push_back(valueExpr(*Call->getArgOperand(Arg)));
   }
   return Args;
 }
@@ -1119,14 +1267,8 @@ Statement BodyBuilder::formatEventStatement(const llvm::Instruction &I,
                                             llvm::StringRef Kind) {
   std::string Name =
       getEventName(I, Kind).value_or(sanitizeIdentifier(("Event_" + Kind).str()));
-  std::vector<std::string> Args = getEventTopicArguments(I);
-  std::vector<ExprPtr> ArgExprs;
-  ArgExprs.reserve(Args.size());
-  for (std::string &Arg : Args) {
-    ArgExprs.push_back(makeExpr(UnknownExpr{std::move(Arg)}));
-  }
   return makeStmt(EmitStatement{
-      makeExpr(IdentifierExpr{std::move(Name)}), std::move(ArgExprs),
+      makeExpr(IdentifierExpr{std::move(Name)}), getEventTopicArguments(I),
       "TODO: recover event signature"});
 }
 
