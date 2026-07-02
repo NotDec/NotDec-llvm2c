@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include <llvm/ADT/SmallString.h>
@@ -31,75 +32,156 @@ using structuring::StructuredNodeKind;
 using structuring::StructuredTree;
 using structuring::VVarId;
 
-PayloadRef addPayload(std::vector<std::string> &Payloads, std::string Text) {
-  Payloads.push_back(std::move(Text));
+PayloadRef addPayload(std::vector<BodyBuilder::Payload> &Payloads,
+                      BodyBuilder::Payload Payload) {
+  Payloads.push_back(std::move(Payload));
   return PayloadRef{Payloads.size() - 1};
+}
+
+ExprPtr makeExpr(ExpressionNode Node) {
+  return std::make_shared<Expression>(Expression{std::move(Node)});
+}
+
+BlockPtr makeBlock(Block BlockValue) {
+  return std::make_shared<Block>(std::move(BlockValue));
+}
+
+Statement makeStmt(StatementNode Node) { return Statement{std::move(Node)}; }
+
+Statement commentStmt(std::string Text) {
+  return makeStmt(CommentStatement{std::move(Text)});
 }
 
 bool isIdentifierChar(char C) {
   return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
 }
 
-std::string replaceIdentifier(std::string Text, llvm::StringRef From,
-                              llvm::StringRef To) {
-  if (From.empty() || From == To) {
-    return Text;
-  }
-
-  std::size_t Pos = 0;
-  while ((Pos = Text.find(From.str(), Pos)) != std::string::npos) {
-    bool HasLeft = Pos > 0 && isIdentifierChar(Text[Pos - 1]);
-    std::size_t End = Pos + From.size();
-    bool HasRight = End < Text.size() && isIdentifierChar(Text[End]);
-    if (HasLeft || HasRight) {
-      Pos = End;
-      continue;
-    }
-    Text.replace(Pos, From.size(), To.str());
-    Pos += To.size();
-  }
-  return Text;
-}
-
 std::string copiedVVarName(llvm::StringRef SourceName, VVarId Copy) {
   return (SourceName + "_copy" + std::to_string(Copy)).str();
 }
 
-std::string payloadText(const std::vector<std::string> &Payloads,
-                        PayloadRef Ref) {
+template <typename Fn>
+BodyBuilder::Payload mapPayloadText(const BodyBuilder::Payload &Payload,
+                                    Fn RewriteText) {
+  return std::visit([&](const auto &Node) -> BodyBuilder::Payload {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, Expression>) {
+      if (const auto *Unknown = std::get_if<UnknownExpr>(&Node.Node)) {
+        return Expression{UnknownExpr{RewriteText(Unknown->Text)}};
+      }
+      if (const auto *Todo = std::get_if<TodoConditionExpr>(&Node.Node)) {
+        return Expression{TodoConditionExpr{RewriteText(Todo->Text)}};
+      }
+      return Node;
+    } else {
+      if (const auto *Comment = std::get_if<CommentStatement>(&Node.Node)) {
+        return Statement{CommentStatement{RewriteText(Comment->Text)}};
+      }
+      return Node;
+    }
+  }, Payload);
+}
+
+BodyBuilder::Payload replaceIdentifiers(
+    const BodyBuilder::Payload &Payload,
+    const std::vector<std::pair<std::string, std::string>> &Copies) {
+  return mapPayloadText(Payload, [&](std::string Text) {
+    for (const auto &Copy : Copies) {
+      llvm::StringRef From = Copy.first;
+      llvm::StringRef To = Copy.second;
+      if (From.empty() || From == To) {
+        continue;
+      }
+      std::size_t Pos = 0;
+      while ((Pos = Text.find(From.str(), Pos)) != std::string::npos) {
+        bool HasLeft = Pos > 0 && isIdentifierChar(Text[Pos - 1]);
+        std::size_t End = Pos + From.size();
+        bool HasRight = End < Text.size() && isIdentifierChar(Text[End]);
+        if (HasLeft || HasRight) {
+          Pos = End;
+          continue;
+        }
+        Text.replace(Pos, From.size(), To.str());
+        Pos += To.size();
+      }
+    }
+    return Text;
+  });
+}
+
+std::string payloadDebugText(const std::vector<BodyBuilder::Payload> &Payloads,
+                             PayloadRef Ref) {
   if (!Ref.isValid() || Ref.Id >= Payloads.size()) {
     return "unknown";
   }
-  return Payloads[Ref.Id];
+  const BodyBuilder::Payload &Payload = Payloads[Ref.Id];
+  return std::visit([](const auto &Node) -> std::string {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, Expression>) {
+      if (const auto *Unknown = std::get_if<UnknownExpr>(&Node.Node)) {
+        return Unknown->Text;
+      }
+      if (const auto *Todo = std::get_if<TodoConditionExpr>(&Node.Node)) {
+        return Todo->Text;
+      }
+      if (const auto *Ident = std::get_if<IdentifierExpr>(&Node.Node)) {
+        return Ident->Name;
+      }
+      if (const auto *Literal = std::get_if<LiteralExpr>(&Node.Node)) {
+        return Literal->Text;
+      }
+      return "expr";
+    } else {
+      if (const auto *Comment = std::get_if<CommentStatement>(&Node.Node)) {
+        return Comment->Text;
+      }
+      return "stmt";
+    }
+  }, Payload);
 }
 
-std::string conditionText(const std::vector<std::string> &Payloads,
-                          const StructuredNode &Node) {
-  std::string Text = payloadText(Payloads, Node.Condition);
-  return Node.ConditionNegated ? "!(" + Text + ")" : Text;
-}
-
-std::string indent(unsigned Depth) { return std::string(Depth * 2, ' '); }
-
-// The backend does not own expression recovery yet. Keep unknown low-level
-// predicates as comments while emitting a valid Solidity boolean expression.
-std::string todoCondition(llvm::StringRef Text) {
-  std::string Comment = Text.str();
+ExprPtr conditionExpr(const std::vector<BodyBuilder::Payload> &Payloads,
+                      const StructuredNode &Node) {
+  std::string Text = payloadDebugText(Payloads, Node.Condition);
+  if (Node.ConditionNegated) {
+    Text = "!(" + Text + ")";
+  }
+  std::string Comment = Text;
   std::string::size_type Pos = 0;
   while ((Pos = Comment.find("*/", Pos)) != std::string::npos) {
     Comment.replace(Pos, 2, "* /");
     Pos += 3;
   }
-  return "false /* TODO: " + Comment + " */";
+  return makeExpr(TodoConditionExpr{Comment});
 }
 
-// This is only a print-time guard for statements the Solidity backend already
-// emitted as unconditional exits. It should not guess structured control flow.
-bool isTerminalStatement(llvm::StringRef Text) {
-  Text = Text.trim();
-  return Text == "return;" || Text.starts_with("return ") ||
-         Text.starts_with("revert();") ||
-         Text.starts_with("require(false,");
+const Statement *payloadStatement(const std::vector<BodyBuilder::Payload> &Payloads,
+                                  PayloadRef Ref) {
+  if (!Ref.isValid() || Ref.Id >= Payloads.size()) {
+    return nullptr;
+  }
+  return std::get_if<Statement>(&Payloads[Ref.Id]);
+}
+
+bool isTerminalStatement(const Statement &Stmt) {
+  return std::visit([](const auto &Node) -> bool {
+    using T = std::decay_t<decltype(Node)>;
+    if constexpr (std::is_same_v<T, ReturnStatement> ||
+                  std::is_same_v<T, RevertStatement> ||
+                  std::is_same_v<T, RequireStatement>) {
+      return true;
+    } else if constexpr (std::is_same_v<T, BlockStatement>) {
+      return Node.Body != nullptr && !Node.Body->Statements.empty() &&
+             isTerminalStatement(Node.Body->Statements.back());
+    } else if constexpr (std::is_same_v<T, IfStatement>) {
+      return Node.Then != nullptr && Node.Else != nullptr &&
+             !Node.Then->Statements.empty() && !Node.Else->Statements.empty() &&
+             isTerminalStatement(Node.Then->Statements.back()) &&
+             isTerminalStatement(Node.Else->Statements.back());
+    } else {
+      return false;
+    }
+  }, Stmt.Node);
 }
 
 std::string solidityStringLiteral(llvm::StringRef Text) {
@@ -139,10 +221,9 @@ std::string solidityStringLiteral(llvm::StringRef Text) {
 }
 
 void renderStructuredNode(const StructuredTree &Tree,
-                          const std::vector<std::string> &Payloads,
+                          const std::vector<BodyBuilder::Payload> &Payloads,
                           structuring::NodeId Id,
-                          std::vector<std::string> &Out,
-                          unsigned Depth = 0,
+                          Block &Out,
                           bool InLoop = false) {
   const StructuredNode *Node = Tree.getNode(Id);
   if (Node == nullptr) {
@@ -152,65 +233,69 @@ void renderStructuredNode(const StructuredTree &Tree,
   switch (Node->Kind) {
   case StructuredNodeKind::Sequence:
     for (structuring::NodeId Child : Node->Children) {
-      renderStructuredNode(Tree, Payloads, Child, Out, Depth, InLoop);
+      renderStructuredNode(Tree, Payloads, Child, Out, InLoop);
     }
     break;
   case StructuredNodeKind::Label:
-    Out.push_back(indent(Depth) + "// block_" + std::to_string(Node->Block) +
-                  ":");
+    Out.Statements.push_back(commentStmt("// block_" +
+                                         std::to_string(Node->Block) + ":"));
     break;
   case StructuredNodeKind::BasicBlock:
     for (PayloadRef Ref : Node->Statements) {
-      Out.push_back(indent(Depth) + payloadText(Payloads, Ref));
+      if (const Statement *Stmt = payloadStatement(Payloads, Ref)) {
+        Out.Statements.push_back(*Stmt);
+      }
     }
     break;
   case StructuredNodeKind::If:
-    Out.push_back(indent(Depth) + "if (" +
-                  todoCondition(conditionText(Payloads, *Node)) + ") {");
+  {
+    IfStatement If;
+    If.Condition = conditionExpr(Payloads, *Node);
+    If.Then = makeBlock(Block{});
     if (Node->Children.empty() &&
         (Node->Then != InvalidNodeId || Node->Else != InvalidNodeId)) {
-      renderStructuredNode(Tree, Payloads, Node->Then, Out, Depth + 1, InLoop);
-      Out.push_back(indent(Depth) + "}");
+      renderStructuredNode(Tree, Payloads, Node->Then, *If.Then, InLoop);
       if (Node->Else != InvalidNodeId) {
-        Out.push_back(indent(Depth) + "else {");
-        renderStructuredNode(Tree, Payloads, Node->Else, Out, Depth + 1,
-                             InLoop);
-        Out.push_back(indent(Depth) + "}");
+        If.Else = makeBlock(Block{});
+        renderStructuredNode(Tree, Payloads, Node->Else, *If.Else, InLoop);
       }
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1, InLoop);
+        renderStructuredNode(Tree, Payloads, Child, *If.Then, InLoop);
       }
-      Out.push_back(indent(Depth) + "}");
     }
+    Out.Statements.push_back(makeStmt(std::move(If)));
     break;
+  }
   case StructuredNodeKind::Switch:
-    Out.push_back(indent(Depth) + "{");
-    Out.push_back(indent(Depth + 1) + "/* TODO: switch " +
-                  payloadText(Payloads, Node->Condition) + " */");
+  {
+    Block Inner;
+    Inner.Statements.push_back(commentStmt("/* TODO: switch " +
+                                           payloadDebugText(Payloads, Node->Condition) +
+                                           " */"));
     if (Node->Children.empty() &&
         (!Node->StructuredCases.empty() || Node->Default != InvalidNodeId)) {
       for (const auto &Case : Node->StructuredCases) {
-        Out.push_back(indent(Depth + 1) + "/* case " +
-                      payloadText(Payloads, Case.Value) + " */");
-        renderStructuredNode(Tree, Payloads, Case.Body, Out, Depth + 1,
-                             InLoop);
+        Inner.Statements.push_back(commentStmt("/* case " +
+                                               payloadDebugText(Payloads, Case.Value) +
+                                               " */"));
+        renderStructuredNode(Tree, Payloads, Case.Body, Inner, InLoop);
       }
       if (Node->Default != InvalidNodeId) {
-        Out.push_back(indent(Depth + 1) + "/* default */");
-        renderStructuredNode(Tree, Payloads, Node->Default, Out, Depth + 1,
-                             InLoop);
+        Inner.Statements.push_back(commentStmt("/* default */"));
+        renderStructuredNode(Tree, Payloads, Node->Default, Inner, InLoop);
       }
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1, InLoop);
+        renderStructuredNode(Tree, Payloads, Child, Inner, InLoop);
       }
     }
-    Out.push_back(indent(Depth) + "}");
+    Out.Statements.push_back(makeStmt(BlockStatement{makeBlock(std::move(Inner))}));
     break;
+  }
   case StructuredNodeKind::Goto:
-    Out.push_back(indent(Depth) + "// goto block_" +
-                  std::to_string(Node->Target));
+    Out.Statements.push_back(commentStmt("// goto block_" +
+                                         std::to_string(Node->Target)));
     break;
   case StructuredNodeKind::Return:
     break;
@@ -218,55 +303,67 @@ void renderStructuredNode(const StructuredTree &Tree,
     break;
   case StructuredNodeKind::Break:
     if (InLoop) {
-      Out.push_back(indent(Depth) + "break;");
+      Out.Statements.push_back(makeStmt(BreakStatement{}));
     }
     break;
   case StructuredNodeKind::Continue:
     if (InLoop) {
-      Out.push_back(indent(Depth) + "continue;");
+      Out.Statements.push_back(makeStmt(ContinueStatement{}));
     }
     break;
   case StructuredNodeKind::While:
-    Out.push_back(indent(Depth) + "while (" +
-                  todoCondition(conditionText(Payloads, *Node)) + ") {");
+  {
+    WhileStatement While;
+    While.Condition = conditionExpr(Payloads, *Node);
+    While.Body = makeBlock(Block{});
     if (Node->Body != InvalidNodeId) {
-      renderStructuredNode(Tree, Payloads, Node->Body, Out, Depth + 1,
+      renderStructuredNode(Tree, Payloads, Node->Body, *While.Body,
                            /*InLoop=*/true);
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1,
+        renderStructuredNode(Tree, Payloads, Child, *While.Body,
                              /*InLoop=*/true);
       }
     }
-    Out.push_back(indent(Depth) + "}");
+    Out.Statements.push_back(makeStmt(std::move(While)));
     break;
+  }
   case StructuredNodeKind::DoWhile:
-    Out.push_back(indent(Depth) + "do {");
+  {
+    DoWhileStatement DoWhile;
+    Block Body;
     if (Node->Body != InvalidNodeId) {
-      renderStructuredNode(Tree, Payloads, Node->Body, Out, Depth + 1,
+      renderStructuredNode(Tree, Payloads, Node->Body, Body,
                            /*InLoop=*/true);
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1,
+        renderStructuredNode(Tree, Payloads, Child, Body,
                              /*InLoop=*/true);
       }
     }
-    Out.push_back(indent(Depth) + "} while (" +
-                  todoCondition(conditionText(Payloads, *Node)) + ");");
+    DoWhile.Body = std::make_shared<Statement>(
+        makeStmt(BlockStatement{makeBlock(std::move(Body))}));
+    DoWhile.Condition = conditionExpr(Payloads, *Node);
+    Out.Statements.push_back(makeStmt(std::move(DoWhile)));
     break;
+  }
   case StructuredNodeKind::InfiniteLoop:
-    Out.push_back(indent(Depth) + "while (true) {");
+  {
+    WhileStatement While;
+    While.Condition = makeExpr(LiteralExpr{"true", ""});
+    While.Body = makeBlock(Block{});
     if (Node->Body != InvalidNodeId) {
-      renderStructuredNode(Tree, Payloads, Node->Body, Out, Depth + 1,
+      renderStructuredNode(Tree, Payloads, Node->Body, *While.Body,
                            /*InLoop=*/true);
     } else {
       for (structuring::NodeId Child : Node->Children) {
-        renderStructuredNode(Tree, Payloads, Child, Out, Depth + 1,
+        renderStructuredNode(Tree, Payloads, Child, *While.Body,
                              /*InLoop=*/true);
       }
     }
-    Out.push_back(indent(Depth) + "}");
+    Out.Statements.push_back(makeStmt(std::move(While)));
     break;
+  }
   }
 }
 
@@ -706,6 +803,10 @@ std::string formatReturnValue(const llvm::Value &V,
   return llvmValueName(V, "ret0");
 }
 
+ExprPtr formatReturnExpr(const llvm::Value &V) {
+  return makeExpr(UnknownExpr{formatReturnValue(V)});
+}
+
 const llvm::Value *ptrToIntPointerValue(const llvm::Value *V) {
   if (const auto *Inst = llvm::dyn_cast_or_null<llvm::PtrToIntInst>(V)) {
     return Inst->getOperand(0);
@@ -743,7 +844,7 @@ const llvm::Value *findAllocatedSingleWordReturnValue(const llvm::CallBase &Call
   return findStoredValueBeforeReturn(Call, StorePointer);
 }
 
-std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
+std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
   const llvm::Function *Callee = Call.getCalledFunction();
   if (Callee == nullptr || Callee->getName() != "evm_return" ||
       Call.arg_size() < 3) {
@@ -761,7 +862,7 @@ std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
   }
   if (!ReturnOffset.has_value()) {
     if (const llvm::Value *Stored = findAllocatedSingleWordReturnValue(Call)) {
-      return "return " + formatReturnValue(*Stored) + ";";
+      return makeStmt(ReturnStatement{formatReturnExpr(*Stored)});
     }
     return std::nullopt;
   }
@@ -781,7 +882,7 @@ std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
     if (!StoreOffset.has_value() || *StoreOffset != *ReturnOffset) {
       continue;
     }
-    return "return " + formatReturnValue(*Store->getValueOperand()) + ";";
+    return makeStmt(ReturnStatement{formatReturnExpr(*Store->getValueOperand())});
   }
 
   return std::nullopt;
@@ -789,11 +890,11 @@ std::optional<std::string> formatSingleWordReturn(const llvm::CallBase &Call) {
 
 } // namespace
 
-std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
-  std::vector<std::string> Payloads;
+Block BodyBuilder::readBody(const llvm::Function &F) {
+  std::vector<Payload> Payloads;
   class SolidityPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
   public:
-    explicit SolidityPayloadProvider(std::vector<std::string> &Payloads)
+    explicit SolidityPayloadProvider(std::vector<Payload> &Payloads)
         : Payloads(Payloads) {}
 
     void collectStatements(const llvm::BasicBlock &BB,
@@ -801,15 +902,17 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
       for (const llvm::Instruction &I : BB) {
         if (const auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(&I)) {
           if (const llvm::Value *Value = Ret->getReturnValue()) {
-            Out.push_back(addPayload(
-                Payloads, "return " + llvmValueName(*Value, "ret") + ";"));
+            Out.push_back(addPayload(Payloads,
+                                      makeStmt(ReturnStatement{
+                                          makeExpr(UnknownExpr{
+                                              llvmValueName(*Value, "ret")})})));
           }
           continue;
         }
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
-          if (std::optional<std::string> Return =
+          if (std::optional<Statement> Return =
                   formatSingleWordReturn(*Call)) {
-            Out.push_back(addPayload(Payloads, *Return));
+            Out.push_back(addPayload(Payloads, std::move(*Return)));
             continue;
           }
         }
@@ -829,13 +932,14 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
 
     PayloadRef getCondition(const llvm::Value &V,
                             llvm::StringRef FallbackName) override {
-      return addPayload(Payloads, llvmValueName(V, FallbackName));
+      return addPayload(Payloads,
+                        Expression{UnknownExpr{llvmValueName(V, FallbackName)}});
     }
 
     PayloadRef getSwitchCase(const llvm::ConstantInt &V) override {
       llvm::SmallString<32> Text;
       V.getValue().toString(Text, 10, /*isSigned=*/false);
-      return addPayload(Payloads, Text.str().str());
+      return addPayload(Payloads, Expression{LiteralExpr{Text.str().str(), ""}});
     }
 
     PayloadRef getPhiAssignment(const llvm::PHINode &Phi,
@@ -844,12 +948,16 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
                                 llvm::StringRef IncomingName) override {
       (void)Phi;
       (void)IncomingValue;
-      return addPayload(Payloads,
-                        (PhiName + " = " + IncomingName + ";").str());
+      return addPayload(
+          Payloads,
+          makeStmt(ExpressionStatement{
+              makeExpr(AssignmentExpr{
+                  makeExpr(IdentifierExpr{PhiName.str()}), "=",
+                  makeExpr(IdentifierExpr{IncomingName.str()})})}));
     }
 
   private:
-    std::vector<std::string> &Payloads;
+    std::vector<Payload> &Payloads;
   };
 
   SolidityPayloadProvider Provider(Payloads);
@@ -859,8 +967,6 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
     DephicationVVarNames.emplace(VVar.Id, VVar.Name);
   }
 
-  // The Solidity payload store is string-based. Copies still use shared
-  // dephication context; the backend only rewrites concrete payload text.
   Cfg.setPayloadMaterializeHook(
       [&Payloads, &DephicationVVarNames](const PayloadMaterializeContext &Context,
                   PayloadMaterializeKind, PayloadRef Payload,
@@ -868,7 +974,6 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
         if (!Payload.isValid()) {
           return Payload;
         }
-        std::string Text = Payloads[Payload.Id];
         std::vector<std::pair<std::string, std::string>> Copies;
         for (const auto &Copy : Context.DephicationVVarCopies) {
           auto SourceIt = DephicationVVarNames.find(Copy.first);
@@ -878,9 +983,9 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
           Copies.push_back(
               {SourceIt->second, copiedVVarName(SourceIt->second, Copy.second)});
         }
-        Text = BodyBuilder::rewriteCopiedDephicationVVars(std::move(Text),
-                                                          Copies);
-        Payloads.push_back(std::move(Text));
+        Payloads.push_back(
+            BodyBuilder::rewriteCopiedDephicationVVars(Payloads[Payload.Id],
+                                                       Copies));
         return PayloadRef{Payloads.size() - 1};
       },
       /*SupportsPredecessorRewrite=*/true,
@@ -889,36 +994,34 @@ std::vector<std::string> BodyBuilder::readBody(const llvm::Function &F) {
   std::unique_ptr<structuring::Structurer> Structurer =
       structuring::createStructurer(structuring::DefaultStructurerName);
   StructuredTree Tree = Structurer->structure(Cfg);
-  std::vector<std::string> Result = renderStructuredBody(Tree, Payloads);
+  Block Result = renderStructuredBody(Tree, Payloads);
 
   if (Payloads.empty()) {
     return Result;
   }
-  if (!Result.empty() && !isTerminalStatement(Result.back())) {
-    Result.push_back("// TODO: recover remaining body");
+  if (!Result.Statements.empty() &&
+      !isTerminalStatement(Result.Statements.back())) {
+    Result.Statements.push_back(commentStmt("// TODO: recover remaining body"));
   }
   return Result;
 }
 
-std::string BodyBuilder::rewriteCopiedDephicationVVars(
-    std::string Text,
+BodyBuilder::Payload BodyBuilder::rewriteCopiedDephicationVVars(
+    const Payload &Payload,
     const std::vector<std::pair<std::string, std::string>> &Copies) {
-  for (const auto &Copy : Copies) {
-    Text = replaceIdentifier(std::move(Text), Copy.first, Copy.second);
-  }
-  return Text;
+  return replaceIdentifiers(Payload, Copies);
 }
 
-std::vector<std::string>
+Block
 BodyBuilder::renderStructuredBody(const structuring::StructuredTree &Tree,
-                                  const std::vector<std::string> &Payloads) {
-  std::vector<std::string> Result;
+                                  const std::vector<Payload> &Payloads) {
+  Block Result;
   if (Tree.root() != InvalidNodeId) {
     renderStructuredNode(Tree, Payloads, Tree.root(), Result);
   }
 
-  if (Result.empty()) {
-    Result.push_back("/* TODO: recover body */");
+  if (Result.Statements.empty()) {
+    Result.Statements.push_back(commentStmt("/* TODO: recover body */"));
   }
   return Result;
 }
@@ -979,16 +1082,17 @@ BodyBuilder::getEventTopicArguments(const llvm::Instruction &I) {
   return Args;
 }
 
-std::string BodyBuilder::formatRevertStatement(const llvm::Instruction &I,
-                                               llvm::StringRef Kind) {
+Statement BodyBuilder::formatRevertStatement(const llvm::Instruction &I,
+                                             llvm::StringRef Kind) {
   if (Kind == "error_string") {
     if (std::optional<std::string> Literal = getStringMetadata(
             I, "notdec.solidity_revert.error_string_literal")) {
-      return "require(false, " + solidityStringLiteral(*Literal) + ");";
+      return makeStmt(RequireStatement{
+          makeExpr(LiteralExpr{"false", ""}),
+          {makeExpr(LiteralExpr{solidityStringLiteral(*Literal), ""})}});
     }
   }
 
-  std::string Result = "revert();";
   std::string Comment = Kind.str();
 
   if (std::optional<std::string> Code =
@@ -1008,22 +1112,22 @@ std::string BodyBuilder::formatRevertStatement(const llvm::Instruction &I,
     Comment += ", string_length=" + *Length;
   }
 
-  return Result + " // " + Comment;
+  return makeStmt(RevertStatement{nullptr, {}, std::move(Comment)});
 }
 
-std::string BodyBuilder::formatEventStatement(const llvm::Instruction &I,
-                                              llvm::StringRef Kind) {
+Statement BodyBuilder::formatEventStatement(const llvm::Instruction &I,
+                                            llvm::StringRef Kind) {
   std::string Name =
       getEventName(I, Kind).value_or(sanitizeIdentifier(("Event_" + Kind).str()));
   std::vector<std::string> Args = getEventTopicArguments(I);
-  std::string Text = "emit " + Name + "(";
-  for (std::size_t Index = 0; Index < Args.size(); ++Index) {
-    if (Index != 0) {
-      Text += ", ";
-    }
-    Text += Args[Index];
+  std::vector<ExprPtr> ArgExprs;
+  ArgExprs.reserve(Args.size());
+  for (std::string &Arg : Args) {
+    ArgExprs.push_back(makeExpr(UnknownExpr{std::move(Arg)}));
   }
-  return Text + "); // TODO: recover event signature";
+  return makeStmt(EmitStatement{
+      makeExpr(IdentifierExpr{std::move(Name)}), std::move(ArgExprs),
+      "TODO: recover event signature"});
 }
 
 std::string BodyBuilder::sanitizeIdentifier(llvm::StringRef Name) {

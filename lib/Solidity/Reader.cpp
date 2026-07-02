@@ -54,6 +54,7 @@ std::vector<Parameter> eventTopicParameters(const llvm::CallBase &Call) {
                                                                  : "uint256";
     Params.push_back(Parameter{TypeRef{Type},
                                "arg" + std::to_string(Params.size()),
+                               /*DataLocation=*/"",
                                /*Indexed=*/true});
   }
   return Params;
@@ -268,6 +269,7 @@ Contract Reader::readContract(const llvm::Module &M,
     Function Fallback;
     Fallback.Name = "fallback";
     Fallback.Visibility = "public payable";
+    Fallback.Body = Block{};
     Result.Functions.push_back(std::move(Fallback));
   }
 
@@ -355,11 +357,7 @@ Function Reader::readFunction(const llvm::Function &F) {
 }
 
 Block Reader::readBody(const llvm::Function &F) {
-  Block Result;
-  for (std::string Text : BodyBuilder::readBody(F)) {
-    Result.Statements.push_back(RawStatement{std::move(Text)});
-  }
-  return Result;
+  return BodyBuilder::readBody(F);
 }
 
 std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {

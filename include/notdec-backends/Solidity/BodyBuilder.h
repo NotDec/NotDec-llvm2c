@@ -3,11 +3,14 @@
 
 #include <optional>
 #include <string>
+#include <variant>
 #include <utility>
 #include <vector>
 
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Instruction.h>
+
+#include "notdec-backends/Solidity/Ast.h"
 
 namespace llvm {
 class Function;
@@ -24,12 +27,14 @@ namespace notdec::backend::solidity {
 // without mixing contract-level ABI/storage discovery with control-flow output.
 class BodyBuilder {
 public:
-  static std::vector<std::string> readBody(const llvm::Function &F);
-  static std::vector<std::string>
+  using Payload = std::variant<Statement, Expression>;
+
+  static Block readBody(const llvm::Function &F);
+  static Block
   renderStructuredBody(const structuring::StructuredTree &Tree,
-                       const std::vector<std::string> &Payloads);
-  static std::string rewriteCopiedDephicationVVars(
-      std::string Text,
+                       const std::vector<Payload> &Payloads);
+  static Payload rewriteCopiedDephicationVVars(
+      const Payload &Payload,
       const std::vector<std::pair<std::string, std::string>> &Copies);
   static std::optional<std::string> getStringMetadata(const llvm::Instruction &I,
                                                       llvm::StringRef Kind);
@@ -39,10 +44,10 @@ public:
   getEventTopicArguments(const llvm::Instruction &I);
 
 private:
-  static std::string formatRevertStatement(const llvm::Instruction &I,
-                                           llvm::StringRef Kind);
-  static std::string formatEventStatement(const llvm::Instruction &I,
-                                          llvm::StringRef Kind);
+  static Statement formatRevertStatement(const llvm::Instruction &I,
+                                         llvm::StringRef Kind);
+  static Statement formatEventStatement(const llvm::Instruction &I,
+                                        llvm::StringRef Kind);
   static std::string sanitizeIdentifier(llvm::StringRef Name);
 };
 
