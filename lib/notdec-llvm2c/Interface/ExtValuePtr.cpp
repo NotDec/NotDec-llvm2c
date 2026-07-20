@@ -1,6 +1,7 @@
 #include "notdec-llvm2c/Interface/ExtValuePtr.h"
 #include "notdec-llvm2c/Interface/ValueNamer.h"
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/Module.h>
@@ -266,6 +267,10 @@ unsigned int getSize(llvm::Type *Ty, unsigned int pointer_size) {
   if (auto *ArrayTy = llvm::dyn_cast<llvm::ArrayType>(Ty)) {
     return ArrayTy->getNumElements() *
            getSize(ArrayTy->getElementType(), pointer_size);
+  }
+  if (auto *VectorTy = llvm::dyn_cast<llvm::FixedVectorType>(Ty)) {
+    return VectorTy->getNumElements() *
+           getSize(VectorTy->getElementType(), pointer_size);
   }
   llvm::errs() << __FILE__ << ":" << __LINE__ << ": "
                << "ERROR: getSize: unhandled llvm type: " << *Ty << "\n";
