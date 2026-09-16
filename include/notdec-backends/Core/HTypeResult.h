@@ -116,11 +116,11 @@ struct HTypeResult {
     eraseValueTypesIf(References);
     eraseContraVariantValuesIf(References);
   }
-  void print(llvm::raw_ostream &OS) const {
-    // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
-    // 因此这里先创建并预热一个 formatter，再统一打印 decl/type/memory，
-    // 避免同一个声明在不同 section 中拿到不同名字。
-    ast::HTypeSnapshotFormatter Formatter(HTCtx.get());
+  // 调用方可以传入自己的 formatter，让同一份 result 的多个导出产物（例如
+  // HType 报告和逐 value 的类型表）共享同一套 canonical 声明名；否则同一个
+  // 声明会在两个产物里拿到不同的 struct_N 编号。
+  void print(llvm::raw_ostream &OS,
+             ast::HTypeSnapshotFormatter &Formatter) const {
     primeFormatter(Formatter);
     OS << "# HTypeResult\n\n";
     printDeclSection(OS, Formatter);
@@ -129,6 +129,13 @@ struct HTypeResult {
     if (hasStorageSection()) {
       printStorageSection(OS, Formatter);
     }
+  }
+  void print(llvm::raw_ostream &OS) const {
+    // snapshot 导出需要跨多个 section 共享同一套 canonical 名。
+    // 因此这里先创建并预热一个 formatter，再统一打印 decl/type/memory，
+    // 避免同一个声明在不同 section 中拿到不同名字。
+    ast::HTypeSnapshotFormatter Formatter(HTCtx.get());
+    print(OS, Formatter);
   }
   void dump() const { print(llvm::errs()); }
 
