@@ -926,6 +926,52 @@ std::optional<ExprPtr> evmEnvBuiltinExpr(llvm::StringRef Name) {
         makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"msg"}), "data"}),
         "length"});
   }
+  // Other environment builtins map to a single Solidity member access.  The
+  // address-valued ones (tx.origin, block.coinbase, address(this)) are handled
+  // by wordCastAddressExpr() at arithmetic/comparison sites.  evm_callvalue is
+  // deliberately absent: msg.value is illegal in a non-payable function and the
+  // backend does not track payability here.
+  if (Name == "evm_gasprice") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"tx"}), "gasprice"});
+  }
+  if (Name == "evm_origin") {
+    return makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"tx"}), "origin"});
+  }
+  if (Name == "evm_timestamp") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"block"}), "timestamp"});
+  }
+  if (Name == "evm_number") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"block"}), "number"});
+  }
+  if (Name == "evm_chainid") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"block"}), "chainid"});
+  }
+  if (Name == "evm_gaslimit") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"block"}), "gaslimit"});
+  }
+  if (Name == "evm_prevrandao") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"block"}), "prevrandao"});
+  }
+  if (Name == "evm_coinbase") {
+    return makeExpr(
+        MemberAccessExpr{makeExpr(IdentifierExpr{"block"}), "coinbase"});
+  }
+  if (Name == "evm_address") {
+    return makeExpr(CallExpr{makeExpr(IdentifierExpr{"address"}),
+                             {makeExpr(IdentifierExpr{"this"})}, {}});
+  }
+  if (Name == "evm_selfbalance") {
+    return makeExpr(MemberAccessExpr{
+        makeExpr(CallExpr{makeExpr(IdentifierExpr{"address"}),
+                          {makeExpr(IdentifierExpr{"this"})}, {}}),
+        "balance"});
+  }
   return std::nullopt;
 }
 
@@ -1407,9 +1453,63 @@ bool isAddressTypedIdentifier(const ExprPtr &Expr) {
   return It != ActiveParameterTypes->end() && It->second == "address";
 }
 
+// Address-valued expressions need an explicit uint conversion before they can
+// take part in arithmetic/comparison against the word-typed recovered state.
+bool isAddressValuedExpr(const ExprPtr &Expr) {
+  if (Expr == nullptr) {
+    return false;
+  }
+  if (isMsgSenderExpr(Expr) || isAddressTypedIdentifier(Expr)) {
+    return true;
+  }
+  if (const auto *Member = std::get_if<MemberAccessExpr>(&Expr->Node)) {
+    const auto *Base =
+        Member->Base == nullptr
+            ? nullptr
+            : std::get_if<IdentifierExpr>(&Member->Base->Node);
+    if (Base == nullptr) {
+      return false;
+    }
+    return (Base->Name == "tx" && Member->Member == "origin") ||
+           (Base->Name == "block" && Member->Member == "coinbase");
+  }
+  // address(this)
+  const auto *Call = std::get_if<CallExpr>(&Expr->Node);
+  if (Call == nullptr || Call->Callee == nullptr ||
+      Call->Arguments.size() != 1) {
+    return false;
+  }
+  const auto *Callee = std::get_if<IdentifierExpr>(&Call->Callee->Node);
+  const auto *Argument =
+      Call->Arguments.front() == nullptr
+          ? nullptr
+          : std::get_if<IdentifierExpr>(&Call->Arguments.front()->Node);
+  return Callee != nullptr && Argument != nullptr && Callee->Name == "address" &&
+         Argument->Name == "this";
+}
+
+// block.coinbase is address payable, and uint160() only accepts a plain
+// address, so it needs one extra address() conversion first.
+bool isAddressPayableValuedExpr(const ExprPtr &Expr) {
+  if (Expr == nullptr) {
+    return false;
+  }
+  const auto *Member = std::get_if<MemberAccessExpr>(&Expr->Node);
+  const auto *Base =
+      Member == nullptr || Member->Base == nullptr
+          ? nullptr
+          : std::get_if<IdentifierExpr>(&Member->Base->Node);
+  return Base != nullptr && Base->Name == "block" &&
+         Member->Member == "coinbase";
+}
+
 ExprPtr wordCastAddressExpr(ExprPtr Expr) {
-  if (!isMsgSenderExpr(Expr) && !isAddressTypedIdentifier(Expr)) {
+  if (!isAddressValuedExpr(Expr)) {
     return Expr;
+  }
+  if (isAddressPayableValuedExpr(Expr)) {
+    Expr = makeExpr(CallExpr{makeExpr(IdentifierExpr{"address"}),
+                             {std::move(Expr)}, {}});
   }
   return makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint256"}),
                            {makeExpr(CallExpr{
@@ -1928,7 +2028,8 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
   }
   if (!ReturnOffset.has_value()) {
     if (const llvm::Value *Stored = findAllocatedSingleWordReturnValue(Call)) {
-      return makeStmt(ReturnStatement{valueExpr(*Stored)});
+      return makeStmt(
+          ReturnStatement{wordCastAddressExpr(valueExpr(*Stored))});
     }
     return std::nullopt;
   }
@@ -1948,7 +2049,8 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
     if (!StoreOffset.has_value() || *StoreOffset != *ReturnOffset) {
       continue;
     }
-    return makeStmt(ReturnStatement{valueExpr(*Store->getValueOperand())});
+    return makeStmt(
+        ReturnStatement{wordCastAddressExpr(valueExpr(*Store->getValueOperand()))});
   }
 
   return std::nullopt;
@@ -1978,13 +2080,40 @@ formatStorageStore(const llvm::CallBase &Call) {
     return std::nullopt;
   }
 
-  ExprPtr Value = valueExpr(*Call.getArgOperand(1));
+  // Address-valued right-hand sides need the uint256(uint160(...)) conversion;
+  // recovered state variables are word typed.
+  ExprPtr Value = wordCastAddressExpr(valueExpr(*Call.getArgOperand(1)));
   if (containsUnresolvedValue(Value)) {
     return std::nullopt;
   }
 
   return makeStmt(ExpressionStatement{makeExpr(AssignmentExpr{
       makeExpr(IdentifierExpr{Info->Name}), "=", std::move(Value)})});
+}
+
+// EVM SELFDESTRUCT was previously dropped, which silently removed the call
+// from the generated Solidity.  The beneficiary is a word, so cast it through
+// uint160 to the address payable selfdestruct expects.
+std::optional<Statement> formatSelfDestruct(const llvm::CallBase &Call) {
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (Callee == nullptr || Callee->getName() != "evm_selfdestruct" ||
+      Call.arg_size() < 2) {
+    return std::nullopt;
+  }
+  ExprPtr Beneficiary = valueExpr(*Call.getArgOperand(1));
+  if (isAddressValuedExpr(Beneficiary)) {
+    Beneficiary = makeExpr(CallExpr{makeExpr(IdentifierExpr{"payable"}),
+                                    {std::move(Beneficiary)}, {}});
+  } else {
+    Beneficiary = makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint160"}),
+                                    {std::move(Beneficiary)}, {}});
+    Beneficiary = makeExpr(CallExpr{makeExpr(IdentifierExpr{"address"}),
+                                    {std::move(Beneficiary)}, {}});
+    Beneficiary = makeExpr(CallExpr{makeExpr(IdentifierExpr{"payable"}),
+                                    {std::move(Beneficiary)}, {}});
+  }
+  return makeStmt(ExpressionStatement{makeExpr(CallExpr{
+      makeExpr(IdentifierExpr{"selfdestruct"}), {std::move(Beneficiary)}, {}})});
 }
 
 } // namespace
@@ -2014,6 +2143,10 @@ Block BodyBuilder::readBody(const llvm::Function &F,
           continue;
         }
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
+          if (std::optional<Statement> Destroy = formatSelfDestruct(*Call)) {
+            Out.push_back(addPayload(Payloads, std::move(*Destroy)));
+            continue;
+          }
           if (std::optional<Statement> Store = formatStorageStore(*Call)) {
             Out.push_back(addPayload(Payloads, std::move(*Store)));
             continue;
