@@ -1318,6 +1318,49 @@ matchCalldataArgumentIndex(const llvm::Value &V) {
   return static_cast<unsigned>((ByteOffset - 4) / 32);
 }
 
+// Metadata written by EvmCalldataAccessPass carries the ABI argument index as
+// a decimal MDString.  Keep the parser strict so a malformed annotation falls
+// back to the IR shape matcher instead of naming the wrong parameter.
+std::optional<unsigned> parseUnsignedDecimal(llvm::StringRef Text) {
+  if (Text.empty()) {
+    return std::nullopt;
+  }
+  unsigned Value = 0;
+  for (char C : Text) {
+    if (C < '0' || C > '9') {
+      return std::nullopt;
+    }
+    Value = Value * 10 + static_cast<unsigned>(C - '0');
+    if (Value > 4096) {
+      return std::nullopt;
+    }
+  }
+  return Value;
+}
+
+// A raw calldata word can only stand in for an ABI parameter whose Solidity
+// type is word-like.  bool/bytesN/bytes/string/array parameters need explicit
+// lowering (bool -> x ? 1 : 0, bytesN -> uintN(x), ...), so keep the unresolved
+// placeholder until that exists.  Address is integer-valued and is already cast
+// by wordCastAddressExpr() at arithmetic/comparison/index sites.
+bool isWordLikeParameter(llvm::StringRef Name) {
+  if (ActiveParameterTypes == nullptr) {
+    return true;
+  }
+  auto It = ActiveParameterTypes->find(Name.str());
+  if (It == ActiveParameterTypes->end()) {
+    return true;
+  }
+  llvm::StringRef Type = It->second;
+  if (Type == "address") {
+    return true;
+  }
+  if (!Type.starts_with("uint") && !Type.starts_with("int")) {
+    return false;
+  }
+  return Type.find('[') == llvm::StringRef::npos;
+}
+
 bool isMsgSenderExpr(const ExprPtr &Expr) {
   const auto *Member =
       Expr == nullptr ? nullptr : std::get_if<MemberAccessExpr>(&Expr->Node);
@@ -1742,12 +1785,30 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
         Name.empty() ? std::string("extractvalue") : Name.str()});
   }
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&V)) {
+    // Prefer the pass-provided ABI argument index: it also covers plain
+    // calldata loads and helper offsets the local shape matcher cannot see.
+    if (std::optional<std::string> ArgumentIndex =
+            BodyBuilder::getStringMetadata(
+                *Load, "notdec.solidity.calldata.index")) {
+      if (std::optional<unsigned> Parsed =
+              parseUnsignedDecimal(*ArgumentIndex)) {
+        constexpr unsigned kRuntimeArgs = 4;
+        const unsigned NameIndex = kRuntimeArgs + *Parsed;
+        if (ActiveArgumentNames != nullptr &&
+            NameIndex < ActiveArgumentNames->size() &&
+            !(*ActiveArgumentNames)[NameIndex].empty() &&
+            isWordLikeParameter((*ActiveArgumentNames)[NameIndex])) {
+          return makeExpr(IdentifierExpr{(*ActiveArgumentNames)[NameIndex]});
+        }
+      }
+    }
     if (std::optional<unsigned> ArgIndex = matchCalldataArgumentIndex(*Load)) {
       constexpr unsigned kRuntimeArgs = 4;
       const unsigned NameIndex = kRuntimeArgs + *ArgIndex;
       if (ActiveArgumentNames != nullptr &&
           NameIndex < ActiveArgumentNames->size() &&
-          !(*ActiveArgumentNames)[NameIndex].empty()) {
+          !(*ActiveArgumentNames)[NameIndex].empty() &&
+          isWordLikeParameter((*ActiveArgumentNames)[NameIndex])) {
         return makeExpr(IdentifierExpr{(*ActiveArgumentNames)[NameIndex]});
       }
     }
