@@ -595,11 +595,44 @@ void renderStructuredNode(const StructuredTree &Tree,
   }
 }
 
-std::string llvmValueName(const llvm::Value &V, llvm::StringRef Prefix) {
+// LLVM value names are not necessarily valid Solidity identifiers: SSA names
+// like `%private.call2` contain '.', and would make the emitted Solidity fail
+// the parser (`private.call2` is parsed as member access).  Sanitize names
+// before turning them into Solidity identifiers.
+std::string sanitizeSolidityIdentifier(llvm::StringRef Name) {
+  std::string Result;
+  Result.reserve(Name.size());
+  for (char C : Name) {
+    unsigned char UC = static_cast<unsigned char>(C);
+    if (std::isalnum(UC) || C == '_') {
+      Result.push_back(C);
+    } else {
+      Result.push_back('_');
+    }
+  }
+  if (Result.empty()) {
+    return "v";
+  }
+  if (std::isdigit(static_cast<unsigned char>(Result.front()))) {
+    Result.insert(Result.begin(), '_');
+  }
+  return Result;
+}
+
+// Raw LLVM value name for diagnostics/TODO comments.  This intentionally keeps
+// characters such as '.' so the comment still points at the original IR value.
+std::string llvmValueDebugName(const llvm::Value &V, llvm::StringRef Prefix) {
   if (V.hasName()) {
     return V.getName().str();
   }
   return Prefix.str();
+}
+
+std::string llvmValueName(const llvm::Value &V, llvm::StringRef Prefix) {
+  if (V.hasName()) {
+    return sanitizeSolidityIdentifier(V.getName());
+  }
+  return sanitizeSolidityIdentifier(Prefix);
 }
 
 std::optional<llvm::APInt> constantIntValue(const llvm::Value *V) {
@@ -1081,7 +1114,7 @@ Block BodyBuilder::readBody(const llvm::Function &F) {
                             llvm::StringRef FallbackName) override {
       return addPayload(
           Payloads,
-          Expression{TodoConditionExpr{llvmValueName(V, FallbackName)}});
+          Expression{TodoConditionExpr{llvmValueDebugName(V, FallbackName)}});
     }
 
     PayloadRef getSwitchCase(const llvm::ConstantInt &V) override {

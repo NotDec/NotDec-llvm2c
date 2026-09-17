@@ -468,8 +468,14 @@ std::vector<Parameter> Reader::parseAbiParameters(llvm::StringRef Encoded) {
     if (!isKnownAbiType(Part)) {
       continue;
     }
-    Result.push_back(Parameter{TypeRef{Part.str()},
-                               "arg" + std::to_string(Result.size())});
+    Parameter Param{TypeRef{Part.str()},
+                    "arg" + std::to_string(Result.size())};
+    // Dynamic ABI parameters need an explicit data location on function
+    // signatures.  Public/external inputs come from calldata.
+    if (Part == "string" || Part == "bytes") {
+      Param.DataLocation = "calldata";
+    }
+    Result.push_back(std::move(Param));
   }
   return Result;
 }
