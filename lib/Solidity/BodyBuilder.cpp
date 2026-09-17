@@ -40,6 +40,7 @@ using structuring::VVarId;
 thread_local const StorageSlotMap *ActiveStorageSlots = nullptr;
 thread_local const std::vector<std::string> *ActiveArgumentNames = nullptr;
 thread_local const ParameterTypeMap *ActiveParameterTypes = nullptr;
+thread_local const std::vector<std::string> *ActiveReturnTypes = nullptr;
 thread_local const EventParamTypeMap *ActiveEventParamTypes = nullptr;
 
 class ActiveStorageSlotsScope {
@@ -47,14 +48,17 @@ public:
   ActiveStorageSlotsScope(const StorageSlotMap *StorageSlots,
                           const std::vector<std::string> *ArgumentNames,
                           const ParameterTypeMap *ParameterTypes,
+                          const std::vector<std::string> *ReturnTypes,
                           const EventParamTypeMap *EventParamTypes)
       : PreviousStorageSlots(ActiveStorageSlots),
         PreviousArgumentNames(ActiveArgumentNames),
         PreviousParameterTypes(ActiveParameterTypes),
+        PreviousReturnTypes(ActiveReturnTypes),
         PreviousEventParamTypes(ActiveEventParamTypes) {
     ActiveStorageSlots = StorageSlots;
     ActiveArgumentNames = ArgumentNames;
     ActiveParameterTypes = ParameterTypes;
+    ActiveReturnTypes = ReturnTypes;
     ActiveEventParamTypes = EventParamTypes;
   }
 
@@ -62,6 +66,7 @@ public:
     ActiveStorageSlots = PreviousStorageSlots;
     ActiveArgumentNames = PreviousArgumentNames;
     ActiveParameterTypes = PreviousParameterTypes;
+    ActiveReturnTypes = PreviousReturnTypes;
     ActiveEventParamTypes = PreviousEventParamTypes;
   }
 
@@ -69,6 +74,7 @@ private:
   const StorageSlotMap *PreviousStorageSlots;
   const std::vector<std::string> *PreviousArgumentNames;
   const ParameterTypeMap *PreviousParameterTypes;
+  const std::vector<std::string> *PreviousReturnTypes;
   const EventParamTypeMap *PreviousEventParamTypes;
 };
 
@@ -1503,6 +1509,11 @@ bool isAddressPayableValuedExpr(const ExprPtr &Expr) {
          Member->Member == "coinbase";
 }
 
+bool isBoolReturnType() {
+  return ActiveReturnTypes != nullptr && !ActiveReturnTypes->empty() &&
+         ActiveReturnTypes->front() == "bool";
+}
+
 // valueExpr() unwraps zext i1, so a word stored from a comparison still prints
 // as a Solidity bool.  Contexts that need a word (multi-word ABI returns) have
 // to lower such expressions to 0/1.
@@ -1541,6 +1552,22 @@ ExprPtr wordCastAddressExpr(ExprPtr Expr) {
                                makeExpr(IdentifierExpr{"uint160"}),
                                {std::move(Expr)}, {}})},
                            {}});
+}
+
+// ABI returns are declared from the recovered return words; everything except a
+// single bool word is uint256.  A bool-valued expression therefore has to be
+// lowered to 0/1 before it can be returned as a word.
+ExprPtr wordReturnExpr(ExprPtr Expr, const llvm::Value &Stored) {
+  Expr = wordCastAddressExpr(std::move(Expr));
+  if (isBoolReturnType()) {
+    return Expr;
+  }
+  if (Stored.getType()->isIntegerTy(1) || isBoolValuedExpr(Expr)) {
+    return makeExpr(ConditionalExpr{std::move(Expr),
+                                    makeExpr(LiteralExpr{"1", ""}),
+                                    makeExpr(LiteralExpr{"0", ""})});
+  }
+  return Expr;
 }
 
 bool isComparisonOperator(llvm::StringRef Operator) {
@@ -2119,18 +2146,17 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
     return std::nullopt;
   }
   if (!ReturnOffset.has_value()) {
+    // The buffer base may be a calloc pointer, a pointer loaded from an
+    // outlined formal, or another i256 address; match stores against the exact
+    // base value, not just the calloc shape.
     const llvm::Value *BasePtr = ptrToIntPointerValue(Call.getArgOperand(1));
-    const llvm::Value *Stored =
-        BasePtr == nullptr
-            ? findAllocatedSingleWordReturnValue(Call)
-            : findReturnBufferStoreBefore(Call, BasePtr, Call.getArgOperand(1),
-                                          0);
+    const llvm::Value *Stored = findReturnBufferStoreBefore(
+        Call, BasePtr, Call.getArgOperand(1), 0);
     if (Stored == nullptr) {
       Stored = findAllocatedSingleWordReturnValue(Call);
     }
     if (Stored != nullptr) {
-      return makeStmt(
-          ReturnStatement{wordCastAddressExpr(valueExpr(*Stored))});
+      return makeStmt(ReturnStatement{wordReturnExpr(valueExpr(*Stored), *Stored)});
     }
     return std::nullopt;
   }
@@ -2150,8 +2176,9 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
     if (!StoreOffset.has_value() || *StoreOffset != *ReturnOffset) {
       continue;
     }
-    return makeStmt(
-        ReturnStatement{wordCastAddressExpr(valueExpr(*Store->getValueOperand()))});
+    return makeStmt(ReturnStatement{
+        wordReturnExpr(valueExpr(*Store->getValueOperand()),
+                       *Store->getValueOperand())});
   }
 
   return std::nullopt;
@@ -2209,7 +2236,7 @@ std::optional<Statement> formatMultiWordReturn(const llvm::CallBase &Call) {
         }
       }
     }
-  } else if (BasePtr != nullptr) {
+  } else {
     for (auto It = llvm::BasicBlock::const_iterator(&Call),
               Begin = Call.getParent()->begin();
          It != Begin;) {
@@ -2228,8 +2255,6 @@ std::optional<Statement> formatMultiWordReturn(const llvm::CallBase &Call) {
         Stored[Index] = Store->getValueOperand();
       }
     }
-  } else {
-    return std::nullopt;
   }
 
   for (const llvm::Value *Value : Stored) {
@@ -2240,15 +2265,7 @@ std::optional<Statement> formatMultiWordReturn(const llvm::CallBase &Call) {
   std::vector<ExprPtr> Values;
   Values.reserve(Count);
   for (const llvm::Value *Value : Stored) {
-    ExprPtr Element = wordCastAddressExpr(valueExpr(*Value));
-    if (Value->getType()->isIntegerTy(1) || isBoolValuedExpr(Element)) {
-      // The reader declares multi-word returns as uint256 words, so a bool
-      // stored word has to become 0/1 instead of a Solidity bool.
-      Element = makeExpr(ConditionalExpr{std::move(Element),
-                                         makeExpr(LiteralExpr{"1", ""}),
-                                         makeExpr(LiteralExpr{"0", ""})});
-    }
-    Values.push_back(std::move(Element));
+    Values.push_back(wordReturnExpr(valueExpr(*Value), *Value));
   }
   return makeStmt(ReturnStatement{makeExpr(TupleExpr{std::move(Values)})});
 }
@@ -2319,9 +2336,11 @@ Block BodyBuilder::readBody(const llvm::Function &F,
                             const StorageSlotMap *StorageSlots,
                             const std::vector<std::string> *ArgumentNames,
                             const ParameterTypeMap *ParameterTypes,
+                            const std::vector<std::string> *ReturnTypes,
                             const EventParamTypeMap *EventParamTypes) {
   ActiveStorageSlotsScope StorageScope(StorageSlots, ArgumentNames,
-                                       ParameterTypes, EventParamTypes);
+                                       ParameterTypes, ReturnTypes,
+                                       EventParamTypes);
   std::vector<Payload> Payloads;
   class SolidityPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
   public:

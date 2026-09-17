@@ -29,6 +29,7 @@ private:
                         const StorageSlotMap *StorageSlots,
                         const std::vector<std::string> *ArgumentNames,
                         const ParameterTypeMap *ParameterTypes,
+                        const std::vector<std::string> *ReturnTypes,
                         const EventParamTypeMap *EventParamTypes);
   static std::vector<Parameter> readReturns(const llvm::Function &F);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,

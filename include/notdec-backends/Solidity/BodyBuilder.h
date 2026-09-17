@@ -34,6 +34,7 @@ public:
                         const StorageSlotMap *StorageSlots = nullptr,
                         const std::vector<std::string> *ArgumentNames = nullptr,
                         const ParameterTypeMap *ParameterTypes = nullptr,
+                        const std::vector<std::string> *ReturnTypes = nullptr,
                         const EventParamTypeMap *EventParamTypes = nullptr);
   static Block
   renderStructuredBody(const structuring::StructuredTree &Tree,

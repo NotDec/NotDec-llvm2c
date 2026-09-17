@@ -515,8 +515,13 @@ Function Reader::readFunction(const llvm::Function &F,
 
   Result.Visibility = "public";
   Result.Returns = readReturns(F);
+  std::vector<std::string> ReturnTypes;
+  ReturnTypes.reserve(Result.Returns.size());
+  for (const Parameter &Param : Result.Returns) {
+    ReturnTypes.push_back(Param.Type.Name);
+  }
   Result.Body = readBody(F, StorageSlots, &ArgumentNames, &ParameterTypes,
-                         EventParamTypes);
+                         &ReturnTypes, EventParamTypes);
   return Result;
 }
 
@@ -524,9 +529,10 @@ Block Reader::readBody(const llvm::Function &F,
                        const StorageSlotMap *StorageSlots,
                        const std::vector<std::string> *ArgumentNames,
                        const ParameterTypeMap *ParameterTypes,
+                       const std::vector<std::string> *ReturnTypes,
                        const EventParamTypeMap *EventParamTypes) {
   return BodyBuilder::readBody(F, StorageSlots, ArgumentNames, ParameterTypes,
-                               EventParamTypes);
+                               ReturnTypes, EventParamTypes);
 }
 
 std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
