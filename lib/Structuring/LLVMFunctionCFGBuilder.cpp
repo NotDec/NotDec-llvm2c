@@ -145,11 +145,10 @@ conditionCompareFromICmp(const llvm::Value &V,
   }
 
   bool HasIntegerValue = Constant->getBitWidth() <= 64;
-  // LLVM's BasicBlock successor iteration currently matches the existing
-  // shared-CFG convention used by this builder: index 1 is the condition-true
-  // edge. Keep that local here so range metadata follows the same convention as
-  // the older eq/ne metadata.
-  std::size_t TrueTargetIndex = 1;
+  // Branch successors are stored in getSuccessor() order: index 0 is the
+  // condition-true edge and index 1 is the condition-false edge.  Keep range
+  // metadata on the same convention as CFGBlock::Successors.
+  std::size_t TrueTargetIndex = 0;
   return ConditionCompare{
       .ComparedValue = cachedCondition(Provider, Cache, *Compared, "switch"),
       .ConstantValue = cachedSwitchCase(Provider, Cache, *Constant),
@@ -202,8 +201,13 @@ LLVMFunctionCFGBuilder::build(const llvm::Function &F,
       } else {
         Block.Terminator = TerminatorKind::Fallthrough;
       }
-      for (const llvm::BasicBlock *Succ : Br->successors()) {
-        Block.Successors.push_back(BlockIds[Succ]);
+      // BranchInst::getSuccessor(i) returns successor 0 as the condition-true
+      // target and successor 1 as the condition-false target, while
+      // Br->successors() iterates the raw operands in [false, true] order.
+      // The downstream structurer consumes CFGBlock::Successors with index 0
+      // == then/true, so use getSuccessor() explicitly.
+      for (unsigned I = 0; I < Br->getNumSuccessors(); ++I) {
+        Block.Successors.push_back(BlockIds[Br->getSuccessor(I)]);
       }
     } else if (const auto *Sw = llvm::dyn_cast_or_null<llvm::SwitchInst>(Term)) {
       Block.Terminator = TerminatorKind::Switch;

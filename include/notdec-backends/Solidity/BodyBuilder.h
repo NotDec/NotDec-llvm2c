@@ -33,6 +33,7 @@ public:
   static Block readBody(const llvm::Function &F,
                         const StorageSlotMap *StorageSlots = nullptr,
                         const std::vector<std::string> *ArgumentNames = nullptr,
+                        const ParameterTypeMap *ParameterTypes = nullptr,
                         const EventParamTypeMap *EventParamTypes = nullptr);
   static Block
   renderStructuredBody(const structuring::StructuredTree &Tree,

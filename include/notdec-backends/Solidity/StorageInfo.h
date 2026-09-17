@@ -24,6 +24,10 @@ using StorageSlotMap = std::map<std::uint64_t, StorageSlotInfo>;
 using EventParamTypeMap =
     std::map<std::string, std::vector<std::string>>;
 
+// Solidity parameter name -> recovered ABI type, used by body expression
+// recovery for address/bytes coercion decisions.
+using ParameterTypeMap = std::map<std::string, std::string>;
+
 } // namespace notdec::backend::solidity
 
 #endif

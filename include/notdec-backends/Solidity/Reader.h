@@ -28,6 +28,7 @@ private:
   static Block readBody(const llvm::Function &F,
                         const StorageSlotMap *StorageSlots,
                         const std::vector<std::string> *ArgumentNames,
+                        const ParameterTypeMap *ParameterTypes,
                         const EventParamTypeMap *EventParamTypes);
   static std::vector<Parameter> readReturns(const llvm::Function &F);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,

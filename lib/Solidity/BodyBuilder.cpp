@@ -21,6 +21,7 @@ namespace notdec::backend::solidity {
 namespace {
 
 using structuring::BlockId;
+using structuring::CFGBlock;
 using structuring::InvalidNodeId;
 using structuring::LLVMFunctionCFGBuilder;
 using structuring::PayloadMaterializeContext;
@@ -30,6 +31,7 @@ using structuring::StructuredCFG;
 using structuring::StructuredNode;
 using structuring::StructuredNodeKind;
 using structuring::StructuredTree;
+using structuring::TerminatorKind;
 using structuring::VVarId;
 
 // Active contract-level slot map while one Solidity function body is being
@@ -37,30 +39,36 @@ using structuring::VVarId;
 // thread_local keeps parallel backend invocations from sharing slot state.
 thread_local const StorageSlotMap *ActiveStorageSlots = nullptr;
 thread_local const std::vector<std::string> *ActiveArgumentNames = nullptr;
+thread_local const ParameterTypeMap *ActiveParameterTypes = nullptr;
 thread_local const EventParamTypeMap *ActiveEventParamTypes = nullptr;
 
 class ActiveStorageSlotsScope {
 public:
   ActiveStorageSlotsScope(const StorageSlotMap *StorageSlots,
                           const std::vector<std::string> *ArgumentNames,
+                          const ParameterTypeMap *ParameterTypes,
                           const EventParamTypeMap *EventParamTypes)
       : PreviousStorageSlots(ActiveStorageSlots),
         PreviousArgumentNames(ActiveArgumentNames),
+        PreviousParameterTypes(ActiveParameterTypes),
         PreviousEventParamTypes(ActiveEventParamTypes) {
     ActiveStorageSlots = StorageSlots;
     ActiveArgumentNames = ArgumentNames;
+    ActiveParameterTypes = ParameterTypes;
     ActiveEventParamTypes = EventParamTypes;
   }
 
   ~ActiveStorageSlotsScope() {
     ActiveStorageSlots = PreviousStorageSlots;
     ActiveArgumentNames = PreviousArgumentNames;
+    ActiveParameterTypes = PreviousParameterTypes;
     ActiveEventParamTypes = PreviousEventParamTypes;
   }
 
 private:
   const StorageSlotMap *PreviousStorageSlots;
   const std::vector<std::string> *PreviousArgumentNames;
+  const ParameterTypeMap *PreviousParameterTypes;
   const EventParamTypeMap *PreviousEventParamTypes;
 };
 
@@ -405,8 +413,26 @@ std::string payloadDebugText(const std::vector<BodyBuilder::Payload> &Payloads,
   }, Payload);
 }
 
+const Expression *payloadExpression(
+    const std::vector<BodyBuilder::Payload> &Payloads, PayloadRef Ref) {
+  if (!Ref.isValid() || Ref.Id >= Payloads.size()) {
+    return nullptr;
+  }
+  return std::get_if<Expression>(&Payloads[Ref.Id]);
+}
+
 ExprPtr conditionExpr(const std::vector<BodyBuilder::Payload> &Payloads,
                       const StructuredNode &Node) {
+  if (const Expression *Condition =
+          payloadExpression(Payloads, Node.Condition)) {
+    ExprPtr Result = std::make_shared<Expression>(*Condition);
+    if (Node.ConditionNegated) {
+      Result = makeExpr(
+          UnaryExpr{"!", std::move(Result), /*Prefix=*/true, 30});
+    }
+    return Result;
+  }
+
   std::string Text = payloadDebugText(Payloads, Node.Condition);
   if (Node.ConditionNegated) {
     Text = "!(" + Text + ")";
@@ -447,6 +473,190 @@ bool isTerminalStatement(const Statement &Stmt) {
       return false;
     }
   }, Stmt.Node);
+}
+
+// The trailing "recover remaining body" marker means the rendered statements
+// may not cover the whole function.  Control reaches the exit when the last
+// rendered block's CFG terminator is Return/Unreachable on every path, and the
+// structurer emits a Goto node for branches it could not structure.  Use those
+// two facts instead of the last printed statement, because a recovered
+// assignment is not terminal even though the implicit Solidity return after it
+// is.
+struct BodyCompletion {
+  bool HasGoto = false;
+  bool ReachesExit = false;
+};
+
+BodyCompletion analyzeBodyCompletion(const StructuredCFG &Cfg,
+                                     const StructuredTree &Tree,
+                                     structuring::NodeId Id) {
+  const StructuredNode *Node = Tree.getNode(Id);
+  if (Node == nullptr) {
+    return {};
+  }
+  switch (Node->Kind) {
+  case StructuredNodeKind::Goto:
+    return {true, false};
+  case StructuredNodeKind::Return:
+  case StructuredNodeKind::Unreachable:
+    return {false, true};
+  case StructuredNodeKind::BasicBlock: {
+    // The Phoenix structurer materializes explicit Return/Unreachable nodes
+    // only on some paths, so read terminality from the CFG terminator of the
+    // block this node renders.  appendBlockBody() may render a synthetic
+    // block's merged body, hence the getBodyBlock() fallback.
+    auto IsExitBlock = [&](const CFGBlock *Block) {
+      return Block != nullptr &&
+             (Block->Terminator == TerminatorKind::Return ||
+              Block->Terminator == TerminatorKind::Unreachable);
+    };
+    bool ReachesExit = IsExitBlock(Cfg.getBlock(Node->Block)) ||
+                       IsExitBlock(Cfg.getBodyBlock(Node->Block));
+    return {false, ReachesExit};
+  }
+  case StructuredNodeKind::Sequence: {
+    BodyCompletion Result;
+    for (structuring::NodeId Child : Node->Children) {
+      Result.HasGoto |= analyzeBodyCompletion(Cfg, Tree, Child).HasGoto;
+    }
+    if (!Node->Children.empty()) {
+      Result.ReachesExit =
+          analyzeBodyCompletion(Cfg, Tree, Node->Children.back()).ReachesExit;
+    }
+    return Result;
+  }
+  case StructuredNodeKind::If: {
+    BodyCompletion Then = analyzeBodyCompletion(Cfg, Tree, Node->Then);
+    BodyCompletion Else = analyzeBodyCompletion(Cfg, Tree, Node->Else);
+    return {Then.HasGoto || Else.HasGoto, Then.ReachesExit && Else.ReachesExit};
+  }
+  case StructuredNodeKind::Switch: {
+    BodyCompletion Result;
+    bool AllReachExit = Node->Default != InvalidNodeId;
+    for (const structuring::StructuredSwitchCase &Case :
+         Node->StructuredCases) {
+      BodyCompletion CaseResult = analyzeBodyCompletion(Cfg, Tree, Case.Body);
+      Result.HasGoto |= CaseResult.HasGoto;
+      AllReachExit &= CaseResult.ReachesExit;
+    }
+    if (Node->Default != InvalidNodeId) {
+      BodyCompletion Default =
+          analyzeBodyCompletion(Cfg, Tree, Node->Default);
+      Result.HasGoto |= Default.HasGoto;
+      AllReachExit &= Default.ReachesExit;
+    }
+    Result.ReachesExit = AllReachExit;
+    return Result;
+  }
+  case StructuredNodeKind::While:
+  case StructuredNodeKind::DoWhile:
+  case StructuredNodeKind::InfiniteLoop: {
+    BodyCompletion Result;
+    if (Node->Body != InvalidNodeId) {
+      Result.HasGoto = analyzeBodyCompletion(Cfg, Tree, Node->Body).HasGoto;
+    }
+    for (structuring::NodeId Child : Node->Children) {
+      Result.HasGoto |= analyzeBodyCompletion(Cfg, Tree, Child).HasGoto;
+    }
+    // A loop only reaches the exit through a break; stay conservative here.
+    return Result;
+  }
+  default:
+    return {};
+  }
+}
+
+// Solidity lowers require(cond) to a conditional revert(0, 0) guard in front of
+// the body.  The revert pass marks a plain empty revert with kind "empty" and a
+// recovered Error(string) as require(false, "..."); both can be rebuilt from
+// the negated guard condition.  Panic, custom error and returndata-bubble
+// reverts keep their explicit if because their payload cannot be reproduced by
+// a negated condition.
+const Statement *soleNonCommentStatement(const BlockPtr &Branch) {
+  if (Branch == nullptr) {
+    return nullptr;
+  }
+  const Statement *Only = nullptr;
+  for (const Statement &Stmt : Branch->Statements) {
+    if (std::holds_alternative<CommentStatement>(Stmt.Node)) {
+      continue;
+    }
+    if (Only != nullptr) {
+      return nullptr;
+    }
+    Only = &Stmt;
+  }
+  return Only;
+}
+
+std::optional<llvm::StringRef> invertedComparisonOperator(llvm::StringRef Op) {
+  if (Op == "==") {
+    return "!=";
+  }
+  if (Op == "!=") {
+    return "==";
+  }
+  if (Op == "<") {
+    return ">=";
+  }
+  if (Op == "<=") {
+    return ">";
+  }
+  if (Op == ">") {
+    return "<=";
+  }
+  if (Op == ">=") {
+    return "<";
+  }
+  return std::nullopt;
+}
+
+// Negate a guard condition for require(): comparisons flip to their inverse so
+// the common "if (a < b) revert" reads back as "require(a >= b)".  Other
+// conditions fall back to a parenthesized "!".
+ExprPtr negateConditionExpr(const ExprPtr &Condition) {
+  if (!Condition) {
+    return makeExpr(UnaryExpr{"!", Condition, /*Prefix=*/true, 30});
+  }
+  if (const auto *Unary = std::get_if<UnaryExpr>(&Condition->Node)) {
+    if (Unary->Prefix && Unary->Operator == "!" && Unary->Operand) {
+      return Unary->Operand;
+    }
+  }
+  if (const auto *Binary = std::get_if<BinaryExpr>(&Condition->Node)) {
+    if (std::optional<llvm::StringRef> Inverted =
+            invertedComparisonOperator(Binary->Operator)) {
+      return makeExpr(BinaryExpr{Binary->Left, Inverted->str(), Binary->Right,
+                                 Binary->Precedence,
+                                 Binary->ParenthesizeLeftOnEqual,
+                                 Binary->ParenthesizeRightOnEqual});
+    }
+  }
+  return makeExpr(UnaryExpr{"!", Condition, /*Prefix=*/true, 30});
+}
+
+std::optional<RequireStatement>
+guardRevertRequire(const BlockPtr &Branch, const ExprPtr &Condition) {
+  const Statement *Only = soleNonCommentStatement(Branch);
+  if (Only == nullptr) {
+    return std::nullopt;
+  }
+  if (const auto *Req = std::get_if<RequireStatement>(&Only->Node)) {
+    const auto *Literal =
+        Req->Condition == nullptr
+            ? nullptr
+            : std::get_if<LiteralExpr>(&Req->Condition->Node);
+    if (Literal == nullptr || Literal->Text != "false") {
+      return std::nullopt;
+    }
+    return RequireStatement{negateConditionExpr(Condition), Req->Arguments};
+  }
+  const auto *Rev = std::get_if<RevertStatement>(&Only->Node);
+  if (Rev == nullptr || Rev->Error != nullptr || !Rev->Arguments.empty() ||
+      Rev->Comment != "empty") {
+    return std::nullopt;
+  }
+  return RequireStatement{negateConditionExpr(Condition), {}};
 }
 
 std::string solidityStringLiteral(llvm::StringRef Text) {
@@ -528,6 +738,31 @@ void renderStructuredNode(const StructuredTree &Tree,
       for (structuring::NodeId Child : Node->Children) {
         renderStructuredNode(Tree, Payloads, Child, *If.Then, InLoop);
       }
+    }
+
+    // "if (cond) { revert(); } else { body }" is the recovered form of
+    // "require(!cond); body".  Fold it when exactly one branch is a pure guard
+    // revert, so the guard reads like the original Solidity instead of an if
+    // with an empty continuation branch.
+    std::optional<RequireStatement> ThenGuard =
+        guardRevertRequire(If.Then, If.Condition);
+    std::optional<RequireStatement> ElseGuard =
+        guardRevertRequire(If.Else, If.Condition);
+    if (ThenGuard.has_value() && !ElseGuard.has_value()) {
+      Out.Statements.push_back(makeStmt(std::move(*ThenGuard)));
+      if (If.Else != nullptr) {
+        for (const Statement &Stmt : If.Else->Statements) {
+          Out.Statements.push_back(Stmt);
+        }
+      }
+      break;
+    }
+    if (ElseGuard.has_value() && !ThenGuard.has_value()) {
+      Out.Statements.push_back(makeStmt(std::move(*ElseGuard)));
+      for (const Statement &Stmt : If.Then->Statements) {
+        Out.Statements.push_back(Stmt);
+      }
+      break;
     }
     Out.Statements.push_back(makeStmt(std::move(If)));
     break;
@@ -632,30 +867,6 @@ void renderStructuredNode(const StructuredTree &Tree,
   }
 }
 
-// LLVM value names are not necessarily valid Solidity identifiers: SSA names
-// like `%private.call2` contain '.', and would make the emitted Solidity fail
-// the parser (`private.call2` is parsed as member access).  Sanitize names
-// before turning them into Solidity identifiers.
-std::string sanitizeSolidityIdentifier(llvm::StringRef Name) {
-  std::string Result;
-  Result.reserve(Name.size());
-  for (char C : Name) {
-    unsigned char UC = static_cast<unsigned char>(C);
-    if (std::isalnum(UC) || C == '_') {
-      Result.push_back(C);
-    } else {
-      Result.push_back('_');
-    }
-  }
-  if (Result.empty()) {
-    return "v";
-  }
-  if (std::isdigit(static_cast<unsigned char>(Result.front()))) {
-    Result.insert(Result.begin(), '_');
-  }
-  return Result;
-}
-
 // Raw LLVM value name for diagnostics/TODO comments.  This intentionally keeps
 // characters such as '.' so the comment still points at the original IR value.
 std::string llvmValueDebugName(const llvm::Value &V, llvm::StringRef Prefix) {
@@ -663,13 +874,6 @@ std::string llvmValueDebugName(const llvm::Value &V, llvm::StringRef Prefix) {
     return V.getName().str();
   }
   return Prefix.str();
-}
-
-std::string llvmValueName(const llvm::Value &V, llvm::StringRef Prefix) {
-  if (V.hasName()) {
-    return sanitizeSolidityIdentifier(V.getName());
-  }
-  return sanitizeSolidityIdentifier(Prefix);
 }
 
 std::optional<llvm::APInt> constantIntValue(const llvm::Value *V) {
@@ -717,10 +921,20 @@ std::optional<ExprPtr> evmEnvBuiltinExpr(llvm::StringRef Name) {
     return makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"msg"}),
                                      "sender"});
   }
+  if (Name == "evm_calldatasize") {
+    return makeExpr(MemberAccessExpr{
+        makeExpr(MemberAccessExpr{makeExpr(IdentifierExpr{"msg"}), "data"}),
+        "length"});
+  }
   return std::nullopt;
 }
 
 std::string formatInteger(const llvm::APInt &Value) {
+  // A one-bit value is a Solidity bool.  Emitting 0/1 would make recovered
+  // conditions such as "if (0)" or "require(1)" fail to compile.
+  if (Value.getBitWidth() == 1) {
+    return Value.isZero() ? "false" : "true";
+  }
   // Solidity decimal literals cannot express i256 values with the sign bit
   // set (Gigahorse emits masks such as i256 -1 / -256 directly).  Emit them
   // as uint256 arithmetic around type(uint256).max instead of an oversized
@@ -913,6 +1127,7 @@ bool leftOperandNeedsSamePrecedenceParentheses(llvm::StringRef Operator) {
 }
 
 ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName = "ret0");
+ExprPtr wordCastAddressExpr(ExprPtr Expr);
 
 const StorageSlotInfo *storageSlotInfoForValue(const llvm::Value &V) {
   if (ActiveStorageSlots == nullptr) {
@@ -924,6 +1139,20 @@ const StorageSlotInfo *storageSlotInfoForValue(const llvm::Value &V) {
   }
   auto It = ActiveStorageSlots->find(Slot->getZExtValue());
   return It == ActiveStorageSlots->end() ? nullptr : &It->second;
+}
+
+const StorageSlotInfo *storageSlotInfoForRef(const llvm::Value &V) {
+  if (const StorageSlotInfo *Info = storageSlotInfoForValue(V)) {
+    return Info;
+  }
+  const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V);
+  const llvm::Function *Callee =
+      Call == nullptr ? nullptr : Call->getCalledFunction();
+  if (Callee != nullptr && Callee->getName() == "evm.storage.slot" &&
+      Call->arg_size() >= 1) {
+    return storageSlotInfoForValue(*Call->getArgOperand(0));
+  }
+  return nullptr;
 }
 
 struct StorageContainerShape {
@@ -991,8 +1220,11 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
       return std::nullopt;
     }
     if (storageContainerShapeForRef(*Call.getArgOperand(0)).IsMapping) {
-      return makeExpr(
-          IndexAccessExpr{*Base, valueExpr(*Call.getArgOperand(1))});
+      // State-variable types recovered by TypePrinter are always integer or
+      // array keyed, so an address-valued index (msg.sender / an address ABI
+      // parameter) needs the explicit uint256(uint160(...)) conversion.
+      return makeExpr(IndexAccessExpr{
+          *Base, wordCastAddressExpr(valueExpr(*Call.getArgOperand(1)))});
     }
     // The declared slot type is not known to be indexable; keep a readable
     // base expression instead of emitting an undeclared SSA name.
@@ -1009,8 +1241,8 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
       return std::nullopt;
     }
     if (storageContainerShapeForRef(*Call.getArgOperand(0)).IsArray) {
-      return makeExpr(
-          IndexAccessExpr{*Base, valueExpr(*Call.getArgOperand(1))});
+      return makeExpr(IndexAccessExpr{
+          *Base, wordCastAddressExpr(valueExpr(*Call.getArgOperand(1)))});
     }
     return *Base;
   }
@@ -1041,6 +1273,51 @@ std::optional<ExprPtr> storageRefExpr(const llvm::Value &V) {
   return std::nullopt;
 }
 
+// Recognize the canonical checked-calldata word load produced by
+// EvmCalldataAccessPass:
+//   %checked = call ptr @notdec_evm_calldata_min_size(calldata, min_size)
+//   %addr    = add (ptrtoint %checked), 4 + 32*i
+//   %load    = load i256, inttoptr %addr
+// and map it back to the i-th Solidity ABI argument.
+std::optional<unsigned>
+matchCalldataArgumentIndex(const llvm::Value &V) {
+  const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&V);
+  const auto *ITP = Load == nullptr
+                        ? nullptr
+                        : llvm::dyn_cast<llvm::IntToPtrInst>(
+                              Load->getPointerOperand());
+  const auto *Add = ITP == nullptr
+                        ? nullptr
+                        : llvm::dyn_cast<llvm::BinaryOperator>(ITP->getOperand(0));
+  if (Add == nullptr || Add->getOpcode() != llvm::Instruction::Add) {
+    return std::nullopt;
+  }
+  const auto *Offset = llvm::dyn_cast<llvm::ConstantInt>(Add->getOperand(1));
+  const auto *Base = Add->getOperand(0);
+  if (Offset == nullptr) {
+    Offset = llvm::dyn_cast<llvm::ConstantInt>(Add->getOperand(0));
+    Base = Add->getOperand(1);
+  }
+  const auto *PTI = llvm::dyn_cast<llvm::PtrToIntInst>(Base);
+  const auto *Call = PTI == nullptr
+                         ? nullptr
+                         : llvm::dyn_cast<llvm::CallBase>(PTI->getOperand(0));
+  if (Offset == nullptr || Call == nullptr ||
+      Call->getCalledFunction() == nullptr ||
+      Call->getCalledFunction()->getName() !=
+          "notdec_evm_calldata_min_size") {
+    return std::nullopt;
+  }
+  if (Offset->getValue().getActiveBits() > 64) {
+    return std::nullopt;
+  }
+  std::uint64_t ByteOffset = Offset->getZExtValue();
+  if (ByteOffset < 4 || (ByteOffset - 4) % 32 != 0) {
+    return std::nullopt;
+  }
+  return static_cast<unsigned>((ByteOffset - 4) / 32);
+}
+
 bool isMsgSenderExpr(const ExprPtr &Expr) {
   const auto *Member =
       Expr == nullptr ? nullptr : std::get_if<MemberAccessExpr>(&Expr->Node);
@@ -1051,8 +1328,18 @@ bool isMsgSenderExpr(const ExprPtr &Expr) {
   return Base != nullptr && Base->Name == "msg";
 }
 
+bool isAddressTypedIdentifier(const ExprPtr &Expr) {
+  const auto *Id =
+      Expr == nullptr ? nullptr : std::get_if<IdentifierExpr>(&Expr->Node);
+  if (Id == nullptr || ActiveParameterTypes == nullptr) {
+    return false;
+  }
+  auto It = ActiveParameterTypes->find(Id->Name);
+  return It != ActiveParameterTypes->end() && It->second == "address";
+}
+
 ExprPtr wordCastAddressExpr(ExprPtr Expr) {
-  if (!isMsgSenderExpr(Expr)) {
+  if (!isMsgSenderExpr(Expr) && !isAddressTypedIdentifier(Expr)) {
     return Expr;
   }
   return makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint256"}),
@@ -1062,11 +1349,22 @@ ExprPtr wordCastAddressExpr(ExprPtr Expr) {
                            {}});
 }
 
-bool isArithmeticOrBitwiseOperator(llvm::StringRef Operator) {
+bool isComparisonOperator(llvm::StringRef Operator) {
+  return Operator == "==" || Operator == "!=" || Operator == "<" ||
+         Operator == "<=" || Operator == ">" || Operator == ">=";
+}
+
+bool needsWordOperandCast(llvm::StringRef Operator) {
+  // Address-valued expressions such as msg.sender are only valid in
+  // comparisons/arithmetic after an explicit uint conversion.  Slot state is
+  // currently emitted as uint256, so casting the address side keeps generated
+  // comparisons compilable.
   return Operator == "+" || Operator == "-" || Operator == "*" ||
          Operator == "/" || Operator == "%" || Operator == "&" ||
          Operator == "|" || Operator == "^" || Operator == "<<" ||
-         Operator == ">>" || Operator == "**";
+         Operator == ">>" || Operator == "**" || Operator == "==" ||
+         Operator == "!=" || Operator == "<" || Operator == "<=" ||
+         Operator == ">" || Operator == ">=";
 }
 
 bool isUnresolvedExpr(const ExprPtr &Expr) {
@@ -1074,11 +1372,161 @@ bool isUnresolvedExpr(const ExprPtr &Expr) {
          std::holds_alternative<UnresolvedValueExpr>(Expr->Node);
 }
 
+// Recursively make arithmetic/bitwise operands word-typed.  Solidity's
+// arbitrary-precision int_const arithmetic can otherwise turn an EVM mask
+// such as `0 - (1 << 160)` into a negative int_const and reject `uint256 &`.
+ExprPtr wordifyOperand(ExprPtr Expr) {
+  if (Expr == nullptr) {
+    return Expr;
+  }
+  if (auto *Binary = std::get_if<BinaryExpr>(&Expr->Node)) {
+    Binary->Left = wordifyOperand(Binary->Left);
+    Binary->Right = wordifyOperand(Binary->Right);
+    return Expr;
+  }
+  if (std::holds_alternative<LiteralExpr>(Expr->Node)) {
+    return makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint256"}),
+                             {std::move(Expr)}, {}});
+  }
+  return Expr;
+}
+
+bool containsUnresolvedValue(const ExprPtr &Expr);
+
+bool expressionContainsUnresolvedValue(const Expression &Expr) {
+  return std::visit(
+      [](const auto &Node) -> bool {
+        using T = std::decay_t<decltype(Node)>;
+        if constexpr (std::is_same_v<T, UnresolvedValueExpr> ||
+                      std::is_same_v<T, TodoConditionExpr>) {
+          return true;
+        } else if constexpr (std::is_same_v<T, MemberAccessExpr>) {
+          return containsUnresolvedValue(Node.Base);
+        } else if constexpr (std::is_same_v<T, IndexAccessExpr>) {
+          return containsUnresolvedValue(Node.Base) ||
+                 containsUnresolvedValue(Node.Index);
+        } else if constexpr (std::is_same_v<T, IndexRangeAccessExpr>) {
+          return containsUnresolvedValue(Node.Base) ||
+                 containsUnresolvedValue(Node.Start) ||
+                 containsUnresolvedValue(Node.End);
+        } else if constexpr (std::is_same_v<T, FunctionCallOptionsExpr>) {
+          if (containsUnresolvedValue(Node.Callee)) {
+            return true;
+          }
+          for (const NamedArgument &Arg : Node.Options) {
+            if (containsUnresolvedValue(Arg.Value)) {
+              return true;
+            }
+          }
+          return false;
+        } else if constexpr (std::is_same_v<T, UnaryExpr>) {
+          return containsUnresolvedValue(Node.Operand);
+        } else if constexpr (std::is_same_v<T, BinaryExpr>) {
+          return containsUnresolvedValue(Node.Left) ||
+                 containsUnresolvedValue(Node.Right);
+        } else if constexpr (std::is_same_v<T, ConditionalExpr>) {
+          return containsUnresolvedValue(Node.Condition) ||
+                 containsUnresolvedValue(Node.TrueValue) ||
+                 containsUnresolvedValue(Node.FalseValue);
+        } else if constexpr (std::is_same_v<T, AssignmentExpr>) {
+          return containsUnresolvedValue(Node.Left) ||
+                 containsUnresolvedValue(Node.Right);
+        } else if constexpr (std::is_same_v<T, CallExpr>) {
+          if (containsUnresolvedValue(Node.Callee)) {
+            return true;
+          }
+          for (const ExprPtr &Arg : Node.Arguments) {
+            if (containsUnresolvedValue(Arg)) {
+              return true;
+            }
+          }
+          for (const NamedArgument &Arg : Node.NamedArguments) {
+            if (containsUnresolvedValue(Arg.Value)) {
+              return true;
+            }
+          }
+          return false;
+        } else if constexpr (std::is_same_v<T, NewExpr>) {
+          return false;
+        } else if constexpr (std::is_same_v<T, TupleExpr>) {
+          for (const ExprPtr &Element : Node.Elements) {
+            if (containsUnresolvedValue(Element)) {
+              return true;
+            }
+          }
+          return false;
+        } else if constexpr (std::is_same_v<T, InlineArrayExpr>) {
+          for (const ExprPtr &Element : Node.Elements) {
+            if (containsUnresolvedValue(Element)) {
+              return true;
+            }
+          }
+          return false;
+        } else {
+          return false;
+        }
+      },
+      Expr.Node);
+}
+
+bool containsUnresolvedValue(const ExprPtr &Expr) {
+  return Expr != nullptr && expressionContainsUnresolvedValue(*Expr);
+}
+
+bool containsIdentifierOfType(const ExprPtr &Expr, llvm::StringRef Type) {
+  if (Expr == nullptr || ActiveParameterTypes == nullptr) {
+    return false;
+  }
+  if (const auto *Id = std::get_if<IdentifierExpr>(&Expr->Node)) {
+    auto It = ActiveParameterTypes->find(Id->Name);
+    return It != ActiveParameterTypes->end() && It->second == Type;
+  }
+  if (const auto *Member = std::get_if<MemberAccessExpr>(&Expr->Node)) {
+    return containsIdentifierOfType(Member->Base, Type);
+  }
+  if (const auto *Index = std::get_if<IndexAccessExpr>(&Expr->Node)) {
+    return containsIdentifierOfType(Index->Base, Type) ||
+           containsIdentifierOfType(Index->Index, Type);
+  }
+  if (const auto *Unary = std::get_if<UnaryExpr>(&Expr->Node)) {
+    return containsIdentifierOfType(Unary->Operand, Type);
+  }
+  if (const auto *Binary = std::get_if<BinaryExpr>(&Expr->Node)) {
+    return containsIdentifierOfType(Binary->Left, Type) ||
+           containsIdentifierOfType(Binary->Right, Type);
+  }
+  if (const auto *Cond = std::get_if<ConditionalExpr>(&Expr->Node)) {
+    return containsIdentifierOfType(Cond->Condition, Type) ||
+           containsIdentifierOfType(Cond->TrueValue, Type) ||
+           containsIdentifierOfType(Cond->FalseValue, Type);
+  }
+  if (const auto *Assign = std::get_if<AssignmentExpr>(&Expr->Node)) {
+    return containsIdentifierOfType(Assign->Left, Type) ||
+           containsIdentifierOfType(Assign->Right, Type);
+  }
+  if (const auto *Call = std::get_if<CallExpr>(&Expr->Node)) {
+    if (containsIdentifierOfType(Call->Callee, Type)) {
+      return true;
+    }
+    for (const ExprPtr &Arg : Call->Arguments) {
+      if (containsIdentifierOfType(Arg, Type)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 ExprPtr makeBinaryExpr(ExprPtr Left, llvm::StringRef Operator, ExprPtr Right,
                        unsigned Precedence) {
-  if (isArithmeticOrBitwiseOperator(Operator)) {
-    Left = wordCastAddressExpr(std::move(Left));
-    Right = wordCastAddressExpr(std::move(Right));
+  if (needsWordOperandCast(Operator)) {
+    if (isComparisonOperator(Operator)) {
+      Left = wordCastAddressExpr(std::move(Left));
+      Right = wordCastAddressExpr(std::move(Right));
+    } else {
+      Left = wordCastAddressExpr(wordifyOperand(std::move(Left)));
+      Right = wordCastAddressExpr(wordifyOperand(std::move(Right)));
+    }
   }
   if ((Operator == "/" || Operator == "%") && isUnresolvedExpr(Right)) {
     return makeExpr(UnresolvedValueExpr{"unresolved divisor"});
@@ -1101,6 +1549,61 @@ std::vector<ExprPtr> callArgExprs(const llvm::CallBase &Call) {
     Args.push_back(valueExpr(*Arg.get()));
   }
   return Args;
+}
+
+std::optional<llvm::APInt> evalConstantWord(const llvm::Value *V,
+                                            unsigned Depth = 0) {
+  if (V == nullptr || Depth > 8) {
+    return std::nullopt;
+  }
+  if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(V)) {
+    return C->getValue();
+  }
+  const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(V);
+  if (Op == nullptr) {
+    return std::nullopt;
+  }
+  std::optional<llvm::APInt> L = evalConstantWord(Op->getOperand(0), Depth + 1);
+  std::optional<llvm::APInt> R = evalConstantWord(Op->getOperand(1), Depth + 1);
+  if (!L.has_value() || !R.has_value() ||
+      L->getBitWidth() != R->getBitWidth()) {
+    return std::nullopt;
+  }
+  const unsigned Width = L->getBitWidth();
+  switch (Op->getOpcode()) {
+  case llvm::Instruction::Add:
+    return *L + *R;
+  case llvm::Instruction::Sub:
+    return *L - *R;
+  case llvm::Instruction::Mul:
+    return *L * *R;
+  case llvm::Instruction::And:
+    return *L & *R;
+  case llvm::Instruction::Or:
+    return *L | *R;
+  case llvm::Instruction::Xor:
+    return *L ^ *R;
+  case llvm::Instruction::Shl: {
+    if (R->uge(Width)) return std::nullopt;
+    return L->shl(R->getZExtValue());
+  }
+  case llvm::Instruction::LShr: {
+    if (R->uge(Width)) return std::nullopt;
+    return L->lshr(R->getZExtValue());
+  }
+  case llvm::Instruction::AShr: {
+    if (R->uge(Width)) return std::nullopt;
+    return L->ashr(R->getZExtValue());
+  }
+  case llvm::Instruction::UDiv:
+    if (R->isZero()) return std::nullopt;
+    return L->udiv(*R);
+  case llvm::Instruction::URem:
+    if (R->isZero()) return std::nullopt;
+    return L->urem(*R);
+  default:
+    return std::nullopt;
+  }
 }
 
 ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
@@ -1140,13 +1643,20 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
     if (std::optional<llvm::StringRef> Operator =
             icmpPredicateText(Cmp->getPredicate())) {
       unsigned Precedence = icmpPredicatePrecedence(Cmp->getPredicate());
-      return makeExpr(BinaryExpr{valueExpr(*Cmp->getOperand(0)),
-                                 Operator->str(),
-                                 valueExpr(*Cmp->getOperand(1)), Precedence,
-                                 false, true});
+      ExprPtr Left = valueExpr(*Cmp->getOperand(0));
+      ExprPtr Right = valueExpr(*Cmp->getOperand(1));
+      if (needsWordOperandCast(*Operator)) {
+        Left = wordCastAddressExpr(std::move(Left));
+        Right = wordCastAddressExpr(std::move(Right));
+      }
+      return makeExpr(BinaryExpr{std::move(Left), Operator->str(),
+                                 std::move(Right), Precedence, false, true});
     }
   }
   if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
+    if (std::optional<llvm::APInt> Folded = evalConstantWord(Op)) {
+      return makeExpr(LiteralExpr{formatInteger(*Folded), ""});
+    }
     if ((Op->getOpcode() == llvm::Instruction::SDiv ||
          Op->getOpcode() == llvm::Instruction::UDiv ||
          Op->getOpcode() == llvm::Instruction::SRem ||
@@ -1158,7 +1668,12 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       }
     }
     if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {
-      return makeExpr(UnaryExpr{"~", valueExpr(*Operand), true, 30});
+      // Solidity's `~` on an int_const produces a signed literal and then
+      // fails when combined with uint256 operands.  Wordify the operand tree
+      // (literals become uint256(...)) while keeping identifier arithmetic
+      // readable, e.g. `~(arg0 + arg1)`.
+      ExprPtr OperandExpr = wordifyOperand(valueExpr(*Operand));
+      return makeExpr(UnaryExpr{"~", std::move(OperandExpr), true, 30});
     }
     if (std::optional<llvm::StringRef> Operator =
             logicalOperatorText(Op->getOpcode());
@@ -1227,6 +1742,15 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
         Name.empty() ? std::string("extractvalue") : Name.str()});
   }
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&V)) {
+    if (std::optional<unsigned> ArgIndex = matchCalldataArgumentIndex(*Load)) {
+      constexpr unsigned kRuntimeArgs = 4;
+      const unsigned NameIndex = kRuntimeArgs + *ArgIndex;
+      if (ActiveArgumentNames != nullptr &&
+          NameIndex < ActiveArgumentNames->size() &&
+          !(*ActiveArgumentNames)[NameIndex].empty()) {
+        return makeExpr(IdentifierExpr{(*ActiveArgumentNames)[NameIndex]});
+      }
+    }
     // Loads without a recovered variable/materialized payload are fallback
     // values; do not leak the raw SSA name into Solidity.
     llvm::StringRef Name = Load->getName();
@@ -1242,7 +1766,25 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       }
     }
   }
-  return makeExpr(IdentifierExpr{llvmValueName(V, FallbackName)});
+
+  // Any remaining SSA name is not declared in the generated Solidity: the
+  // backend does not materialize locals.  Emit an explicit unresolved
+  // placeholder instead of an undeclared identifier, and let condition
+  // recovery fall back to TODO when such a value reaches a branch.
+  std::string Name = V.hasName() ? V.getName().str() : FallbackName.str();
+  if (ActiveParameterTypes != nullptr &&
+      ActiveParameterTypes->count(Name) != 0) {
+    return makeExpr(IdentifierExpr{std::move(Name)});
+  }
+  if (ActiveStorageSlots != nullptr) {
+    for (const auto &[Slot, Info] : *ActiveStorageSlots) {
+      (void)Slot;
+      if (Info.Name == Name) {
+        return makeExpr(IdentifierExpr{std::move(Name)});
+      }
+    }
+  }
+  return makeExpr(UnresolvedValueExpr{std::move(Name)});
 }
 
 const llvm::Value *ptrToIntPointerValue(const llvm::Value *V) {
@@ -1328,13 +1870,35 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
 
 std::optional<Statement>
 formatStorageStore(const llvm::CallBase &Call) {
-  // Reads are mapped through ActiveStorageSlots; writes also need lvalue
-  // typing/def-use recovery, otherwise setter bodies would either leak
-  // unresolved demoted values or assign complex packed expressions to a
-  // flattened slot type.  Keep this hook disabled until that materialization
-  // lands (the call site already reserves the first slot).
-  (void)Call;
-  return std::nullopt;
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (Callee == nullptr) {
+    return std::nullopt;
+  }
+  llvm::StringRef Name = Callee->getName();
+  if ((Name != "evm.storage.store" && Name != "evm_sstore") ||
+      Call.arg_size() < 2) {
+    return std::nullopt;
+  }
+
+  const StorageSlotInfo *Info =
+      Name == "evm_sstore" ? storageSlotInfoForValue(*Call.getArgOperand(0))
+                           : storageSlotInfoForRef(*Call.getArgOperand(0));
+  if (Info == nullptr) {
+    return std::nullopt;
+  }
+  // Mapping/array slots need a real lvalue path; packed stores need
+  // read-modify-write typing.  Keep those disabled for now.
+  if (Info->IsMapping || Info->IsArray) {
+    return std::nullopt;
+  }
+
+  ExprPtr Value = valueExpr(*Call.getArgOperand(1));
+  if (containsUnresolvedValue(Value)) {
+    return std::nullopt;
+  }
+
+  return makeStmt(ExpressionStatement{makeExpr(AssignmentExpr{
+      makeExpr(IdentifierExpr{Info->Name}), "=", std::move(Value)})});
 }
 
 } // namespace
@@ -1342,9 +1906,10 @@ formatStorageStore(const llvm::CallBase &Call) {
 Block BodyBuilder::readBody(const llvm::Function &F,
                             const StorageSlotMap *StorageSlots,
                             const std::vector<std::string> *ArgumentNames,
+                            const ParameterTypeMap *ParameterTypes,
                             const EventParamTypeMap *EventParamTypes) {
   ActiveStorageSlotsScope StorageScope(StorageSlots, ArgumentNames,
-                                       EventParamTypes);
+                                       ParameterTypes, EventParamTypes);
   std::vector<Payload> Payloads;
   class SolidityPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
   public:
@@ -1389,6 +1954,13 @@ Block BodyBuilder::readBody(const llvm::Function &F,
 
     PayloadRef getCondition(const llvm::Value &V,
                             llvm::StringRef FallbackName) override {
+      if (ExprPtr Condition = valueExpr(V)) {
+        if (!containsUnresolvedValue(Condition) &&
+            !containsIdentifierOfType(Condition, "bytes") &&
+            !containsIdentifierOfType(Condition, "string")) {
+          return addPayload(Payloads, Expression{*Condition});
+        }
+      }
       return addPayload(
           Payloads,
           Expression{TodoConditionExpr{llvmValueDebugName(V, FallbackName)}});
@@ -1459,7 +2031,12 @@ Block BodyBuilder::readBody(const llvm::Function &F,
   }
   if (!Result.Statements.empty() &&
       !isTerminalStatement(Result.Statements.back())) {
-    Result.Statements.push_back(commentStmt("// TODO: recover remaining body"));
+    BodyCompletion Completion =
+        analyzeBodyCompletion(Cfg, Tree, Tree.root());
+    if (Completion.HasGoto || !Completion.ReachesExit) {
+      Result.Statements.push_back(
+          commentStmt("// TODO: recover remaining body"));
+    }
   }
   return Result;
 }

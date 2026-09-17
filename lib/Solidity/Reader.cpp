@@ -495,17 +495,38 @@ Function Reader::readFunction(const llvm::Function &F,
     ArgumentNames[kRuntimeArgs + I] = std::move(Name);
   }
 
+  // Expose ABI parameters to the backend at index kRuntimeArgs + i as well.
+  // A checked-calldata word load matches ABI argument i, and BodyBuilder
+  // resolves it through this table without needing a second name mapping.
+  for (std::size_t I = 0; I < Result.Parameters.size(); ++I) {
+    const std::size_t Index = kRuntimeArgs + I;
+    if (Index >= ArgumentNames.size()) {
+      ArgumentNames.resize(Index + 1);
+    }
+    if (ArgumentNames[Index].empty()) {
+      ArgumentNames[Index] = Result.Parameters[I].Name;
+    }
+  }
+
+  ParameterTypeMap ParameterTypes;
+  for (const Parameter &Param : Result.Parameters) {
+    ParameterTypes.emplace(Param.Name, Param.Type.Name);
+  }
+
   Result.Visibility = "public";
   Result.Returns = readReturns(F);
-  Result.Body = readBody(F, StorageSlots, &ArgumentNames, EventParamTypes);
+  Result.Body = readBody(F, StorageSlots, &ArgumentNames, &ParameterTypes,
+                         EventParamTypes);
   return Result;
 }
 
 Block Reader::readBody(const llvm::Function &F,
                        const StorageSlotMap *StorageSlots,
                        const std::vector<std::string> *ArgumentNames,
+                       const ParameterTypeMap *ParameterTypes,
                        const EventParamTypeMap *EventParamTypes) {
-  return BodyBuilder::readBody(F, StorageSlots, ArgumentNames, EventParamTypes);
+  return BodyBuilder::readBody(F, StorageSlots, ArgumentNames, ParameterTypes,
+                               EventParamTypes);
 }
 
 std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {
