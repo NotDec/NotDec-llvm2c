@@ -1503,6 +1503,31 @@ bool isAddressPayableValuedExpr(const ExprPtr &Expr) {
          Member->Member == "coinbase";
 }
 
+// valueExpr() unwraps zext i1, so a word stored from a comparison still prints
+// as a Solidity bool.  Contexts that need a word (multi-word ABI returns) have
+// to lower such expressions to 0/1.
+bool isBoolValuedExpr(const ExprPtr &Expr) {
+  if (Expr == nullptr) {
+    return false;
+  }
+  if (const auto *Id = std::get_if<IdentifierExpr>(&Expr->Node)) {
+    if (ActiveParameterTypes == nullptr) {
+      return false;
+    }
+    auto It = ActiveParameterTypes->find(Id->Name);
+    return It != ActiveParameterTypes->end() && It->second == "bool";
+  }
+  if (const auto *Binary = std::get_if<BinaryExpr>(&Expr->Node)) {
+    const std::string &Op = Binary->Operator;
+    return Op == "==" || Op == "!=" || Op == "<" || Op == "<=" ||
+           Op == ">" || Op == ">=" || Op == "&&" || Op == "||";
+  }
+  if (const auto *Unary = std::get_if<UnaryExpr>(&Expr->Node)) {
+    return Unary->Prefix && Unary->Operator == "!";
+  }
+  return false;
+}
+
 ExprPtr wordCastAddressExpr(ExprPtr Expr) {
   if (!isAddressValuedExpr(Expr)) {
     return Expr;
@@ -2010,6 +2035,73 @@ const llvm::Value *findAllocatedSingleWordReturnValue(const llvm::CallBase &Call
   return findStoredValueBeforeReturn(Call, StorePointer);
 }
 
+// Offset of a store pointer inside the return buffer, expressed in bytes from
+// the buffer base.  The base is known both as a pointer (the calloc allocation)
+// and as the i256 address the ABI return passes to evm_return; stores may use
+// either form plus a constant add.
+std::optional<std::uint64_t>
+storeOffsetFromReturnBase(const llvm::Value *Pointer, const llvm::Value *BasePtr,
+                          const llvm::Value *BaseInt) {
+  if (Pointer == nullptr) {
+    return std::nullopt;
+  }
+  if (Pointer == BasePtr) {
+    return 0;
+  }
+  const auto *ITP = llvm::dyn_cast<llvm::IntToPtrInst>(Pointer);
+  if (ITP == nullptr) {
+    return std::nullopt;
+  }
+  const llvm::Value *Address = ITP->getOperand(0);
+  if (Address == BaseInt) {
+    return 0;
+  }
+  const auto *Add = llvm::dyn_cast<llvm::BinaryOperator>(Address);
+  if (Add == nullptr || Add->getOpcode() != llvm::Instruction::Add) {
+    return std::nullopt;
+  }
+  const llvm::Value *Base = Add->getOperand(0);
+  const auto *Offset = llvm::dyn_cast<llvm::ConstantInt>(Add->getOperand(1));
+  if (Offset == nullptr) {
+    Offset = llvm::dyn_cast<llvm::ConstantInt>(Add->getOperand(0));
+    Base = Add->getOperand(1);
+  }
+  if (Offset == nullptr || Offset->getValue().getActiveBits() > 64) {
+    return std::nullopt;
+  }
+  const llvm::Value *BaseAddress = Base;
+  if (const auto *PTI = llvm::dyn_cast<llvm::PtrToIntInst>(Base)) {
+    BaseAddress = PTI->getOperand(0);
+  }
+  if (BaseAddress != BaseInt && BaseAddress != BasePtr) {
+    return std::nullopt;
+  }
+  return Offset->getZExtValue();
+}
+
+// Find the value stored at BufferOffset bytes into the ABI return buffer
+// written before Call in the same basic block.
+const llvm::Value *findReturnBufferStoreBefore(const llvm::CallBase &Call,
+                                               const llvm::Value *BasePtr,
+                                               const llvm::Value *BaseInt,
+                                               std::uint64_t BufferOffset) {
+  for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
+                                                      Call.getParent()->begin();
+       It != Begin;) {
+    --It;
+    const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+    if (Store == nullptr) {
+      continue;
+    }
+    if (std::optional<std::uint64_t> Offset = storeOffsetFromReturnBase(
+            Store->getPointerOperand(), BasePtr, BaseInt);
+        Offset.has_value() && *Offset == BufferOffset) {
+      return Store->getValueOperand();
+    }
+  }
+  return nullptr;
+}
+
 std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
   const llvm::Function *Callee = Call.getCalledFunction();
   if (Callee == nullptr || Callee->getName() != "evm_return" ||
@@ -2027,7 +2119,16 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
     return std::nullopt;
   }
   if (!ReturnOffset.has_value()) {
-    if (const llvm::Value *Stored = findAllocatedSingleWordReturnValue(Call)) {
+    const llvm::Value *BasePtr = ptrToIntPointerValue(Call.getArgOperand(1));
+    const llvm::Value *Stored =
+        BasePtr == nullptr
+            ? findAllocatedSingleWordReturnValue(Call)
+            : findReturnBufferStoreBefore(Call, BasePtr, Call.getArgOperand(1),
+                                          0);
+    if (Stored == nullptr) {
+      Stored = findAllocatedSingleWordReturnValue(Call);
+    }
+    if (Stored != nullptr) {
       return makeStmt(
           ReturnStatement{wordCastAddressExpr(valueExpr(*Stored))});
     }
@@ -2054,6 +2155,102 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
   }
 
   return std::nullopt;
+}
+
+// Multiple ABI return words: a complete set of stores at 0, 32, ... maps back
+// to the declared ret0..retN-1 order.  A partial buffer keeps the previous
+// behavior (no return statement) instead of guessing.
+std::optional<Statement> formatMultiWordReturn(const llvm::CallBase &Call) {
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (Callee == nullptr || Callee->getName() != "evm_return" ||
+      Call.arg_size() < 3) {
+    return std::nullopt;
+  }
+  std::optional<llvm::APInt> ReturnLength =
+      constantIntValue(Call.getArgOperand(2));
+  if (!ReturnLength.has_value() || ReturnLength->getActiveBits() > 16) {
+    return std::nullopt;
+  }
+  std::uint64_t Bytes = ReturnLength->getZExtValue();
+  if (Bytes < 64 || Bytes % 32 != 0) {
+    return std::nullopt;
+  }
+  unsigned Count = static_cast<unsigned>(Bytes / 32);
+  // Deeper tuples can exceed solc's stack limit in a plain (non-viaIR)
+  // compile, so keep the previous behavior for them instead of emitting a
+  // function that no longer compiles.
+  if (Count > 4) {
+    return std::nullopt;
+  }
+
+  std::optional<llvm::APInt> ReturnOffset =
+      constantIntValue(Call.getArgOperand(1));
+  const llvm::Value *BasePtr = ptrToIntPointerValue(Call.getArgOperand(1));
+  std::vector<const llvm::Value *> Stored(Count, nullptr);
+
+  if (ReturnOffset.has_value()) {
+    // Static frame: every word uses its own inttoptr(constant) address.
+    for (auto It = llvm::BasicBlock::const_iterator(&Call),
+              Begin = Call.getParent()->begin();
+         It != Begin;) {
+      --It;
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+      if (Store == nullptr) {
+        continue;
+      }
+      std::optional<llvm::APInt> PointerOffset =
+          constantIntToPtrValue(Store->getPointerOperand());
+      if (!PointerOffset.has_value()) {
+        continue;
+      }
+      for (unsigned I = 0; I < Count; ++I) {
+        if (*PointerOffset == *ReturnOffset + 32 * I) {
+          Stored[I] = Store->getValueOperand();
+        }
+      }
+    }
+  } else if (BasePtr != nullptr) {
+    for (auto It = llvm::BasicBlock::const_iterator(&Call),
+              Begin = Call.getParent()->begin();
+         It != Begin;) {
+      --It;
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+      if (Store == nullptr) {
+        continue;
+      }
+      std::optional<std::uint64_t> Offset = storeOffsetFromReturnBase(
+          Store->getPointerOperand(), BasePtr, Call.getArgOperand(1));
+      if (!Offset.has_value() || *Offset % 32 != 0) {
+        continue;
+      }
+      std::uint64_t Index = *Offset / 32;
+      if (Index < Count) {
+        Stored[Index] = Store->getValueOperand();
+      }
+    }
+  } else {
+    return std::nullopt;
+  }
+
+  for (const llvm::Value *Value : Stored) {
+    if (Value == nullptr) {
+      return std::nullopt;
+    }
+  }
+  std::vector<ExprPtr> Values;
+  Values.reserve(Count);
+  for (const llvm::Value *Value : Stored) {
+    ExprPtr Element = wordCastAddressExpr(valueExpr(*Value));
+    if (Value->getType()->isIntegerTy(1) || isBoolValuedExpr(Element)) {
+      // The reader declares multi-word returns as uint256 words, so a bool
+      // stored word has to become 0/1 instead of a Solidity bool.
+      Element = makeExpr(ConditionalExpr{std::move(Element),
+                                         makeExpr(LiteralExpr{"1", ""}),
+                                         makeExpr(LiteralExpr{"0", ""})});
+    }
+    Values.push_back(std::move(Element));
+  }
+  return makeStmt(ReturnStatement{makeExpr(TupleExpr{std::move(Values)})});
 }
 
 std::optional<Statement>
@@ -2149,6 +2346,11 @@ Block BodyBuilder::readBody(const llvm::Function &F,
           }
           if (std::optional<Statement> Store = formatStorageStore(*Call)) {
             Out.push_back(addPayload(Payloads, std::move(*Store)));
+            continue;
+          }
+          if (std::optional<Statement> Return =
+                  formatMultiWordReturn(*Call)) {
+            Out.push_back(addPayload(Payloads, std::move(*Return)));
             continue;
           }
           if (std::optional<Statement> Return =
