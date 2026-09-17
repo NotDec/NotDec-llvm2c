@@ -1361,6 +1361,32 @@ bool isWordLikeParameter(llvm::StringRef Name) {
   return Type.find('[') == llvm::StringRef::npos;
 }
 
+// Resolve a pass-provided "notdec.solidity.calldata.index" annotation to the
+// Solidity parameter identifier.  Shared by direct calldata loads and the
+// results of outlined ABI decoder helpers.
+std::optional<ExprPtr> annotatedAbiArgumentExpr(const llvm::Instruction &I) {
+  std::optional<std::string> ArgumentIndex =
+      BodyBuilder::getStringMetadata(I, "notdec.solidity.calldata.index");
+  if (!ArgumentIndex.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<unsigned> Parsed = parseUnsignedDecimal(*ArgumentIndex);
+  if (!Parsed.has_value()) {
+    return std::nullopt;
+  }
+  constexpr unsigned kRuntimeArgs = 4;
+  const unsigned NameIndex = kRuntimeArgs + *Parsed;
+  if (ActiveArgumentNames == nullptr ||
+      NameIndex >= ActiveArgumentNames->size()) {
+    return std::nullopt;
+  }
+  const std::string &Name = (*ActiveArgumentNames)[NameIndex];
+  if (Name.empty() || !isWordLikeParameter(Name)) {
+    return std::nullopt;
+  }
+  return makeExpr(IdentifierExpr{Name});
+}
+
 bool isMsgSenderExpr(const ExprPtr &Expr) {
   const auto *Member =
       Expr == nullptr ? nullptr : std::get_if<MemberAccessExpr>(&Expr->Node);
@@ -1773,6 +1799,12 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       }
     }
     if (!Call->getType()->isVoidTy()) {
+      // Scalar ABI decoder results carry the same argument-index annotation as
+      // the extractvalue path.
+      if (std::optional<ExprPtr> Argument =
+              annotatedAbiArgumentExpr(*Call)) {
+        return *Argument;
+      }
       std::string Text =
           Callee == nullptr ? std::string("<indirect call>")
                             : Callee->getName().str();
@@ -1780,6 +1812,10 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
     }
   }
   if (const auto *Extract = llvm::dyn_cast<llvm::ExtractValueInst>(&V)) {
+    if (std::optional<ExprPtr> Argument =
+            annotatedAbiArgumentExpr(*Extract)) {
+      return *Argument;
+    }
     llvm::StringRef Name = Extract->getName();
     return makeExpr(UnresolvedValueExpr{
         Name.empty() ? std::string("extractvalue") : Name.str()});
@@ -1787,20 +1823,9 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&V)) {
     // Prefer the pass-provided ABI argument index: it also covers plain
     // calldata loads and helper offsets the local shape matcher cannot see.
-    if (std::optional<std::string> ArgumentIndex =
-            BodyBuilder::getStringMetadata(
-                *Load, "notdec.solidity.calldata.index")) {
-      if (std::optional<unsigned> Parsed =
-              parseUnsignedDecimal(*ArgumentIndex)) {
-        constexpr unsigned kRuntimeArgs = 4;
-        const unsigned NameIndex = kRuntimeArgs + *Parsed;
-        if (ActiveArgumentNames != nullptr &&
-            NameIndex < ActiveArgumentNames->size() &&
-            !(*ActiveArgumentNames)[NameIndex].empty() &&
-            isWordLikeParameter((*ActiveArgumentNames)[NameIndex])) {
-          return makeExpr(IdentifierExpr{(*ActiveArgumentNames)[NameIndex]});
-        }
-      }
+    if (std::optional<ExprPtr> Argument =
+            annotatedAbiArgumentExpr(*Load)) {
+      return *Argument;
     }
     if (std::optional<unsigned> ArgIndex = matchCalldataArgumentIndex(*Load)) {
       constexpr unsigned kRuntimeArgs = 4;
