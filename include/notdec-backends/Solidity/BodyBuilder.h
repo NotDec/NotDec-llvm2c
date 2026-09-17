@@ -11,6 +11,7 @@
 #include <llvm/IR/Instruction.h>
 
 #include "notdec-backends/Solidity/Ast.h"
+#include "notdec-backends/Solidity/StorageInfo.h"
 
 namespace llvm {
 class Function;
@@ -29,7 +30,10 @@ class BodyBuilder {
 public:
   using Payload = std::variant<Statement, Expression>;
 
-  static Block readBody(const llvm::Function &F);
+  static Block readBody(const llvm::Function &F,
+                        const StorageSlotMap *StorageSlots = nullptr,
+                        const std::vector<std::string> *ArgumentNames = nullptr,
+                        const EventParamTypeMap *EventParamTypes = nullptr);
   static Block
   renderStructuredBody(const structuring::StructuredTree &Tree,
                        const std::vector<Payload> &Payloads);

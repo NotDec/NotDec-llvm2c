@@ -32,6 +32,38 @@ using structuring::StructuredNodeKind;
 using structuring::StructuredTree;
 using structuring::VVarId;
 
+// Active contract-level slot map while one Solidity function body is being
+// built.  The Solidity backend currently reads/writes one module at a time;
+// thread_local keeps parallel backend invocations from sharing slot state.
+thread_local const StorageSlotMap *ActiveStorageSlots = nullptr;
+thread_local const std::vector<std::string> *ActiveArgumentNames = nullptr;
+thread_local const EventParamTypeMap *ActiveEventParamTypes = nullptr;
+
+class ActiveStorageSlotsScope {
+public:
+  ActiveStorageSlotsScope(const StorageSlotMap *StorageSlots,
+                          const std::vector<std::string> *ArgumentNames,
+                          const EventParamTypeMap *EventParamTypes)
+      : PreviousStorageSlots(ActiveStorageSlots),
+        PreviousArgumentNames(ActiveArgumentNames),
+        PreviousEventParamTypes(ActiveEventParamTypes) {
+    ActiveStorageSlots = StorageSlots;
+    ActiveArgumentNames = ArgumentNames;
+    ActiveEventParamTypes = EventParamTypes;
+  }
+
+  ~ActiveStorageSlotsScope() {
+    ActiveStorageSlots = PreviousStorageSlots;
+    ActiveArgumentNames = PreviousArgumentNames;
+    ActiveEventParamTypes = PreviousEventParamTypes;
+  }
+
+private:
+  const StorageSlotMap *PreviousStorageSlots;
+  const std::vector<std::string> *PreviousArgumentNames;
+  const EventParamTypeMap *PreviousEventParamTypes;
+};
+
 PayloadRef addPayload(std::vector<BodyBuilder::Payload> &Payloads,
                       BodyBuilder::Payload Payload) {
   Payloads.push_back(std::move(Payload));
@@ -133,6 +165,9 @@ Expression rewriteExpression(
         }
       }
       return Expression{IdentifierExpr{std::move(Name)}};
+    } else if constexpr (std::is_same_v<T, UnresolvedValueExpr>) {
+      return Expression{UnresolvedValueExpr{
+          replaceIdentifierText(Node.Text, Copies)}};
     } else if constexpr (std::is_same_v<T, TodoConditionExpr>) {
       return Expression{TodoConditionExpr{
           replaceIdentifierText(Node.Text, Copies)}};
@@ -304,6 +339,8 @@ std::string expressionDebugText(const Expression &Expr) {
         return Node.Text;
       }
       return Node.Text + " " + Node.SubDenomination;
+    } else if constexpr (std::is_same_v<T, UnresolvedValueExpr>) {
+      return "0 /* TODO: unresolved value: " + Node.Text + " */";
     } else if constexpr (std::is_same_v<T, TodoConditionExpr>) {
       return Node.Text;
     } else if constexpr (std::is_same_v<T, MemberAccessExpr>) {
@@ -684,6 +721,19 @@ std::optional<ExprPtr> evmEnvBuiltinExpr(llvm::StringRef Name) {
 }
 
 std::string formatInteger(const llvm::APInt &Value) {
+  // Solidity decimal literals cannot express i256 values with the sign bit
+  // set (Gigahorse emits masks such as i256 -1 / -256 directly).  Emit them
+  // as uint256 arithmetic around type(uint256).max instead of an oversized
+  // decimal literal.
+  if (Value.getBitWidth() >= 256 && Value.isNegative()) {
+    llvm::APInt Complement = ~Value;
+    if (Complement.isZero()) {
+      return "type(uint256).max";
+    }
+    llvm::SmallString<64> ComplementText;
+    Complement.toString(ComplementText, 10, /*isSigned=*/false);
+    return "(type(uint256).max - " + ComplementText.str().str() + ")";
+  }
   llvm::SmallString<64> Text;
   Value.toString(Text, 10, /*isSigned=*/false);
   return Text.str().str();
@@ -864,8 +914,175 @@ bool leftOperandNeedsSamePrecedenceParentheses(llvm::StringRef Operator) {
 
 ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName = "ret0");
 
+const StorageSlotInfo *storageSlotInfoForValue(const llvm::Value &V) {
+  if (ActiveStorageSlots == nullptr) {
+    return nullptr;
+  }
+  const auto *Slot = llvm::dyn_cast<llvm::ConstantInt>(&V);
+  if (Slot == nullptr || Slot->getValue().getActiveBits() > 64) {
+    return nullptr;
+  }
+  auto It = ActiveStorageSlots->find(Slot->getZExtValue());
+  return It == ActiveStorageSlots->end() ? nullptr : &It->second;
+}
+
+struct StorageContainerShape {
+  bool IsMapping = false;
+  bool IsArray = false;
+};
+
+StorageContainerShape storageContainerShapeForRef(const llvm::Value &V) {
+  const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V);
+  const llvm::Function *Callee =
+      Call == nullptr ? nullptr : Call->getCalledFunction();
+  if (Callee == nullptr) {
+    return {};
+  }
+  llvm::StringRef Name = Callee->getName();
+  if (Name == "evm.storage.slot" && Call->arg_size() >= 1) {
+    if (const StorageSlotInfo *Info =
+            storageSlotInfoForValue(*Call->getArgOperand(0))) {
+      return {Info->IsMapping, Info->IsArray};
+    }
+    return {};
+  }
+  // Nested map.value / array.elem results are not necessarily indexable by the
+  // declaration we emitted (mapping values are often flattened to uint256 by
+  // TypePrinter).  Only a direct slot carries reliable container shape.
+  return {};
+}
+
+std::optional<ExprPtr> storageRefExpr(const llvm::Value &V);
+
+std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (Callee == nullptr) {
+    return std::nullopt;
+  }
+  llvm::StringRef Name = Callee->getName();
+
+  if ((Name == "evm.storage.slot" || Name == "evm_sload") &&
+      Call.arg_size() >= 1) {
+    if (const StorageSlotInfo *Info =
+            storageSlotInfoForValue(*Call.getArgOperand(0))) {
+      return makeExpr(IdentifierExpr{Info->Name});
+    }
+    return std::nullopt;
+  }
+
+  if ((Name == "evm.storage.load" || Name == "evm.storage.packed.load" ||
+       Name == "evm.storage.field") &&
+      Call.arg_size() >= 1) {
+    std::optional<ExprPtr> Base = storageRefExpr(*Call.getArgOperand(0));
+    if (!Base.has_value()) {
+      return std::nullopt;
+    }
+    // A plain storage load on a dynamic-array slot reads its length word.
+    if (Name == "evm.storage.load" &&
+        storageContainerShapeForRef(*Call.getArgOperand(0)).IsArray) {
+      return makeExpr(MemberAccessExpr{*Base, "length"});
+    }
+    return *Base;
+  }
+
+  if (Name == "evm.storage.map.value" && Call.arg_size() >= 2) {
+    std::optional<ExprPtr> Base = storageRefExpr(*Call.getArgOperand(0));
+    if (!Base.has_value()) {
+      return std::nullopt;
+    }
+    if (storageContainerShapeForRef(*Call.getArgOperand(0)).IsMapping) {
+      return makeExpr(
+          IndexAccessExpr{*Base, valueExpr(*Call.getArgOperand(1))});
+    }
+    // The declared slot type is not known to be indexable; keep a readable
+    // base expression instead of emitting an undeclared SSA name.
+    return *Base;
+  }
+
+  if (Name == "evm.storage.dynamic_array.elem" ||
+      Name == "evm.storage.static_array.elem") {
+    if (Call.arg_size() < 2) {
+      return std::nullopt;
+    }
+    std::optional<ExprPtr> Base = storageRefExpr(*Call.getArgOperand(0));
+    if (!Base.has_value()) {
+      return std::nullopt;
+    }
+    if (storageContainerShapeForRef(*Call.getArgOperand(0)).IsArray) {
+      return makeExpr(
+          IndexAccessExpr{*Base, valueExpr(*Call.getArgOperand(1))});
+    }
+    return *Base;
+  }
+
+  if (Name == "evm.storage.dynamic_array.length.load" &&
+      Call.arg_size() >= 1) {
+    std::optional<ExprPtr> Base = storageRefExpr(*Call.getArgOperand(0));
+    if (!Base.has_value()) {
+      return std::nullopt;
+    }
+    if (storageContainerShapeForRef(*Call.getArgOperand(0)).IsArray) {
+      return makeExpr(MemberAccessExpr{*Base, "length"});
+    }
+    return *Base;
+  }
+
+  if (Name.starts_with("evm.storage.bytes.") && Call.arg_size() >= 1) {
+    return storageRefExpr(*Call.getArgOperand(0));
+  }
+
+  return std::nullopt;
+}
+
+std::optional<ExprPtr> storageRefExpr(const llvm::Value &V) {
+  if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
+    return storageHelperExpr(*Call);
+  }
+  return std::nullopt;
+}
+
+bool isMsgSenderExpr(const ExprPtr &Expr) {
+  const auto *Member =
+      Expr == nullptr ? nullptr : std::get_if<MemberAccessExpr>(&Expr->Node);
+  if (Member == nullptr || Member->Member != "sender" || !Member->Base) {
+    return false;
+  }
+  const auto *Base = std::get_if<IdentifierExpr>(&Member->Base->Node);
+  return Base != nullptr && Base->Name == "msg";
+}
+
+ExprPtr wordCastAddressExpr(ExprPtr Expr) {
+  if (!isMsgSenderExpr(Expr)) {
+    return Expr;
+  }
+  return makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint256"}),
+                           {makeExpr(CallExpr{
+                               makeExpr(IdentifierExpr{"uint160"}),
+                               {std::move(Expr)}, {}})},
+                           {}});
+}
+
+bool isArithmeticOrBitwiseOperator(llvm::StringRef Operator) {
+  return Operator == "+" || Operator == "-" || Operator == "*" ||
+         Operator == "/" || Operator == "%" || Operator == "&" ||
+         Operator == "|" || Operator == "^" || Operator == "<<" ||
+         Operator == ">>" || Operator == "**";
+}
+
+bool isUnresolvedExpr(const ExprPtr &Expr) {
+  return Expr != nullptr &&
+         std::holds_alternative<UnresolvedValueExpr>(Expr->Node);
+}
+
 ExprPtr makeBinaryExpr(ExprPtr Left, llvm::StringRef Operator, ExprPtr Right,
                        unsigned Precedence) {
+  if (isArithmeticOrBitwiseOperator(Operator)) {
+    Left = wordCastAddressExpr(std::move(Left));
+    Right = wordCastAddressExpr(std::move(Right));
+  }
+  if ((Operator == "/" || Operator == "%") && isUnresolvedExpr(Right)) {
+    return makeExpr(UnresolvedValueExpr{"unresolved divisor"});
+  }
   return makeExpr(BinaryExpr{std::move(Left), Operator.str(), std::move(Right),
                              Precedence,
                              leftOperandNeedsSamePrecedenceParentheses(Operator),
@@ -930,6 +1147,16 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
     }
   }
   if (const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(&V)) {
+    if ((Op->getOpcode() == llvm::Instruction::SDiv ||
+         Op->getOpcode() == llvm::Instruction::UDiv ||
+         Op->getOpcode() == llvm::Instruction::SRem ||
+         Op->getOpcode() == llvm::Instruction::URem)) {
+      if (const auto *Divisor =
+              llvm::dyn_cast<llvm::ConstantInt>(Op->getOperand(1));
+          Divisor != nullptr && Divisor->isZero()) {
+        return makeExpr(UnresolvedValueExpr{"division by zero"});
+      }
+    }
     if (const llvm::Value *Operand = bitwiseNotOperand(*Op)) {
       return makeExpr(UnaryExpr{"~", valueExpr(*Operand), true, 30});
     }
@@ -949,6 +1176,9 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
     }
   }
   if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
+    if (std::optional<ExprPtr> StorageExpr = storageHelperExpr(*Call)) {
+      return *StorageExpr;
+    }
     const llvm::Function *Callee = Call->getCalledFunction();
     if (Callee != nullptr && Call->arg_size() == 1) {
       if (std::optional<ExprPtr> Builtin =
@@ -982,6 +1212,33 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
         unsigned Precedence = evmBinaryOperatorPrecedence(Callee->getName());
         return makeBinaryExpr(valueExpr(*Call->getArgOperand(0)), *Operator,
                               valueExpr(*Call->getArgOperand(1)), Precedence);
+      }
+    }
+    if (!Call->getType()->isVoidTy()) {
+      std::string Text =
+          Callee == nullptr ? std::string("<indirect call>")
+                            : Callee->getName().str();
+      return makeExpr(UnresolvedValueExpr{std::move(Text)});
+    }
+  }
+  if (const auto *Extract = llvm::dyn_cast<llvm::ExtractValueInst>(&V)) {
+    llvm::StringRef Name = Extract->getName();
+    return makeExpr(UnresolvedValueExpr{
+        Name.empty() ? std::string("extractvalue") : Name.str()});
+  }
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&V)) {
+    // Loads without a recovered variable/materialized payload are fallback
+    // values; do not leak the raw SSA name into Solidity.
+    llvm::StringRef Name = Load->getName();
+    return makeExpr(UnresolvedValueExpr{
+        Name.empty() ? std::string("load") : Name.str()});
+  }
+  if (const auto *Arg = llvm::dyn_cast<llvm::Argument>(&V)) {
+    if (ActiveArgumentNames != nullptr &&
+        Arg->getArgNo() < ActiveArgumentNames->size()) {
+      const std::string &Name = (*ActiveArgumentNames)[Arg->getArgNo()];
+      if (!Name.empty()) {
+        return makeExpr(IdentifierExpr{Name});
       }
     }
   }
@@ -1069,9 +1326,25 @@ std::optional<Statement> formatSingleWordReturn(const llvm::CallBase &Call) {
   return std::nullopt;
 }
 
+std::optional<Statement>
+formatStorageStore(const llvm::CallBase &Call) {
+  // Reads are mapped through ActiveStorageSlots; writes also need lvalue
+  // typing/def-use recovery, otherwise setter bodies would either leak
+  // unresolved demoted values or assign complex packed expressions to a
+  // flattened slot type.  Keep this hook disabled until that materialization
+  // lands (the call site already reserves the first slot).
+  (void)Call;
+  return std::nullopt;
+}
+
 } // namespace
 
-Block BodyBuilder::readBody(const llvm::Function &F) {
+Block BodyBuilder::readBody(const llvm::Function &F,
+                            const StorageSlotMap *StorageSlots,
+                            const std::vector<std::string> *ArgumentNames,
+                            const EventParamTypeMap *EventParamTypes) {
+  ActiveStorageSlotsScope StorageScope(StorageSlots, ArgumentNames,
+                                       EventParamTypes);
   std::vector<Payload> Payloads;
   class SolidityPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
   public:
@@ -1090,6 +1363,10 @@ Block BodyBuilder::readBody(const llvm::Function &F) {
           continue;
         }
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
+          if (std::optional<Statement> Store = formatStorageStore(*Call)) {
+            Out.push_back(addPayload(Payloads, std::move(*Store)));
+            continue;
+          }
           if (std::optional<Statement> Return =
                   formatSingleWordReturn(*Call)) {
             Out.push_back(addPayload(Payloads, std::move(*Return)));
@@ -1300,9 +1577,29 @@ Statement BodyBuilder::formatEventStatement(const llvm::Instruction &I,
                                             llvm::StringRef Kind) {
   std::string Name =
       getEventName(I, Kind).value_or(sanitizeIdentifier(("Event_" + Kind).str()));
-  return makeStmt(EmitStatement{
-      makeExpr(IdentifierExpr{std::move(Name)}), getEventTopicArguments(I),
-      "TODO: recover event signature"});
+  std::vector<ExprPtr> Args = getEventTopicArguments(I);
+  if (ActiveEventParamTypes != nullptr) {
+    auto It = ActiveEventParamTypes->find(Name);
+    if (It != ActiveEventParamTypes->end()) {
+      const std::vector<std::string> &Types = It->second;
+      for (std::size_t Arg = 0; Arg < Args.size() && Arg < Types.size();
+           ++Arg) {
+        const std::string &Type = Types[Arg];
+        if (Type == "address" && !isMsgSenderExpr(Args[Arg])) {
+          Args[Arg] = makeExpr(CallExpr{
+              makeExpr(IdentifierExpr{"address"}),
+              {makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint160"}),
+                                 {Args[Arg]}, {}})},
+              {}});
+        } else if (Type == "uint256") {
+          Args[Arg] = wordCastAddressExpr(std::move(Args[Arg]));
+        }
+      }
+    }
+  }
+  return makeStmt(EmitStatement{makeExpr(IdentifierExpr{std::move(Name)}),
+                                std::move(Args),
+                                "TODO: recover event signature"});
 }
 
 std::string BodyBuilder::sanitizeIdentifier(llvm::StringRef Name) {

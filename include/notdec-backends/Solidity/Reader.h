@@ -5,6 +5,7 @@
 
 #include "notdec-backends/Core/HTypeResult.h"
 #include "notdec-backends/Solidity/Ast.h"
+#include "notdec-backends/Solidity/StorageInfo.h"
 
 namespace notdec::backend::solidity {
 
@@ -18,10 +19,16 @@ private:
                         const ::notdec::llvm2c::HTypeResult *HT);
   static void readEvents(const llvm::Module &M, Contract &Result);
   static void readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
-                                 Contract &Result);
+                                 Contract &Result,
+                                 StorageSlotMap &StorageSlots);
   static bool isPublicEntryFunction(const llvm::Function &F);
-  static Function readFunction(const llvm::Function &F);
-  static Block readBody(const llvm::Function &F);
+  static Function readFunction(const llvm::Function &F,
+                               const StorageSlotMap *StorageSlots,
+                               const EventParamTypeMap *EventParamTypes);
+  static Block readBody(const llvm::Function &F,
+                        const StorageSlotMap *StorageSlots,
+                        const std::vector<std::string> *ArgumentNames,
+                        const EventParamTypeMap *EventParamTypes);
   static std::vector<Parameter> readReturns(const llvm::Function &F);
   static void applyFunctionNameAndParams(llvm::StringRef IRName,
                                          Function &Result);

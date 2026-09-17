@@ -37,6 +37,8 @@ std::optional<llvm::APInt> constantIntToPtrValue(const llvm::Value *V) {
   return std::nullopt;
 }
 
+bool isAbiBoolWord(const llvm::Value *V);
+
 bool isEvmCallerValue(const llvm::Value *V) {
   const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(V);
   return Call != nullptr && Call->getCalledFunction() != nullptr &&
@@ -50,8 +52,13 @@ std::vector<Parameter> eventTopicParameters(const llvm::CallBase &Call) {
   }
 
   for (unsigned Arg = 4; Arg < Call.arg_size(); ++Arg) {
-    std::string Type = isEvmCallerValue(Call.getArgOperand(Arg)) ? "address"
-                                                                 : "uint256";
+    const llvm::Value *Topic = Call.getArgOperand(Arg);
+    std::string Type = "uint256";
+    if (isEvmCallerValue(Topic)) {
+      Type = "address";
+    } else if (isAbiBoolWord(Topic)) {
+      Type = "bool";
+    }
     Params.push_back(Parameter{TypeRef{Type},
                                "arg" + std::to_string(Params.size()),
                                /*DataLocation=*/"",
@@ -75,6 +82,25 @@ bool isFreeMemoryPointerInit(const llvm::Instruction &I) {
 bool isDemoteSSAAllocaPoint(const llvm::Instruction &I) {
   return llvm::isa<llvm::BitCastInst>(I) &&
          I.getName() == "reg2mem alloca point";
+}
+
+std::optional<std::uint64_t> parseStorageSlotName(llvm::StringRef Name) {
+  if (!Name.consume_front("slot:") && !Name.consume_front("slot_")) {
+    return std::nullopt;
+  }
+  std::uint64_t Value = 0;
+  bool SawDigit = false;
+  for (char C : Name) {
+    if (!std::isdigit(static_cast<unsigned char>(C))) {
+      break;
+    }
+    SawDigit = true;
+    Value = Value * 10 + static_cast<std::uint64_t>(C - '0');
+  }
+  if (!SawDigit) {
+    return std::nullopt;
+  }
+  return Value;
 }
 
 bool isEmptyPayableFallbackSelector(const llvm::Function &F) {
@@ -134,6 +160,40 @@ std::optional<std::string> signedReturnTypeForWord(const llvm::Value *V) {
   return "int" + std::to_string((ByteIndex->getZExtValue() + 1) * 8);
 }
 
+const llvm::Value *ptrToIntSource(const llvm::Value *V) {
+  if (const auto *Inst = llvm::dyn_cast_or_null<llvm::PtrToIntInst>(V)) {
+    return Inst->getOperand(0);
+  }
+  if (const auto *Expr = llvm::dyn_cast_or_null<llvm::ConstantExpr>(V);
+      Expr != nullptr && Expr->getOpcode() == llvm::Instruction::PtrToInt &&
+      Expr->getNumOperands() == 1) {
+    return Expr->getOperand(0);
+  }
+  return nullptr;
+}
+
+// MemoryBufferAnalysis rewrites dynamic one-word ABI returns to calloc-backed
+// pointers.  In that shape the evm_return offset is an SSA value, so the stored
+// return word has to be found by following the returned pointer instead of a
+// constant offset.
+const llvm::Value *findAllocatedSingleWordReturnValue(
+    const llvm::CallBase &Call) {
+  const llvm::Value *StorePointer = ptrToIntSource(Call.getArgOperand(1));
+  if (StorePointer == nullptr) {
+    return nullptr;
+  }
+  for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
+                                                      Call.getParent()->begin();
+       It != Begin;) {
+    --It;
+    const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*It);
+    if (Store != nullptr && Store->getPointerOperand() == StorePointer) {
+      return Store->getValueOperand();
+    }
+  }
+  return nullptr;
+}
+
 const llvm::Value *findStoredReturnValue(const llvm::CallBase &Call,
                                          const llvm::APInt &ReturnOffset) {
   for (auto It = llvm::BasicBlock::const_iterator(&Call), Begin =
@@ -170,14 +230,16 @@ bool returnsSingleBoolWord(const llvm::Function &F) {
           constantIntValue(Call->getArgOperand(1));
       std::optional<llvm::APInt> ReturnLength =
           constantIntValue(Call->getArgOperand(2));
-      if (!ReturnOffset.has_value() || !ReturnLength.has_value() ||
-          *ReturnLength != 32) {
+      if (!ReturnLength.has_value() || *ReturnLength != 32) {
         return false;
       }
 
       // A Solidity bool is ABI-encoded as one 32-byte word whose value is
       // produced from an i1 comparison result.
-      const llvm::Value *Stored = findStoredReturnValue(*Call, *ReturnOffset);
+      const llvm::Value *Stored =
+          ReturnOffset.has_value()
+              ? findStoredReturnValue(*Call, *ReturnOffset)
+              : findAllocatedSingleWordReturnValue(*Call);
       if (!isAbiBoolWord(Stored)) {
         return false;
       }
@@ -235,9 +297,19 @@ SourceUnit Reader::read(const llvm::Module &M,
 Contract Reader::readContract(const llvm::Module &M,
                               const ::notdec::llvm2c::HTypeResult *HT) {
   Contract Result;
+  StorageSlotMap StorageSlots;
   readEvents(M, Result);
+  EventParamTypeMap EventParamTypes;
+  for (const EventDecl &Event : Result.Events) {
+    std::vector<std::string> Types;
+    Types.reserve(Event.Parameters.size());
+    for (const Parameter &Param : Event.Parameters) {
+      Types.push_back(Param.Type.Name);
+    }
+    EventParamTypes.emplace(Event.Name, std::move(Types));
+  }
   if (HT != nullptr) {
-    readStateVariables(*HT, Result);
+    readStateVariables(*HT, Result, StorageSlots);
   }
 
   std::vector<const llvm::Function *> PublicFunctions;
@@ -262,7 +334,28 @@ Contract Reader::readContract(const llvm::Module &M,
             });
 
   for (const llvm::Function *F : PublicFunctions) {
-    Result.Functions.push_back(readFunction(*F));
+    Result.Functions.push_back(
+        readFunction(*F, &StorageSlots, &EventParamTypes));
+  }
+  // Two outlined entries can recover the same selector/base name.  Keep the
+  // generated module compilable by disambiguating exact signature duplicates.
+  {
+    std::map<std::string, unsigned> SeenSignatures;
+    for (Function &Fn : Result.Functions) {
+      std::string Signature = Fn.Name + "(";
+      for (const Parameter &Param : Fn.Parameters) {
+        Signature += Param.Type.Name;
+        Signature += ",";
+        Signature += Param.DataLocation;
+        Signature += ";";
+      }
+      Signature += ")";
+      unsigned &Count = SeenSignatures[Signature];
+      ++Count;
+      if (Count > 1) {
+        Fn.Name += "_" + std::to_string(Count);
+      }
+    }
   }
   if (PublicFunctions.empty() && EmptyPayableFallback != nullptr &&
       !MultipleEmptyPayableFallbacks) {
@@ -297,18 +390,38 @@ void Reader::readEvents(const llvm::Module &M, Contract &Result) {
         if (!Name.has_value() || Name->empty()) {
           continue;
         }
-        if (std::find(Names.begin(), Names.end(), *Name) != Names.end()) {
+        std::vector<Parameter> Params = eventTopicParameters(*Call);
+        auto Existing = std::find_if(
+            Result.Events.begin(), Result.Events.end(),
+            [&](const EventDecl &Event) { return Event.Name == *Name; });
+        if (Existing != Result.Events.end()) {
+          if (Existing->Parameters.size() == Params.size()) {
+            for (std::size_t I = 0; I < Params.size(); ++I) {
+              std::string &OldType = Existing->Parameters[I].Type.Name;
+              if (OldType != Params[I].Type.Name) {
+                if (OldType == "address" || Params[I].Type.Name == "address") {
+                  OldType = "address";
+                } else if (OldType == "uint256" ||
+                           Params[I].Type.Name == "uint256") {
+                  OldType = "uint256";
+                } else {
+                  OldType = "bool";
+                }
+              }
+            }
+          }
           continue;
         }
         Names.push_back(*Name);
-        Result.Events.push_back(EventDecl{*Name, eventTopicParameters(*Call)});
+        Result.Events.push_back(EventDecl{*Name, std::move(Params)});
       }
     }
   }
 }
 
 void Reader::readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
-                                Contract &Result) {
+                                Contract &Result,
+                                StorageSlotMap &StorageSlots) {
   if (HT.StorageDecl == nullptr) {
     return;
   }
@@ -333,9 +446,15 @@ void Reader::readStateVariables(const ::notdec::llvm2c::HTypeResult &HT,
     }
     Names.push_back(UniqueName);
     StateVariable Var;
-    Var.Type = TypeRef{TypePrinter::formatType(Field.Type)};
+    Var.Type = TypeRef{TypePrinter::formatStateVariableType(Field.Type)};
     Var.Name = UniqueName;
     Var.Visibility = "public";
+    if (std::optional<std::uint64_t> Slot =
+            parseStorageSlotName(Field.Name)) {
+      StorageSlots[*Slot] =
+          StorageSlotInfo{UniqueName, TypePrinter::isMappingType(Field.Type),
+                          TypePrinter::isArrayType(Field.Type)};
+    }
     Result.StateVariables.push_back(std::move(Var));
     ++Index;
   }
@@ -347,17 +466,46 @@ bool Reader::isPublicEntryFunction(const llvm::Function &F) {
          !Name.contains("function_selector");
 }
 
-Function Reader::readFunction(const llvm::Function &F) {
+Function Reader::readFunction(const llvm::Function &F,
+                               const StorageSlotMap *StorageSlots,
+                               const EventParamTypeMap *EventParamTypes) {
   Function Result;
   applyFunctionNameAndParams(F.getName(), Result);
+
+  // Public wrappers always start with (mem, calldata, returndata, env).  Some
+  // outlined entry functions additionally carry the outlined private formals
+  // as trailing i256 arguments; expose them as Solidity parameters so body
+  // expressions do not leak raw LLVM names.
+  std::vector<std::string> ArgumentNames(F.arg_size());
+  constexpr unsigned kRuntimeArgs = 4;
+  const unsigned ExtraArgs =
+      F.arg_size() > kRuntimeArgs ? F.arg_size() - kRuntimeArgs : 0;
+  for (unsigned I = 0; I < ExtraArgs; ++I) {
+    // ABI parameter names parsed from the function name already cover the
+    // leading trailing args; only synthesize parameters for truly outlined
+    // formals without an ABI spelling.
+    std::string Name;
+    if (I < Result.Parameters.size()) {
+      Name = Result.Parameters[I].Name;
+    } else {
+      Name = "arg" + std::to_string(I);
+      Result.Parameters.push_back(
+          Parameter{TypeRef{"uint256"}, Name, /*DataLocation=*/"", false});
+    }
+    ArgumentNames[kRuntimeArgs + I] = std::move(Name);
+  }
+
   Result.Visibility = "public";
   Result.Returns = readReturns(F);
-  Result.Body = readBody(F);
+  Result.Body = readBody(F, StorageSlots, &ArgumentNames, EventParamTypes);
   return Result;
 }
 
-Block Reader::readBody(const llvm::Function &F) {
-  return BodyBuilder::readBody(F);
+Block Reader::readBody(const llvm::Function &F,
+                       const StorageSlotMap *StorageSlots,
+                       const std::vector<std::string> *ArgumentNames,
+                       const EventParamTypeMap *EventParamTypes) {
+  return BodyBuilder::readBody(F, StorageSlots, ArgumentNames, EventParamTypes);
 }
 
 std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {

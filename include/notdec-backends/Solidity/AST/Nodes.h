@@ -90,6 +90,13 @@ struct LiteralExpr {
   std::string SubDenomination;
 };
 
+// Explicit fallback for a value the backend could not recover.  Printed as a
+// compilable zero expression plus TODO text, instead of leaking an undeclared
+// LLVM SSA name into the generated Solidity.
+struct UnresolvedValueExpr {
+  std::string Text;
+};
+
 struct TodoConditionExpr {
   std::string Text;
 };
@@ -170,11 +177,11 @@ struct MetaTypeExpr {
 // binary operators, conditional/assignment expressions, new, tuples, arrays,
 // and meta-type expressions.
 using ExpressionNode =
-    std::variant<IdentifierExpr, TypeNameExpr, LiteralExpr, TodoConditionExpr,
-                 MemberAccessExpr, IndexAccessExpr, IndexRangeAccessExpr,
-                 FunctionCallOptionsExpr, UnaryExpr, BinaryExpr,
-                 ConditionalExpr, AssignmentExpr, CallExpr, NewExpr, TupleExpr,
-                 InlineArrayExpr, MetaTypeExpr>;
+    std::variant<IdentifierExpr, TypeNameExpr, LiteralExpr, UnresolvedValueExpr,
+                 TodoConditionExpr, MemberAccessExpr, IndexAccessExpr,
+                 IndexRangeAccessExpr, FunctionCallOptionsExpr, UnaryExpr,
+                 BinaryExpr, ConditionalExpr, AssignmentExpr, CallExpr, NewExpr,
+                 TupleExpr, InlineArrayExpr, MetaTypeExpr>;
 
 struct Expression {
   ExpressionNode Node;
