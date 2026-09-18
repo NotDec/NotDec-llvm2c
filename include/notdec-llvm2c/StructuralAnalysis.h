@@ -66,8 +66,6 @@ inline bool isAddrOf(clang::Expr *E) {
   return false;
 }
 
-bool onlyUsedInCurrentBlock(llvm::Instruction &inst);
-bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb);
 clang::DeclRefExpr *
 makeDeclRefExpr(clang::ValueDecl *D,
                 bool RefersToEnclosingVariableOrCapture = false);

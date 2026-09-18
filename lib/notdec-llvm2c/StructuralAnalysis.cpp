@@ -69,6 +69,7 @@
 #include "Interface/HType.h"
 #include "Interface/Utils.h"
 #include "TypeManager.h"
+#include "notdec-backends/Core/ValueUseAnalysis.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 #include "notdec-llvm2c/CFG.h"
 #include "notdec-llvm2c/CompoundConditionBuilder.h"
@@ -1514,7 +1515,8 @@ void SAFuncContext::addExprOrStmt(llvm::Value &V, clang::Stmt &Stmt,
     //   canCache = true;
     // }
 
-  } else if (onlyUsedInCurrentBlock(Inst) || isAddrOf(&Expr)) {
+  } else if (notdec::backend::core::onlyUsedInCurrentBlock(Inst) ||
+             isAddrOf(&Expr)) {
     canCache = true;
   }
 
@@ -1972,43 +1974,6 @@ void decompileModule(llvm::Module &M, llvm::ModuleAnalysisManager &MAM,
   DeclPrinter DP(OS, Ctx.getASTContext().getPrintingPolicy(),
                  Ctx.getASTContext(), 0, MyPrintingPolicy(), CT);
   AM->print(DP, opts.filterUnusedDefinitions);
-}
-
-bool usedInBlock(llvm::Instruction &inst, llvm::BasicBlock &bb) {
-  for (llvm::User *U : inst.users()) {
-    if (llvm::Instruction *UI = llvm::dyn_cast<llvm::Instruction>(U)) {
-      if (UI->getParent() == &bb) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-bool hasOneUseIgnoreCast(llvm::Value &Val) {
-  if (Val.hasOneUse()) {
-    if (auto Cast = llvm::dyn_cast<llvm::CastInst>(*Val.user_begin())) {
-      return Cast->hasOneUse();
-    } else {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Has one use and is in the same block
-bool onlyUsedInCurrentBlock(llvm::Instruction &inst) {
-  llvm::BasicBlock *BB = inst.getParent();
-  if (hasOneUseIgnoreCast(inst)) {
-    for (llvm::User *U : inst.users()) {
-      if (llvm::Instruction *UI = llvm::dyn_cast<llvm::Instruction>(U)) {
-        if (UI->getParent() == BB) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
 }
 
 clang::StorageClass SAContext::getStorageClass(llvm::GlobalValue &GV) {

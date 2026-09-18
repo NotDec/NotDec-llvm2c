@@ -1,3 +1,4 @@
+#include "notdec-backends/Core/ValueUseAnalysis.h"
 #include "notdec-backends/Solidity/BodyBuilder.h"
 #include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
@@ -1201,43 +1202,14 @@ ExprPtr wordCastAddressExpr(ExprPtr Expr);
 ExprPtr wordOperandExpr(ExprPtr Expr, const llvm::Value &Operand);
 bool containsUnresolvedValue(const ExprPtr &Expr);
 
-// --- Fold-versus-local decision ported from the llvm2c C backend ------------
-// StructuralAnalysis.cpp:addExprOrStmt decides whether an instruction can be
-// folded into its use sites or has to be cached in a local variable.
-// hasOneUseIgnoreCast() and onlyUsedInCurrentBlock() are copied from there
-// unchanged: a value is folded only when it is consumed exactly once (looking
-// through a single-use cast) in its own basic block.  The Solidity backend
-// applies that decision to the values whose duplication would be observable --
-// calls to helper functions that the backend renders as real functions, since
-// a call may read or write storage.  Pure arithmetic and evm builtin
-// expressions keep their earlier folded rendering (printing the same value at
-// each use is not observable for them).
-bool hasOneUseIgnoreCast(const llvm::Value &Val) {
-  if (Val.hasOneUse()) {
-    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(*Val.user_begin())) {
-      return Cast->hasOneUse();
-    }
-    return true;
-  }
-  return false;
-}
-
-// Has one use and that use is in the defining block.
-bool onlyUsedInCurrentBlock(const llvm::Instruction &Inst) {
-  const llvm::BasicBlock *BB = Inst.getParent();
-  if (!hasOneUseIgnoreCast(Inst)) {
-    return false;
-  }
-  for (const llvm::User *U : Inst.users()) {
-    if (const auto *UI = llvm::dyn_cast<llvm::Instruction>(U)) {
-      if (UI->getParent() == BB) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
+// --- Fold-versus-local decision -------------------------------------------
+// The use predicates themselves are shared with the llvm2c C backend
+// (notdec-backends/Core/ValueUseAnalysis.h), so the two backends cannot drift.
+// Here the decision is applied to the values whose duplication would be
+// observable: calls to helper functions that the backend renders as real
+// functions, since a call may read or write storage.  Pure arithmetic and evm
+// builtin expressions keep their earlier folded rendering (printing the same
+// value at each use is not observable for them).
 bool isRenderedHelperCall(const llvm::CallBase &Call) {
   if (ActiveHelpers == nullptr) {
     return false;
@@ -1262,7 +1234,7 @@ bool valueNeedsMaterialization(const llvm::Value &V) {
   if (V.getNumUses() == 0) {
     return false; // side effect only; emitted as a call statement
   }
-  return !onlyUsedInCurrentBlock(*Inst);
+  return !core::onlyUsedInCurrentBlock(*Inst);
 }
 
 // Renders an SSA helper call as a Solidity call expression.  evm2llvm passes
