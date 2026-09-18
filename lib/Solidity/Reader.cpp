@@ -285,6 +285,31 @@ std::optional<std::string> singleSignedReturnType(const llvm::Function &F) {
   return SignedType;
 }
 
+// Signed EVM arithmetic is not rendered in helper bodies yet: the backend
+// prints evm_signextend / evm_sdiv / evm_smod / evm_sar results as intN(...)
+// expressions, which do not match the uint256 helper signature.  A helper
+// containing one is skipped and its call sites stay unresolved.
+bool hasUnsupportedSignedMath(const llvm::Function &F) {
+  for (const llvm::BasicBlock &BB : F) {
+    for (const llvm::Instruction &I : BB) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (Call == nullptr) {
+        continue;
+      }
+      const llvm::Function *Callee = Call->getCalledFunction();
+      if (Callee == nullptr) {
+        continue;
+      }
+      llvm::StringRef Name = Callee->getName();
+      if (Name == "evm_signextend" || Name == "evm_sdiv" ||
+          Name == "evm_smod" || Name == "evm_sar") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 SourceUnit Reader::read(const llvm::Module &M,
@@ -333,9 +358,49 @@ Contract Reader::readContract(const llvm::Module &M,
               return LHS->getName() < RHS->getName();
             });
 
+  // Route B: render the private helpers first.  The emittable set decides how
+  // call sites in the public entries are printed; a helper whose body cannot be
+  // rendered completely is dropped, and dropping it can make its callers
+  // unrenderable too, so the set is shrunk to a fixed point before the final
+  // render (the check is monotone: removing helpers only turns bodies dirty).
+  HelperRenderMap Helpers;
+  std::vector<Function> HelperFunctions;
+  std::set<const llvm::Function *> Emittable =
+      collectHelperCandidates(M, PublicFunctions);
+  while (!Emittable.empty()) {
+    Helpers.clear();
+    for (const llvm::Function *F : Emittable) {
+      Helpers.emplace(F, HelperRenderInfo{sanitizeIdentifier(F->getName()), 4});
+    }
+    std::vector<const llvm::Function *> Dirty;
+    std::vector<Function> RenderedHelpers;
+    for (const llvm::Function *F : Emittable) {
+      Function Rendered =
+          readHelperFunction(*F, &StorageSlots, &EventParamTypes, &Helpers);
+      const bool BodyFullyRecovered =
+          Rendered.Body.has_value() &&
+          BodyBuilder::blockIsFullyRecovered(*Rendered.Body);
+      if (!BodyFullyRecovered) {
+        Dirty.push_back(F);
+      } else {
+        RenderedHelpers.push_back(std::move(Rendered));
+      }
+    }
+    if (Dirty.empty()) {
+      HelperFunctions = std::move(RenderedHelpers);
+      break;
+    }
+    for (const llvm::Function *F : Dirty) {
+      Emittable.erase(F);
+    }
+  }
+
   for (const llvm::Function *F : PublicFunctions) {
     Result.Functions.push_back(
-        readFunction(*F, &StorageSlots, &EventParamTypes));
+        readFunction(*F, &StorageSlots, &EventParamTypes, &Helpers));
+  }
+  for (Function &Fn : HelperFunctions) {
+    Result.Functions.push_back(std::move(Fn));
   }
   // Two outlined entries can recover the same selector/base name.  Keep the
   // generated module compilable by disambiguating exact signature duplicates.
@@ -468,7 +533,8 @@ bool Reader::isPublicEntryFunction(const llvm::Function &F) {
 
 Function Reader::readFunction(const llvm::Function &F,
                                const StorageSlotMap *StorageSlots,
-                               const EventParamTypeMap *EventParamTypes) {
+                               const EventParamTypeMap *EventParamTypes,
+                               const HelperRenderMap *Helpers) {
   Function Result;
   applyFunctionNameAndParams(F.getName(), Result);
 
@@ -521,8 +587,114 @@ Function Reader::readFunction(const llvm::Function &F,
     ReturnTypes.push_back(Param.Type.Name);
   }
   Result.Body = readBody(F, StorageSlots, &ArgumentNames, &ParameterTypes,
-                         &ReturnTypes, EventParamTypes);
+                         &ReturnTypes, EventParamTypes, Helpers);
   return Result;
+}
+
+Function Reader::readHelperFunction(const llvm::Function &F,
+                                    const StorageSlotMap *StorageSlots,
+                                    const EventParamTypeMap *EventParamTypes,
+                                    const HelperRenderMap *Helpers) {
+  Function Result;
+  Result.Name = sanitizeIdentifier(F.getName());
+  Result.Visibility = "internal";
+
+  // The first four LLVM arguments are the runtime pointers, which are implicit
+  // in Solidity; the remaining i256 formals are the outlined call arguments.
+  constexpr unsigned kRuntimeArgs = 4;
+  std::vector<std::string> ArgumentNames(F.arg_size());
+  ParameterTypeMap ParameterTypes;
+  for (unsigned I = kRuntimeArgs; I < F.arg_size(); ++I) {
+    std::string Name = "arg" + std::to_string(I - kRuntimeArgs);
+    ArgumentNames[I] = Name;
+    Result.Parameters.push_back(
+        Parameter{TypeRef{"uint256"}, Name, /*DataLocation=*/"", false});
+    ParameterTypes.emplace(Name, "uint256");
+  }
+
+  Result.Returns = readHelperReturns(F);
+  std::vector<std::string> ReturnTypes;
+  ReturnTypes.reserve(Result.Returns.size());
+  for (const Parameter &Param : Result.Returns) {
+    ReturnTypes.push_back(Param.Type.Name);
+  }
+  Result.Body =
+      readBody(F, StorageSlots, &ArgumentNames, &ParameterTypes, &ReturnTypes,
+               EventParamTypes, Helpers);
+  return Result;
+}
+
+std::vector<Parameter> Reader::readHelperReturns(const llvm::Function &F) {
+  std::vector<Parameter> Result;
+  llvm::Type *ReturnType = F.getReturnType();
+  if (ReturnType->isVoidTy()) {
+    return Result;
+  }
+  if (!ReturnType->isIntegerTy(256)) {
+    // Multi-word (struct) and non-word helpers are not rendered yet; callers
+    // see an unresolved placeholder instead.
+    return Result;
+  }
+  Result.push_back(Parameter{TypeRef{"uint256"}, "ret0"});
+  return Result;
+}
+
+bool Reader::isHelperRenderCandidate(const llvm::Function &F) {
+  if (F.isDeclaration() || !F.getName().starts_with("private__")) {
+    return false;
+  }
+  if (hasUnsupportedSignedMath(F)) {
+    return false;
+  }
+  constexpr unsigned kRuntimeArgs = 4;
+  if (F.arg_size() < kRuntimeArgs) {
+    return false;
+  }
+  unsigned Index = 0;
+  for (const llvm::Argument &Arg : F.args()) {
+    if (Index < kRuntimeArgs) {
+      if (!Arg.getType()->isPointerTy()) {
+        return false;
+      }
+    } else if (!Arg.getType()->isIntegerTy(256)) {
+      return false;
+    }
+    ++Index;
+  }
+  const llvm::Type *ReturnType = F.getReturnType();
+  return ReturnType->isVoidTy() || ReturnType->isIntegerTy(256);
+}
+
+std::set<const llvm::Function *>
+Reader::collectHelperCandidates(const llvm::Module &M,
+                                const std::vector<const llvm::Function *> &Roots) {
+  (void)M;
+  std::set<const llvm::Function *> Candidates;
+  std::set<const llvm::Function *> Visited;
+  std::vector<const llvm::Function *> Worklist = Roots;
+  while (!Worklist.empty()) {
+    const llvm::Function *F = Worklist.back();
+    Worklist.pop_back();
+    if (F == nullptr || !Visited.insert(F).second) {
+      continue;
+    }
+    for (const llvm::BasicBlock &BB : *F) {
+      for (const llvm::Instruction &I : BB) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+        if (Call == nullptr) {
+          continue;
+        }
+        const llvm::Function *Callee = Call->getCalledFunction();
+        if (Callee == nullptr || !isHelperRenderCandidate(*Callee)) {
+          continue;
+        }
+        if (Candidates.insert(Callee).second) {
+          Worklist.push_back(Callee);
+        }
+      }
+    }
+  }
+  return Candidates;
 }
 
 Block Reader::readBody(const llvm::Function &F,
@@ -530,9 +702,10 @@ Block Reader::readBody(const llvm::Function &F,
                        const std::vector<std::string> *ArgumentNames,
                        const ParameterTypeMap *ParameterTypes,
                        const std::vector<std::string> *ReturnTypes,
-                       const EventParamTypeMap *EventParamTypes) {
+                       const EventParamTypeMap *EventParamTypes,
+                       const HelperRenderMap *Helpers) {
   return BodyBuilder::readBody(F, StorageSlots, ArgumentNames, ParameterTypes,
-                               ReturnTypes, EventParamTypes);
+                               ReturnTypes, EventParamTypes, Helpers);
 }
 
 std::vector<Parameter> Reader::readReturns(const llvm::Function &F) {

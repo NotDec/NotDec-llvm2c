@@ -2,6 +2,7 @@
 #include "notdec-backends/Structuring/LLVMFunctionCFGBuilder.h"
 #include "notdec-backends/Structuring/StructurerRegistry.h"
 
+#include <algorithm>
 #include <cctype>
 #include <map>
 #include <memory>
@@ -34,6 +35,11 @@ using structuring::StructuredTree;
 using structuring::TerminatorKind;
 using structuring::VVarId;
 
+// Port of the llvm2c C backend's cached-expression map (StructuralAnalysis.cpp
+// cacheExpr): a value the backend cannot fold into its use sites is stored in a
+// local variable and every later reference goes through the local's name.
+using MaterializedValueMap = std::map<const llvm::Value *, std::string>;
+
 // Active contract-level slot map while one Solidity function body is being
 // built.  The Solidity backend currently reads/writes one module at a time;
 // thread_local keeps parallel backend invocations from sharing slot state.
@@ -42,6 +48,8 @@ thread_local const std::vector<std::string> *ActiveArgumentNames = nullptr;
 thread_local const ParameterTypeMap *ActiveParameterTypes = nullptr;
 thread_local const std::vector<std::string> *ActiveReturnTypes = nullptr;
 thread_local const EventParamTypeMap *ActiveEventParamTypes = nullptr;
+thread_local const MaterializedValueMap *ActiveMaterializedValues = nullptr;
+thread_local const HelperRenderMap *ActiveHelpers = nullptr;
 
 class ActiveStorageSlotsScope {
 public:
@@ -49,17 +57,23 @@ public:
                           const std::vector<std::string> *ArgumentNames,
                           const ParameterTypeMap *ParameterTypes,
                           const std::vector<std::string> *ReturnTypes,
-                          const EventParamTypeMap *EventParamTypes)
+                          const EventParamTypeMap *EventParamTypes,
+                          const MaterializedValueMap *MaterializedValues,
+                          const HelperRenderMap *Helpers)
       : PreviousStorageSlots(ActiveStorageSlots),
         PreviousArgumentNames(ActiveArgumentNames),
         PreviousParameterTypes(ActiveParameterTypes),
         PreviousReturnTypes(ActiveReturnTypes),
-        PreviousEventParamTypes(ActiveEventParamTypes) {
+        PreviousEventParamTypes(ActiveEventParamTypes),
+        PreviousMaterializedValues(ActiveMaterializedValues),
+        PreviousHelpers(ActiveHelpers) {
     ActiveStorageSlots = StorageSlots;
     ActiveArgumentNames = ArgumentNames;
     ActiveParameterTypes = ParameterTypes;
     ActiveReturnTypes = ReturnTypes;
     ActiveEventParamTypes = EventParamTypes;
+    ActiveMaterializedValues = MaterializedValues;
+    ActiveHelpers = Helpers;
   }
 
   ~ActiveStorageSlotsScope() {
@@ -68,6 +82,8 @@ public:
     ActiveParameterTypes = PreviousParameterTypes;
     ActiveReturnTypes = PreviousReturnTypes;
     ActiveEventParamTypes = PreviousEventParamTypes;
+    ActiveMaterializedValues = PreviousMaterializedValues;
+    ActiveHelpers = PreviousHelpers;
   }
 
 private:
@@ -76,6 +92,8 @@ private:
   const ParameterTypeMap *PreviousParameterTypes;
   const std::vector<std::string> *PreviousReturnTypes;
   const EventParamTypeMap *PreviousEventParamTypes;
+  const MaterializedValueMap *PreviousMaterializedValues;
+  const HelperRenderMap *PreviousHelpers;
 };
 
 PayloadRef addPayload(std::vector<BodyBuilder::Payload> &Payloads,
@@ -1180,6 +1198,105 @@ bool leftOperandNeedsSamePrecedenceParentheses(llvm::StringRef Operator) {
 
 ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName = "ret0");
 ExprPtr wordCastAddressExpr(ExprPtr Expr);
+ExprPtr wordOperandExpr(ExprPtr Expr, const llvm::Value &Operand);
+bool containsUnresolvedValue(const ExprPtr &Expr);
+
+// --- Fold-versus-local decision ported from the llvm2c C backend ------------
+// StructuralAnalysis.cpp:addExprOrStmt decides whether an instruction can be
+// folded into its use sites or has to be cached in a local variable.
+// hasOneUseIgnoreCast() and onlyUsedInCurrentBlock() are copied from there
+// unchanged: a value is folded only when it is consumed exactly once (looking
+// through a single-use cast) in its own basic block.  The Solidity backend
+// applies that decision to the values whose duplication would be observable --
+// calls to helper functions that the backend renders as real functions, since
+// a call may read or write storage.  Pure arithmetic and evm builtin
+// expressions keep their earlier folded rendering (printing the same value at
+// each use is not observable for them).
+bool hasOneUseIgnoreCast(const llvm::Value &Val) {
+  if (Val.hasOneUse()) {
+    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(*Val.user_begin())) {
+      return Cast->hasOneUse();
+    }
+    return true;
+  }
+  return false;
+}
+
+// Has one use and that use is in the defining block.
+bool onlyUsedInCurrentBlock(const llvm::Instruction &Inst) {
+  const llvm::BasicBlock *BB = Inst.getParent();
+  if (!hasOneUseIgnoreCast(Inst)) {
+    return false;
+  }
+  for (const llvm::User *U : Inst.users()) {
+    if (const auto *UI = llvm::dyn_cast<llvm::Instruction>(U)) {
+      if (UI->getParent() == BB) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool isRenderedHelperCall(const llvm::CallBase &Call) {
+  if (ActiveHelpers == nullptr) {
+    return false;
+  }
+  const llvm::Function *Callee = Call.getCalledFunction();
+  return Callee != nullptr && ActiveHelpers->count(Callee) != 0;
+}
+
+std::optional<ExprPtr> renderedHelperCallExpr(const llvm::CallBase &Call);
+
+// The C backend caches when a value has no single same-block use (the LoadInst
+// rule is a separate case and does not apply to the helper-call path here).
+bool valueNeedsMaterialization(const llvm::Value &V) {
+  const auto *Inst = llvm::dyn_cast<llvm::Instruction>(&V);
+  if (Inst == nullptr) {
+    return false;
+  }
+  const auto *Call = llvm::dyn_cast<llvm::CallBase>(Inst);
+  if (Call == nullptr || !renderedHelperCallExpr(*Call).has_value()) {
+    return false;
+  }
+  if (V.getNumUses() == 0) {
+    return false; // side effect only; emitted as a call statement
+  }
+  return !onlyUsedInCurrentBlock(*Inst);
+}
+
+// Renders an SSA helper call as a Solidity call expression.  evm2llvm passes
+// the four runtime pointers first; Solidity has them as implicit globals, so
+// the matching arguments are dropped here and in the helper signature.
+std::optional<ExprPtr> renderedHelperCallExpr(const llvm::CallBase &Call) {
+  if (ActiveHelpers == nullptr) {
+    return std::nullopt;
+  }
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (Callee == nullptr) {
+    return std::nullopt;
+  }
+  auto It = ActiveHelpers->find(Callee);
+  if (It == ActiveHelpers->end()) {
+    return std::nullopt;
+  }
+  std::vector<ExprPtr> Arguments;
+  for (unsigned I = It->second.RuntimeArgCount; I < Call.arg_size(); ++I) {
+    // Helper formals are uint256 words, so address- and bool-valued operands
+    // need the same coercion the backend applies at return/arithmetic sites.
+    ExprPtr Argument = wordOperandExpr(valueExpr(*Call.getArgOperand(I)),
+                                       *Call.getArgOperand(I));
+    // A call whose arguments were not recovered is left unresolved: the
+    // previous call-site TODO is kept instead of a call with placeholder
+    // arguments.
+    if (containsUnresolvedValue(Argument)) {
+      return std::nullopt;
+    }
+    Arguments.push_back(std::move(Argument));
+  }
+  return makeExpr(CallExpr{makeExpr(IdentifierExpr{It->second.Name}),
+                           std::move(Arguments), {}});
+}
 
 const StorageSlotInfo *storageSlotInfoForValue(const llvm::Value &V) {
   if (ActiveStorageSlots == nullptr) {
@@ -1220,7 +1337,8 @@ StorageContainerShape storageContainerShapeForRef(const llvm::Value &V) {
     return {};
   }
   llvm::StringRef Name = Callee->getName();
-  if (Name == "evm.storage.slot" && Call->arg_size() >= 1) {
+  if ((Name == "evm.storage.slot" || Name == "evm_sload") &&
+      Call->arg_size() >= 1) {
     if (const StorageSlotInfo *Info =
             storageSlotInfoForValue(*Call->getArgOperand(0))) {
       return {Info->IsMapping, Info->IsArray};
@@ -1231,6 +1349,22 @@ StorageContainerShape storageContainerShapeForRef(const llvm::Value &V) {
   // declaration we emitted (mapping values are often flattened to uint256 by
   // TypePrinter).  Only a direct slot carries reliable container shape.
   return {};
+}
+
+// A recovered expression that is exactly a container-typed state variable
+// (mapping/array) cannot be used as a word.  The unknown-shape fallbacks below
+// keep the base expression readable, so they have to reject that case.
+bool rendersAsContainerStateVariable(const ExprPtr &Expr) {
+  const auto *Identifier = std::get_if<IdentifierExpr>(&Expr->Node);
+  if (Identifier == nullptr || ActiveStorageSlots == nullptr) {
+    return false;
+  }
+  for (const auto &Entry : *ActiveStorageSlots) {
+    if (Entry.second.Name == Identifier->Name) {
+      return Entry.second.IsMapping || Entry.second.IsArray;
+    }
+  }
+  return false;
 }
 
 std::optional<ExprPtr> storageRefExpr(const llvm::Value &V);
@@ -1246,6 +1380,12 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
       Call.arg_size() >= 1) {
     if (const StorageSlotInfo *Info =
             storageSlotInfoForValue(*Call.getArgOperand(0))) {
+      // A mapping or array slot cannot be read as a whole word in Solidity:
+      // the state variable has a container type, so the only expressible uses
+      // are indexed accesses, which the dedicated storage helpers below match.
+      if (Info->IsMapping || Info->IsArray) {
+        return std::nullopt;
+      }
       return makeExpr(IdentifierExpr{Info->Name});
     }
     return std::nullopt;
@@ -1258,10 +1398,16 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
     if (!Base.has_value()) {
       return std::nullopt;
     }
+    StorageContainerShape Shape =
+        storageContainerShapeForRef(*Call.getArgOperand(0));
     // A plain storage load on a dynamic-array slot reads its length word.
-    if (Name == "evm.storage.load" &&
-        storageContainerShapeForRef(*Call.getArgOperand(0)).IsArray) {
+    if (Name == "evm.storage.load" && Shape.IsArray) {
       return makeExpr(MemberAccessExpr{*Base, "length"});
+    }
+    // A whole mapping slot has no word-valued Solidity expression; only an
+    // indexed access (evm.storage.map.value) can express it.
+    if (Shape.IsMapping) {
+      return std::nullopt;
     }
     return *Base;
   }
@@ -1279,7 +1425,11 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
           *Base, wordCastAddressExpr(valueExpr(*Call.getArgOperand(1)))});
     }
     // The declared slot type is not known to be indexable; keep a readable
-    // base expression instead of emitting an undeclared SSA name.
+    // base expression instead of emitting an undeclared SSA name.  A bare
+    // container name is not a word, so that case stays unresolved.
+    if (rendersAsContainerStateVariable(*Base)) {
+      return std::nullopt;
+    }
     return *Base;
   }
 
@@ -1295,6 +1445,9 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
     if (storageContainerShapeForRef(*Call.getArgOperand(0)).IsArray) {
       return makeExpr(IndexAccessExpr{
           *Base, wordCastAddressExpr(valueExpr(*Call.getArgOperand(1)))});
+    }
+    if (rendersAsContainerStateVariable(*Base)) {
+      return std::nullopt;
     }
     return *Base;
   }
@@ -1320,6 +1473,18 @@ std::optional<ExprPtr> storageHelperExpr(const llvm::CallBase &Call) {
 
 std::optional<ExprPtr> storageRefExpr(const llvm::Value &V) {
   if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
+    // A storage reference is also used as the base of a mapping/array access,
+    // which is exactly the shape the whole-word read guard in
+    // storageHelperExpr() rejects.  Resolve the base name directly.
+    const llvm::Function *Callee = Call->getCalledFunction();
+    if (Callee != nullptr && Call->arg_size() >= 1 &&
+        (Callee->getName() == "evm.storage.slot" ||
+         Callee->getName() == "evm_sload")) {
+      if (const StorageSlotInfo *Info =
+              storageSlotInfoForValue(*Call->getArgOperand(0))) {
+        return makeExpr(IdentifierExpr{Info->Name});
+      }
+    }
     return storageHelperExpr(*Call);
   }
   return std::nullopt;
@@ -1570,6 +1735,21 @@ ExprPtr wordReturnExpr(ExprPtr Expr, const llvm::Value &Stored) {
   return Expr;
 }
 
+// Word-level operator operands and helper arguments must be word-typed.  An
+// address-valued operand needs uint256(uint160(...)); a bool-valued one (an i1
+// comparison that LLVM zero-extended to a word) needs the explicit 0/1
+// conversion.  Solidity has no implicit conversion for either, and both shapes
+// show up once helper bodies are rendered.
+ExprPtr wordOperandExpr(ExprPtr Expr, const llvm::Value &Operand) {
+  Expr = wordCastAddressExpr(std::move(Expr));
+  if (Operand.getType()->isIntegerTy(1) || isBoolValuedExpr(Expr)) {
+    return makeExpr(ConditionalExpr{std::move(Expr),
+                                    makeExpr(LiteralExpr{"1", ""}),
+                                    makeExpr(LiteralExpr{"0", ""})});
+  }
+  return Expr;
+}
+
 bool isComparisonOperator(llvm::StringRef Operator) {
   return Operator == "==" || Operator == "!=" || Operator == "<" ||
          Operator == "<=" || Operator == ">" || Operator == ">=";
@@ -1692,6 +1872,115 @@ bool expressionContainsUnresolvedValue(const Expression &Expr) {
 
 bool containsUnresolvedValue(const ExprPtr &Expr) {
   return Expr != nullptr && expressionContainsUnresolvedValue(*Expr);
+}
+// A helper body is only emitted when every value in it could be recovered;
+// otherwise the call site keeps its explicit TODO instead of moving the same
+// unresolved value into a generated function.
+bool payloadBlockHasRecoveryGap(const Block &Body);
+
+bool payloadStatementHasRecoveryGap(const Statement &Stmt) {
+  return std::visit(
+      [](const auto &Node) -> bool {
+        using T = std::decay_t<decltype(Node)>;
+        if constexpr (std::is_same_v<T, CommentStatement>) {
+          // Goto/switch/body TODOs mark control flow the structurer could not
+          // recover; a helper body containing one is not emitted.
+          return Node.Text.find("goto") != std::string::npos ||
+                 Node.Text.find("TODO") != std::string::npos;
+        } else if constexpr (std::is_same_v<T, AssemblyStatement> ||
+                             std::is_same_v<T, BreakStatement> ||
+                             std::is_same_v<T, ContinueStatement>) {
+          return false;
+        } else if constexpr (std::is_same_v<T, VariableDeclarationStatement>) {
+          return containsUnresolvedValue(Node.InitialValue);
+        } else if constexpr (std::is_same_v<T, ReturnStatement> ||
+                             std::is_same_v<T, ExpressionStatement>) {
+          return containsUnresolvedValue(Node.Value);
+        } else if constexpr (std::is_same_v<T, RevertStatement>) {
+          if (containsUnresolvedValue(Node.Error)) {
+            return true;
+          }
+          return std::any_of(Node.Arguments.begin(), Node.Arguments.end(),
+                             [](const ExprPtr &Arg) {
+                               return containsUnresolvedValue(Arg);
+                             });
+        } else if constexpr (std::is_same_v<T, RequireStatement>) {
+          if (containsUnresolvedValue(Node.Condition)) {
+            return true;
+          }
+          return std::any_of(Node.Arguments.begin(), Node.Arguments.end(),
+                             [](const ExprPtr &Arg) {
+                               return containsUnresolvedValue(Arg);
+                             });
+        } else if constexpr (std::is_same_v<T, EmitStatement>) {
+          if (containsUnresolvedValue(Node.Event)) {
+            return true;
+          }
+          return std::any_of(Node.Arguments.begin(), Node.Arguments.end(),
+                             [](const ExprPtr &Arg) {
+                               return containsUnresolvedValue(Arg);
+                             });
+        } else if constexpr (std::is_same_v<T, IfStatement>) {
+          if (containsUnresolvedValue(Node.Condition)) {
+            return true;
+          }
+          if (Node.Then != nullptr && payloadBlockHasRecoveryGap(*Node.Then)) {
+            return true;
+          }
+          return Node.Else != nullptr &&
+                 payloadBlockHasRecoveryGap(*Node.Else);
+        } else if constexpr (std::is_same_v<T, ForStatement>) {
+          if (Node.Init != nullptr &&
+              payloadStatementHasRecoveryGap(*Node.Init)) {
+            return true;
+          }
+          if (containsUnresolvedValue(Node.Condition) ||
+              containsUnresolvedValue(Node.Loop)) {
+            return true;
+          }
+          return Node.Body != nullptr &&
+                 payloadStatementHasRecoveryGap(*Node.Body);
+        } else if constexpr (std::is_same_v<T, WhileStatement>) {
+          if (containsUnresolvedValue(Node.Condition)) {
+            return true;
+          }
+          return Node.Body != nullptr && payloadBlockHasRecoveryGap(*Node.Body);
+        } else if constexpr (std::is_same_v<T, DoWhileStatement>) {
+          if (Node.Body != nullptr &&
+              payloadStatementHasRecoveryGap(*Node.Body)) {
+            return true;
+          }
+          return containsUnresolvedValue(Node.Condition);
+        } else if constexpr (std::is_same_v<T, TryStatement>) {
+          if (containsUnresolvedValue(Node.ExternalCall)) {
+            return true;
+          }
+          if (Node.Body != nullptr && payloadBlockHasRecoveryGap(*Node.Body)) {
+            return true;
+          }
+          for (const TryCatchClause &Clause : Node.Catches) {
+            if (Clause.Body != nullptr &&
+                payloadBlockHasRecoveryGap(*Clause.Body)) {
+              return true;
+            }
+          }
+          return false;
+        } else if constexpr (std::is_same_v<T, UncheckedBlockStatement> ||
+                             std::is_same_v<T, BlockStatement>) {
+          return Node.Body != nullptr && payloadBlockHasRecoveryGap(*Node.Body);
+        }
+        return false;
+      },
+      Stmt.Node);
+}
+
+bool payloadBlockHasRecoveryGap(const Block &Body) {
+  for (const Statement &Stmt : Body.Statements) {
+    if (payloadStatementHasRecoveryGap(Stmt)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool containsIdentifierOfType(const ExprPtr &Expr, llvm::StringRef Type) {
@@ -1828,6 +2117,13 @@ std::optional<llvm::APInt> evalConstantWord(const llvm::Value *V,
 }
 
 ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
+  // A value that was cached in a local variable is referenced by its name.
+  if (ActiveMaterializedValues != nullptr) {
+    if (auto It = ActiveMaterializedValues->find(&V);
+        It != ActiveMaterializedValues->end()) {
+      return makeExpr(IdentifierExpr{It->second});
+    }
+  }
   if (std::optional<llvm::APInt> Int = constantIntValue(&V)) {
     return makeExpr(LiteralExpr{formatInteger(*Int), ""});
   }
@@ -1867,8 +2163,8 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       ExprPtr Left = valueExpr(*Cmp->getOperand(0));
       ExprPtr Right = valueExpr(*Cmp->getOperand(1));
       if (needsWordOperandCast(*Operator)) {
-        Left = wordCastAddressExpr(std::move(Left));
-        Right = wordCastAddressExpr(std::move(Right));
+        Left = wordOperandExpr(std::move(Left), *Cmp->getOperand(0));
+        Right = wordOperandExpr(std::move(Right), *Cmp->getOperand(1));
       }
       return makeExpr(BinaryExpr{std::move(Left), Operator->str(),
                                  std::move(Right), Precedence, false, true});
@@ -1896,6 +2192,16 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       ExprPtr OperandExpr = wordifyOperand(valueExpr(*Operand));
       return makeExpr(UnaryExpr{"~", std::move(OperandExpr), true, 30});
     }
+    if (Op->getType()->isIntegerTy(1) &&
+        Op->getOpcode() == llvm::Instruction::Xor) {
+      // Solidity has no bool ^ bool; an i1 xor is boolean inequality.  Both
+      // sides are usually comparisons at the same precedence, so they need
+      // explicit parentheses.
+      return makeExpr(BinaryExpr{valueExpr(*Op->getOperand(0)), "!=",
+                                 valueExpr(*Op->getOperand(1)), 3,
+                                 /*ParenthesizeLeftOnEqual=*/true,
+                                 /*ParenthesizeRightOnEqual=*/true});
+    }
     if (std::optional<llvm::StringRef> Operator =
             logicalOperatorText(Op->getOpcode());
         Op->getType()->isIntegerTy(1) && Operator.has_value()) {
@@ -1907,8 +2213,11 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
     if (std::optional<llvm::StringRef> Operator =
             binaryOperatorText(Op->getOpcode())) {
       unsigned Precedence = *binaryOperatorPrecedence(Op->getOpcode());
-      return makeBinaryExpr(valueExpr(*Op->getOperand(0)), *Operator,
-                            valueExpr(*Op->getOperand(1)), Precedence);
+      return makeBinaryExpr(
+          wordOperandExpr(valueExpr(*Op->getOperand(0)), *Op->getOperand(0)),
+          *Operator,
+          wordOperandExpr(valueExpr(*Op->getOperand(1)), *Op->getOperand(1)),
+          Precedence);
     }
   }
   if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&V)) {
@@ -1930,6 +2239,15 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       }
     }
     if (Callee != nullptr && Call->arg_size() == 2) {
+      if (Callee->getName() == "evm_balance") {
+        // evm_balance(env, addr) -> address(uint160(addr)).balance
+        ExprPtr Address =
+            makeExpr(CallExpr{makeExpr(IdentifierExpr{"uint160"}),
+                              {valueExpr(*Call->getArgOperand(1))}, {}});
+        Address = makeExpr(CallExpr{makeExpr(IdentifierExpr{"address"}),
+                                    {std::move(Address)}, {}});
+        return makeExpr(MemberAccessExpr{std::move(Address), "balance"});
+      }
       if (Callee->getName() == "evm_signextend") {
         if (std::optional<std::string> Type =
                 evmSignExtendType(Call->getArgOperand(0))) {
@@ -1956,6 +2274,9 @@ ExprPtr valueExpr(const llvm::Value &V, llvm::StringRef FallbackName) {
       if (std::optional<ExprPtr> Argument =
               annotatedAbiArgumentExpr(*Call)) {
         return *Argument;
+      }
+      if (std::optional<ExprPtr> HelperCall = renderedHelperCallExpr(*Call)) {
+        return *HelperCall;
       }
       std::string Text =
           Callee == nullptr ? std::string("<indirect call>")
@@ -2330,6 +2651,30 @@ std::optional<Statement> formatSelfDestruct(const llvm::CallBase &Call) {
       makeExpr(IdentifierExpr{"selfdestruct"}), {std::move(Beneficiary)}, {}})});
 }
 
+// Locals the backend materializes must not collide with ABI parameter names,
+// recovered storage variables, or the function's parameter table.
+bool nameIsTaken(llvm::StringRef Name,
+                 const ParameterTypeMap *ParameterTypes,
+                 const std::vector<std::string> *ArgumentNames,
+                 const StorageSlotMap *StorageSlots) {
+  if (ParameterTypes != nullptr && ParameterTypes->count(Name.str()) != 0) {
+    return true;
+  }
+  if (ArgumentNames != nullptr &&
+      std::find(ArgumentNames->begin(), ArgumentNames->end(), Name) !=
+          ArgumentNames->end()) {
+    return true;
+  }
+  if (StorageSlots != nullptr) {
+    for (const auto &Entry : *StorageSlots) {
+      if (Entry.second.Name == Name) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 Block BodyBuilder::readBody(const llvm::Function &F,
@@ -2337,24 +2682,86 @@ Block BodyBuilder::readBody(const llvm::Function &F,
                             const std::vector<std::string> *ArgumentNames,
                             const ParameterTypeMap *ParameterTypes,
                             const std::vector<std::string> *ReturnTypes,
-                            const EventParamTypeMap *EventParamTypes) {
+                            const EventParamTypeMap *EventParamTypes,
+                            const HelperRenderMap *Helpers) {
+  // Decide up front which helper call results have to be cached in a local
+  // variable, and reserve a stable name for each.  The C backend puts every
+  // cache declaration at the beginning of the function and assigns at the
+  // definition position (StructuralAnalysis.h: 'put all var decl at the
+  // beginning'); doing the same keeps declarations out of branch scopes and
+  // out of dephication block copies.
+  MaterializedValueMap MaterializedValues;
+  std::vector<std::string> HoistedNames;
   ActiveStorageSlotsScope StorageScope(StorageSlots, ArgumentNames,
                                        ParameterTypes, ReturnTypes,
-                                       EventParamTypes);
+                                       EventParamTypes, &MaterializedValues,
+                                       Helpers);
+  {
+    unsigned TempCount = 0;
+    for (const llvm::BasicBlock &BB : F) {
+      for (const llvm::Instruction &I : BB) {
+        if (!valueNeedsMaterialization(I)) {
+          continue;
+        }
+        std::string Name;
+        do {
+          Name = "temp_" + std::to_string(TempCount++);
+        } while (nameIsTaken(Name, ParameterTypes, ArgumentNames, StorageSlots));
+        MaterializedValues.emplace(&I, Name);
+        HoistedNames.push_back(std::move(Name));
+      }
+    }
+  }
   std::vector<Payload> Payloads;
   class SolidityPayloadProvider : public LLVMFunctionCFGBuilder::PayloadProvider {
   public:
-    explicit SolidityPayloadProvider(std::vector<Payload> &Payloads)
-        : Payloads(Payloads) {}
+    SolidityPayloadProvider(std::vector<Payload> &Payloads,
+                            const llvm::BasicBlock &EntryBlock,
+                            const std::vector<std::string> &HoistedNames,
+                            const MaterializedValueMap &MaterializedValues)
+        : Payloads(Payloads), EntryBlock(EntryBlock),
+          HoistedNames(HoistedNames), MaterializedValues(MaterializedValues) {}
 
     void collectStatements(const llvm::BasicBlock &BB,
                            std::vector<PayloadRef> &Out) override {
+      // Cached values are declared at the top of the function (see readBody)
+      // so their scope covers every later block and dephication copy.
+      if (&BB == &EntryBlock) {
+        for (const std::string &Name : HoistedNames) {
+          Out.push_back(addPayload(
+              Payloads,
+              makeStmt(VariableDeclarationStatement{
+                  std::vector<std::optional<VariableDeclaration>>{
+                      VariableDeclaration{TypeRef{"uint256"}, "", Name}},
+                  nullptr})));
+        }
+      }
       for (const llvm::Instruction &I : BB) {
+        // A cached helper call is assigned to its local at the definition
+        // position; the call is not repeated at its use sites.  The
+        // initializer must be the call itself: valueExpr() would return the
+        // local that is being assigned.
+        if (auto It = MaterializedValues.find(&I);
+            It != MaterializedValues.end()) {
+          ExprPtr Initializer = valueExpr(I);
+          if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I)) {
+            if (std::optional<ExprPtr> CallExpr = renderedHelperCallExpr(*Call)) {
+              Initializer = std::move(*CallExpr);
+            }
+          }
+          Out.push_back(addPayload(
+              Payloads,
+              makeStmt(ExpressionStatement{makeExpr(AssignmentExpr{
+                  makeExpr(IdentifierExpr{It->second}), "=",
+                  std::move(Initializer)})})));
+          continue;
+        }
         if (const auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(&I)) {
           if (const llvm::Value *Value = Ret->getReturnValue()) {
-            Out.push_back(addPayload(Payloads,
-                                      makeStmt(ReturnStatement{
-                                          valueExpr(*Value, "ret")})));
+            Out.push_back(addPayload(
+                Payloads,
+                makeStmt(ReturnStatement{
+                    wordReturnExpr(valueExpr(*Value, "ret"), *Value)})));
           }
           continue;
         }
@@ -2375,6 +2782,15 @@ Block BodyBuilder::readBody(const llvm::Function &F,
           if (std::optional<Statement> Return =
                   formatSingleWordReturn(*Call)) {
             Out.push_back(addPayload(Payloads, std::move(*Return)));
+            continue;
+          }
+          // Side-effect-only helper calls (void result, or a result nobody
+          // reads) still have to be emitted as a statement.
+          if (std::optional<ExprPtr> HelperCall = renderedHelperCallExpr(*Call);
+              HelperCall.has_value() &&
+              (Call->getType()->isVoidTy() || Call->use_empty())) {
+            Out.push_back(addPayload(
+                Payloads, makeStmt(ExpressionStatement{std::move(*HelperCall)})));
             continue;
           }
         }
@@ -2428,9 +2844,13 @@ Block BodyBuilder::readBody(const llvm::Function &F,
 
   private:
     std::vector<Payload> &Payloads;
+    const llvm::BasicBlock &EntryBlock;
+    const std::vector<std::string> &HoistedNames;
+    const MaterializedValueMap &MaterializedValues;
   };
 
-  SolidityPayloadProvider Provider(Payloads);
+  SolidityPayloadProvider Provider(Payloads, F.getEntryBlock(), HoistedNames,
+                                   MaterializedValues);
   StructuredCFG Cfg = LLVMFunctionCFGBuilder::build(F, Provider);
   std::map<VVarId, std::string> DephicationVVarNames;
   for (const structuring::DephicationVVar &VVar : Cfg.dephicationVVars()) {
@@ -2479,6 +2899,10 @@ Block BodyBuilder::readBody(const llvm::Function &F,
     }
   }
   return Result;
+}
+
+bool BodyBuilder::blockIsFullyRecovered(const Block &Body) {
+  return !payloadBlockHasRecoveryGap(Body);
 }
 
 BodyBuilder::Payload BodyBuilder::rewriteCopiedDephicationVVars(
