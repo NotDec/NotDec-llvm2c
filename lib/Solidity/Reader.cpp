@@ -640,7 +640,15 @@ std::vector<Parameter> Reader::readHelperReturns(const llvm::Function &F) {
 }
 
 bool Reader::isHelperRenderCandidate(const llvm::Function &F) {
-  if (F.isDeclaration() || !F.getName().starts_with("private__")) {
+  if (F.isDeclaration() || F.getName().starts_with("public_")) {
+    return false;
+  }
+  // Outlined shared code is not part of the contract ABI.  evm2llvm names it
+  // private_* (private__<id>_<id> without a recovered high-level name,
+  // private_<name>_<id> with one) and, since 2026-09-18, emits it with internal
+  // linkage.  Accept either signal so the checked-in corpus (external linkage,
+  // written before that change) keeps working.
+  if (!F.hasInternalLinkage() && !F.getName().starts_with("private_")) {
     return false;
   }
   if (hasUnsupportedSignedMath(F)) {
